@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Interactive Exhibit Editor</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <main class="editor-shell">
+    <header class="editor-topbar">
+      <div class="file-meta">
+        <span class="app-mark"></span>
+        <div>
+          <strong>Interactive Exhibit Editor</strong>
+          <span>Untitled artwork / Draft</span>
+        </div>
+      </div>
+      <div class="topbar-actions">
+        <button id="testEffectButton" class="toolbar-button primary" type="button">Preview Effect</button>
+      </div>
+    </header>
+
+    <aside class="sidebar left-sidebar">
+      <section class="panel-section">
+        <div class="section-title">
+          <h2>Assets</h2>
+        </div>
+        <label class="upload-box" for="componentInput">
+          <input id="componentInput" type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" multiple>
+          <span class="upload-icon">+</span>
+          <strong>Upload Components</strong>
+          <small>PNG, JPG, WebP, SVG</small>
+        </label>
+        <div class="button-row">
+          <button id="sampleButton" class="button" type="button">Load Samples</button>
+          <button id="resetButton" class="button button-muted" type="button">Reset</button>
+        </div>
+      </section>
+
+      <section class="panel-section">
+        <div class="section-title">
+          <h2>Insert</h2>
+        </div>
+        <div class="shape-grid" aria-label="Shape tools">
+          <button class="shape-button" type="button" data-shape="line">Line</button>
+          <button class="shape-button" type="button" data-shape="curve">Curve</button>
+          <button class="shape-button" type="button" data-shape="circle">Circle</button>
+          <button class="shape-button" type="button" data-shape="rect">Rect</button>
+          <button class="shape-button" type="button" data-shape="triangle">Triangle</button>
+          <button class="shape-button" type="button" data-shape="star">Star</button>
+          <button id="addTextButton" class="shape-button" type="button">Text</button>
+        </div>
+      </section>
+
+      <section class="panel-section layers-section">
+        <div class="section-title">
+          <h2>Layers</h2>
+          <div class="mini-actions">
+            <button id="bringFrontButton" type="button">Front</button>
+            <button id="duplicateButton" type="button">Duplicate</button>
+          </div>
+        </div>
+        <div id="componentList" class="component-list" aria-label="Component list"></div>
+      </section>
+    </aside>
+
+    <section class="canvas-column">
+      <div class="hidden-status" aria-hidden="true"><strong id="statusTitle"></strong><span id="statusText"></span></div>
+      <div id="stage" class="stage" tabindex="0" aria-label="Interactive artwork stage">
+        <div id="emptyState" class="empty-state">
+          <span class="empty-symbol"></span>
+          <strong>No components loaded</strong>
+          <p>Upload separate transparent PNG/SVG layers, load samples, or create built-in shapes and text.</p>
+        </div>
+        <div id="artSurface" class="art-surface is-hidden">
+          <div class="canvas-grid"></div>
+          <div id="smartGuideLayer" class="smart-guide-layer" aria-hidden="true"></div>
+          <div id="componentLayer" class="component-layer"></div>
+        </div>
+      </div>
+
+      <footer class="inspector-strip">
+        <div>
+          <span class="metric-label">Selected</span>
+          <strong id="selectedSummary">None</strong>
+        </div>
+        <div class="is-hidden" aria-hidden="true">
+          <span class="metric-label">Effect</span>
+          <strong id="effectSummary">None</strong>
+        </div>
+        <div class="is-hidden" aria-hidden="true">
+          <span class="metric-label">Interactions</span>
+          <strong id="interactionCount">0</strong>
+        </div>
+      </footer>
+    </section>
+
+        <aside class="sidebar right-sidebar">
+      <section class="panel-section">
+        <div class="section-title">
+          <h2>Artboard</h2>
+        </div>
+        <div class="compact-grid two-col">
+          <label class="field"><span>W</span><input id="artboardWidthInput" type="number" min="320" max="2400" step="10" value="940"></label>
+          <label class="field"><span>H</span><input id="artboardHeightInput" type="number" min="240" max="1800" step="10" value="588"></label>
+        </div>
+        <label class="field"><span>Background</span><input id="artboardBgInput" type="color" value="#ffffff"></label>
+        <label class="toggle"><input id="artboardTransparentToggle" type="checkbox"><span>Transparent Artboard</span></label>
+      </section>
+
+      <section class="panel-section">
+        <div class="section-title">
+          <h2>Design</h2>
+        </div>
+        <div class="compact-grid two-col">
+          <label class="field"><span>X</span><input id="xRange" type="range" min="0" max="100" value="0"><output id="xOutput">0</output></label>
+          <label class="field"><span>Y</span><input id="yRange" type="range" min="0" max="100" value="0"><output id="yOutput">0</output></label>
+          <label class="field"><span>W</span><input id="wRange" type="range" min="0.2" max="100" step="0.1" value="20"><output id="wOutput">20</output></label>
+          <label class="field"><span>H</span><input id="hRange" type="range" min="0.2" max="100" step="0.1" value="20"><output id="hOutput">20</output></label>
+        </div>
+        <label class="range-field"><span>Rotate <output id="rotationOutput">0</output>deg</span><input id="rotationRange" type="range" min="-180" max="180" value="0"></label>
+        <label class="range-field"><span>Opacity <output id="opacityOutput">100</output>% visible</span><input id="opacityRange" type="range" min="0" max="100" value="100"></label>
+      </section>
+
+      <section class="panel-section">
+        <div class="section-title">
+          <h2>Appearance</h2>
+        </div>
+        <label class="field"><span>Fill / Text</span><input id="fillInput" type="color" value="#ffffff"></label>
+        <label class="toggle"><input id="fillTransparentToggle" type="checkbox"><span>Transparent Fill</span></label>
+        <label class="field"><span>Stroke</span><input id="strokeInput" type="color" value="#191714"></label>
+        <label class="toggle"><input id="strokeTransparentToggle" type="checkbox"><span>Transparent Stroke</span></label>
+        <label class="range-field"><span>Stroke Width <output id="strokeWidthOutput">1</output></span><div class="range-input-row"><input id="strokeWidthRange" type="range" min="0" max="20" step="1" value="1"><input id="strokeWidthInput" class="value-input" type="number" min="0" max="20" step="1" value="1"></div></label>
+        <label class="range-field"><span>Corner Radius <output id="cornerRadiusOutput">0</output></span><div class="range-input-row"><input id="cornerRadiusRange" type="range" min="0" max="100" value="0"><input id="cornerRadiusInput" class="value-input" type="number" min="0" max="100" step="1" value="0"></div></label>
+        <label class="field"><span>Stroke Style</span><select id="strokeStyleSelect"><option value="solid">Solid</option><option value="dashed">Dashed</option><option value="dotted">Dotted</option></select></label>
+        <label class="field"><span>Line Cap</span><select id="lineCapSelect"><option value="round">Round</option><option value="butt">Butt</option><option value="square">Square</option></select></label>
+      </section>
+
+      <section class="panel-section">
+        <div class="section-title">
+          <h2>Curve</h2>
+        </div>
+        <div class="compact-grid two-col">
+          <label class="field"><span>Handle 1 X</span><input id="curveC1XRange" type="range" min="0" max="100" value="28"><output id="curveC1XOutput">28</output></label>
+          <label class="field"><span>Handle 1 Y</span><input id="curveC1YRange" type="range" min="0" max="100" value="8"><output id="curveC1YOutput">8</output></label>
+          <label class="field"><span>Handle 2 X</span><input id="curveC2XRange" type="range" min="0" max="100" value="72"><output id="curveC2XOutput">72</output></label>
+          <label class="field"><span>Handle 2 Y</span><input id="curveC2YRange" type="range" min="0" max="100" value="8"><output id="curveC2YOutput">8</output></label>
+        </div>
+      </section>
+
+      <section class="panel-section">
+        <div class="section-title">
+          <h2>Text</h2>
+        </div>
+        <label class="field"><span>Content</span><input id="textInput" type="text" value="INTERACTIVE"></label>
+        <label class="field"><span>Local Font</span><input id="fontInput" type="text" value="Arial" placeholder="Pretendard, Arial, Helvetica"></label>
+        <label class="range-field"><span>Font Size <output id="fontSizeOutput">48</output>px</span><input id="fontSizeRange" type="range" min="12" max="120" value="48"></label>
+      </section>
+
+      <section class="panel-section">
+        <div class="section-title">
+          <h2>Interaction</h2>
+        </div>
+        <label class="field"><span>Trigger</span><select id="triggerSelect"><option value="click">Click / Tap</option><option value="hover">Hover / Mobile Tap</option><option value="drag">Drag / Swipe</option><option value="wheel">Wheel / Pinch Policy</option></select></label>
+        <label class="field"><span>Effect</span><select id="effectSelect"><option value="zoom">Zoom</option><option value="shake">Shake</option><option value="bounce">Bounce</option><option value="tilt">Tilt</option><option value="glitch">Glitch</option><option value="wave">Wave Distort</option><option value="split">Split Layer</option><option value="reveal">Reveal Note</option><option value="spin">Spin</option><option value="pulse">Pulse Glow</option><option value="blur">Blur Focus</option><option value="flicker">Fade Flicker</option></select></label>
+        <label class="range-field"><span>Zoom <output id="zoomOutput">130</output>%</span><input id="zoomRange" type="range" min="100" max="220" value="130"></label>
+        <label class="range-field"><span>Shake <output id="shakeOutput">14</output>px</span><input id="shakeRange" type="range" min="0" max="50" value="14"></label>
+        <label class="range-field"><span>Speed <output id="speedOutput">50</output></span><input id="speedRange" type="range" min="10" max="100" value="50"></label>
+        <label class="toggle"><input id="soundToggle" type="checkbox" checked><span>Sound</span></label>
+        <label class="field"><span>Sound Source</span><select id="soundSelect"><option value="mixed" disabled>Mixed</option><option value="tone">Generated Tone</option><option value="sample-ping">Soft Ping MP3</option><option value="sample-tap">Glass Tap MP3</option><option value="sample-pop">Deep Pop MP3</option><option value="custom">Uploaded Audio</option><option value="none">No Sound</option></select></label>
+        <label class="range-field"><span>Volume <output id="soundVolumeOutput">80</output>%</span><input id="soundVolumeRange" type="range" min="0" max="100" value="80"></label>
+        <label class="upload-box audio-upload-box" for="soundFileInput">
+          <input id="soundFileInput" type="file" accept="audio/*,.mp3,.wav,.ogg,.m4a,.aac">
+          <span class="upload-icon">+</span>
+          <strong>Upload Audio</strong>
+          <small id="soundFileName">MP3, WAV, OGG, M4A</small>
+        </label>
+        <button id="testSoundButton" class="button" type="button">Preview Sound</button>
+      </section>
+    </aside>
+  </main>
+
+  <script src="./app.js"></script>
+</body>
+</html>
+
+
