@@ -258,6 +258,70 @@ input[type="range"]::-moz-range-thumb {
   font-size: 11px;
   text-align: right;
 }
+.action-builder {
+  display: grid;
+  gap: 8px;
+  padding: 10px 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+.action-builder-title button,
+.action-controls button {
+  min-height: 24px;
+  padding: 0 7px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--ink);
+  background: #fff;
+  font-size: 11px;
+  cursor: pointer;
+}
+.action-builder-title button:hover,
+.action-controls button:hover {
+  border-color: var(--accent);
+  background: #f1f8ff;
+}
+.action-list {
+  display: grid;
+  gap: 4px;
+  min-height: 30px;
+}
+.action-item {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  align-items: center;
+  min-height: 34px;
+  padding: 6px 7px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: #fff;
+}
+.action-item.is-empty {
+  color: var(--muted);
+  background: var(--panel-muted);
+  font-size: 11px;
+}
+.action-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.action-copy strong {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.action-copy small {
+  color: var(--muted);
+  font-size: 10px;
+}
+.action-controls {
+  display: flex;
+  gap: 3px;
+}
 
 .canvas-column {
   display: grid;

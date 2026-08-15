@@ -167,6 +167,20 @@
         <label class="range-field"><span>Zoom <output id="zoomOutput">130</output>%</span><input id="zoomRange" type="range" min="100" max="220" value="130"></label>
         <label class="range-field"><span>Shake <output id="shakeOutput">14</output>px</span><input id="shakeRange" type="range" min="0" max="50" value="14"></label>
         <label class="range-field"><span>Speed <output id="speedOutput">50</output></span><input id="speedRange" type="range" min="10" max="100" value="50"></label>
+        <div class="action-builder">
+          <div class="section-title action-builder-title">
+            <h2>Action Stack</h2>
+            <button id="clearActionsButton" type="button">Clear</button>
+          </div>
+          <label class="field"><span>Action</span><select id="actionTypeSelect"><option value="scale">Scale</option><option value="moveX">Move X</option><option value="moveY">Move Y</option><option value="rotate">Rotate</option><option value="opacity">Opacity</option><option value="blur">Blur</option><option value="glow">Glow</option><option value="spring">Spring</option><option value="sound">Sound</option></select></label>
+          <label class="range-field"><span id="actionValueLabel">Value <output id="actionValueOutput">130%</output></span><input id="actionValueRange" type="range" min="20" max="220" value="130"></label>
+          <div class="compact-grid two-col">
+            <label class="field"><span>Delay</span><input id="actionDelayRange" type="range" min="0" max="2000" step="50" value="0"><output id="actionDelayOutput">0ms</output></label>
+            <label class="field"><span>Duration</span><input id="actionDurationRange" type="range" min="80" max="2400" step="20" value="420"><output id="actionDurationOutput">420ms</output></label>
+          </div>
+          <button id="addActionButton" class="button" type="button">Add Action</button>
+          <div id="actionList" class="action-list"></div>
+        </div>
         <label class="toggle"><input id="soundToggle" type="checkbox" checked><span>Sound</span></label>
         <label class="field"><span>Sound Source</span><select id="soundSelect"><option value="mixed" disabled>Mixed</option><option value="tone">Generated Tone</option><option value="sample-ping">Soft Ping MP3</option><option value="sample-tap">Glass Tap MP3</option><option value="sample-pop">Deep Pop MP3</option><option value="custom">Uploaded Audio</option><option value="none">No Sound</option></select></label>
         <label class="range-field"><span>Volume <output id="soundVolumeOutput">80</output>%</span><input id="soundVolumeRange" type="range" min="0" max="100" value="80"></label>

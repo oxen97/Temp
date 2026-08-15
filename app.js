@@ -12,6 +12,17 @@ const effectSelect = document.querySelector("#effectSelect");
 const zoomRange = document.querySelector("#zoomRange");
 const shakeRange = document.querySelector("#shakeRange");
 const speedRange = document.querySelector("#speedRange");
+const actionTypeSelect = document.querySelector("#actionTypeSelect");
+const actionValueLabel = document.querySelector("#actionValueLabel");
+const actionValueRange = document.querySelector("#actionValueRange");
+const actionValueOutput = document.querySelector("#actionValueOutput");
+const actionDelayRange = document.querySelector("#actionDelayRange");
+const actionDelayOutput = document.querySelector("#actionDelayOutput");
+const actionDurationRange = document.querySelector("#actionDurationRange");
+const actionDurationOutput = document.querySelector("#actionDurationOutput");
+const addActionButton = document.querySelector("#addActionButton");
+const clearActionsButton = document.querySelector("#clearActionsButton");
+const actionList = document.querySelector("#actionList");
 const soundToggle = document.querySelector("#soundToggle");
 const soundSelect = document.querySelector("#soundSelect");
 const soundCustomOption = soundSelect.querySelector("option[value='custom']");
@@ -136,6 +147,18 @@ const soundLabels = {
   ...Object.fromEntries(Object.entries(sampleSounds).map(([key, sound]) => [key, sound.label]))
 };
 
+const actionConfigs = {
+  scale: { label: "Scale", min: 20, max: 220, step: 1, value: 130, unit: "%", duration: 420, easing: "cubic-bezier(.18, .89, .32, 1.28)" },
+  moveX: { label: "Move X", min: -240, max: 240, step: 4, value: 80, unit: "px", duration: 440, easing: "cubic-bezier(.2, .8, .2, 1)" },
+  moveY: { label: "Move Y", min: -240, max: 240, step: 4, value: -80, unit: "px", duration: 440, easing: "cubic-bezier(.2, .8, .2, 1)" },
+  rotate: { label: "Rotate", min: -360, max: 360, step: 5, value: 90, unit: "deg", duration: 520, easing: "cubic-bezier(.2, .8, .2, 1)" },
+  opacity: { label: "Opacity", min: 0, max: 100, step: 1, value: 35, unit: "%", duration: 360, easing: "ease-in-out" },
+  blur: { label: "Blur", min: 0, max: 20, step: 1, value: 6, unit: "px", duration: 420, easing: "ease-in-out" },
+  glow: { label: "Glow", min: 0, max: 100, step: 1, value: 70, unit: "%", duration: 520, easing: "ease-out" },
+  spring: { label: "Spring", min: 8, max: 140, step: 2, value: 48, unit: "px", duration: 620, easing: "linear" },
+  sound: { label: "Sound", min: 0, max: 0, step: 1, value: 0, unit: "", duration: 0, noValue: true, noDuration: true }
+};
+
 const shapeLabels = {
   line: "Line",
   curve: "Curve",
@@ -188,6 +211,7 @@ let interactions = 0;
 let audioContext = null;
 const activeAudioPlayers = new Set();
 const activeToneNodes = new Set();
+const activeActionRuns = new Map();
 let dragState = null;
 let resizeState = null;
 let cornerRadiusState = null;
@@ -272,9 +296,20 @@ function preserveScrollPosition(callback) {
   return result;
 }
 
+function cloneActions(actions) {
+  return Array.isArray(actions) ? actions.map((action) => ({ ...action })) : [];
+}
+
+function cloneComponent(component) {
+  return {
+    ...component,
+    actions: cloneActions(component.actions)
+  };
+}
+
 function captureState() {
   return {
-    components: components.map((component) => ({ ...component })),
+    components: components.map(cloneComponent),
     selectedIds: [...selectedIds],
     selectedId,
     nextId,
@@ -296,7 +331,7 @@ function saveHistory() {
 function restoreState(record) {
   if (!record?.snapshot) return;
   isRestoringHistory = true;
-  components = record.snapshot.components.map((component) => ({ ...component }));
+  components = record.snapshot.components.map(cloneComponent);
   selectedIds = [...record.snapshot.selectedIds];
   selectedId = record.snapshot.selectedId;
   nextId = record.snapshot.nextId;
@@ -584,6 +619,7 @@ function addComponent(config, shouldRender = true) {
     soundSrc: config.soundSrc || "",
     soundName: config.soundName || "",
     soundVolume: clampNumber(config.soundVolume ?? soundVolumeRange.value, 0, 100, 80),
+    actions: cloneActions(config.actions),
     fill: config.fill && config.fill !== "transparent" ? config.fill : fillInput.value || "#ffffff",
     fillTransparent,
     stroke: config.stroke && config.stroke !== "transparent" ? config.stroke : strokeInput.value || "#191714",
@@ -1764,7 +1800,8 @@ function renderComponentList() {
     const button = document.createElement("button");
     button.type = "button";
     button.className = `component-item${isSelected(component.id) ? " is-selected" : ""}`;
-    button.innerHTML = `<span>${escapeHtml(component.name)}</span><small>${component.type} / ${effectLabels[component.effect]}</small>`;
+    const actionText = component.actions?.length ? ` / ${component.actions.length} actions` : "";
+    button.innerHTML = `<span>${escapeHtml(component.name)}</span><small>${component.type} / ${effectLabels[component.effect]}${actionText}</small>`;
     button.addEventListener("click", (event) => {
       if (event.shiftKey) toggleSelection(component.id);
       else selectOnly(component.id);
@@ -1843,6 +1880,153 @@ function syncSoundControlsFromSelection(selected, component) {
   updateRangeFill(soundVolumeRange);
 }
 
+function actionConfig(type = actionTypeSelect.value) {
+  return actionConfigs[type] || actionConfigs.scale;
+}
+
+function formatActionValue(actionOrType, value = null) {
+  const type = typeof actionOrType === "string" ? actionOrType : actionOrType.type;
+  const config = actionConfig(type);
+  const rawValue = value ?? actionOrType.value ?? config.value;
+  if (config.noValue) return "";
+  return `${Math.round(Number(rawValue))}${config.unit}`;
+}
+
+function syncActionValueControl() {
+  const config = actionConfig();
+  const disabled = !selectedComponent();
+  actionValueRange.min = config.min;
+  actionValueRange.max = config.max;
+  actionValueRange.step = config.step;
+  actionValueRange.disabled = disabled || Boolean(config.noValue);
+  actionDelayRange.disabled = disabled;
+  actionDurationRange.disabled = disabled || Boolean(config.noDuration);
+
+  if (!actionValueRange.dataset.touched || actionValueRange.disabled) {
+    actionValueRange.value = config.value;
+  } else {
+    actionValueRange.value = clampNumber(actionValueRange.value, config.min, config.max, config.value);
+  }
+
+  if (!actionDurationRange.dataset.touched || actionDurationRange.disabled) {
+    actionDurationRange.value = config.duration;
+  }
+
+  if (actionValueLabel.firstChild) actionValueLabel.firstChild.textContent = `${config.label} `;
+  actionValueOutput.textContent = formatActionValue(actionTypeSelect.value, actionValueRange.value);
+  actionDelayOutput.textContent = `${Math.round(actionDelayRange.value)}ms`;
+  actionDurationOutput.textContent = actionDurationRange.disabled ? "-" : `${Math.round(actionDurationRange.value)}ms`;
+  updateRangeFill(actionValueRange);
+  updateRangeFill(actionDelayRange);
+  updateRangeFill(actionDurationRange);
+}
+
+function setActionBuilderDisabled(disabled) {
+  actionTypeSelect.disabled = disabled;
+  actionValueRange.disabled = disabled || Boolean(actionConfig().noValue);
+  actionDelayRange.disabled = disabled;
+  actionDurationRange.disabled = disabled || Boolean(actionConfig().noDuration);
+  addActionButton.disabled = disabled;
+  clearActionsButton.disabled = disabled;
+}
+
+function actionSummary(action) {
+  const config = actionConfig(action.type);
+  const value = formatActionValue(action);
+  const timing = action.type === "sound"
+    ? `${Math.round(action.delay || 0)}ms delay`
+    : `${Math.round(action.delay || 0)}ms delay / ${Math.round(action.duration || config.duration)}ms`;
+  return {
+    title: value ? `${config.label} ${value}` : config.label,
+    meta: timing
+  };
+}
+
+function renderActionListForSelection(selected, component) {
+  actionList.innerHTML = "";
+  if (!component) {
+    actionList.innerHTML = `<div class="action-item is-empty">No selection</div>`;
+    return;
+  }
+
+  const actions = cloneActions(component.actions);
+  if (!actions.length) {
+    actionList.innerHTML = `<div class="action-item is-empty">No actions</div>`;
+    return;
+  }
+
+  actions.forEach((action, index) => {
+    const summary = actionSummary(action);
+    const item = document.createElement("div");
+    item.className = "action-item";
+    item.innerHTML = `
+      <div class="action-copy">
+        <strong>${index + 1}. ${escapeHtml(summary.title)}</strong>
+        <small>${escapeHtml(summary.meta)}</small>
+      </div>
+      <div class="action-controls">
+        <button type="button" data-action-op="up" ${index === 0 ? "disabled" : ""}>Up</button>
+        <button type="button" data-action-op="down" ${index === actions.length - 1 ? "disabled" : ""}>Dn</button>
+        <button type="button" data-action-op="remove">X</button>
+      </div>
+    `;
+    item.querySelectorAll("button").forEach((button) => {
+      button.addEventListener("click", () => updateSelectedActionStack((stack) => {
+        if (button.dataset.actionOp === "remove") {
+          stack.splice(index, 1);
+          return;
+        }
+        if (button.dataset.actionOp === "up" && index > 0) {
+          [stack[index - 1], stack[index]] = [stack[index], stack[index - 1]];
+          return;
+        }
+        if (button.dataset.actionOp === "down" && index < stack.length - 1) {
+          [stack[index + 1], stack[index]] = [stack[index], stack[index + 1]];
+        }
+      }));
+    });
+    actionList.appendChild(item);
+  });
+}
+
+function syncActionBuilderFromSelection(selected, component) {
+  setActionBuilderDisabled(!component);
+  renderActionListForSelection(selected, component);
+  syncActionValueControl();
+}
+
+function updateSelectedActionStack(mutator) {
+  const selected = selectedComponents();
+  if (!selected.length) return;
+  saveHistory();
+  selected.forEach((component) => {
+    component.actions = cloneActions(component.actions);
+    mutator(component.actions, component);
+  });
+  syncControlsFromSelection();
+  renderComponentList();
+}
+
+function addActionToSelected() {
+  const config = actionConfig();
+  const action = {
+    type: actionTypeSelect.value,
+    value: config.noValue ? 0 : Number(actionValueRange.value),
+    delay: Number(actionDelayRange.value),
+    duration: config.noDuration ? 0 : Number(actionDurationRange.value),
+    easing: config.easing || "ease"
+  };
+  updateSelectedActionStack((stack) => {
+    stack.push(action);
+  });
+}
+
+function clearSelectedActions() {
+  updateSelectedActionStack((stack) => {
+    stack.splice(0, stack.length);
+  });
+}
+
 function syncControlsFromSelection() {
   const selected = selectedComponents();
   const component = selectedComponent();
@@ -1863,6 +2047,7 @@ function syncControlsFromSelection() {
     cornerRadiusInput.disabled = true;
     [curveC1XRange, curveC1YRange, curveC2XRange, curveC2YRange].forEach((control) => { control.disabled = true; });
     syncSoundControlsFromSelection(selected, component);
+    syncActionBuilderFromSelection(selected, component);
     updateAllRangeFills();
     return;
   }
@@ -1910,6 +2095,7 @@ function syncControlsFromSelection() {
   fontInput.value = component.font || "Arial";
   fontSizeRange.value = component.fontSize ?? 48;
   syncSoundControlsFromSelection(selected, component);
+  syncActionBuilderFromSelection(selected, component);
 
   xOutput.textContent = xRange.value;
   yOutput.textContent = yRange.value;
@@ -1928,7 +2114,9 @@ function syncControlsFromSelection() {
   curveC2YOutput.textContent = curveC2YRange.value;
   fontSizeOutput.textContent = fontSizeRange.value;
   selectedSummary.textContent = selected.length > 1 ? `${selected.length} selected` : component.name;
-  effectSummary.textContent = `${triggerLabels[component.trigger]} + ${effectLabels[component.effect]}`;
+  effectSummary.textContent = component.actions?.length
+    ? `${triggerLabels[component.trigger]} + ${component.actions.length} actions`
+    : `${triggerLabels[component.trigger]} + ${effectLabels[component.effect]}`;
   updateAllRangeFills();
 }
 function updateRangeFill(control) {
@@ -2086,6 +2274,166 @@ function applyEffectVars(node, component) {
   node.style.setProperty("--effect-duration", `${duration}ms`);
 }
 
+function actionTargetForNode(node) {
+  return node.querySelector(".component-viewport") || node;
+}
+
+function resetActionTarget(node) {
+  const target = actionTargetForNode(node);
+  target.style.transform = "";
+  target.style.filter = "";
+  target.style.opacity = "";
+}
+
+function stopComponentActionRun(id) {
+  const run = activeActionRuns.get(id);
+  if (!run) return;
+  run.cancelled = true;
+  run.timers.forEach((timer) => window.clearTimeout(timer));
+  run.animations.forEach((animation) => {
+    try { animation.cancel(); } catch {}
+  });
+  activeActionRuns.delete(id);
+
+  const node = componentLayer.querySelector(`[data-id="${id}"]`);
+  if (node) resetActionTarget(node);
+}
+
+function stopAllActionRuns() {
+  Array.from(activeActionRuns.keys()).forEach(stopComponentActionRun);
+}
+
+function waitForAction(ms, run) {
+  if (!ms) return Promise.resolve();
+  return new Promise((resolve) => {
+    const timer = window.setTimeout(() => {
+      run.timers.delete(timer);
+      resolve();
+    }, ms);
+    run.timers.add(timer);
+  });
+}
+
+function actionKeyframes(action, component) {
+  const value = Number(action.value);
+  const baseOpacity = String((component.opacity ?? 100) / 100);
+
+  switch (action.type) {
+    case "scale": {
+      const scale = Math.max(0.05, value / 100);
+      return [
+        { transform: "scale(1)" },
+        { transform: `scale(${scale})`, offset: 0.55 },
+        { transform: "scale(1)" }
+      ];
+    }
+    case "moveX":
+      return [
+        { transform: "translateX(0)" },
+        { transform: `translateX(${value}px)`, offset: 0.58 },
+        { transform: "translateX(0)" }
+      ];
+    case "moveY":
+      return [
+        { transform: "translateY(0)" },
+        { transform: `translateY(${value}px)`, offset: 0.58 },
+        { transform: "translateY(0)" }
+      ];
+    case "rotate":
+      return [
+        { transform: "rotate(0deg)" },
+        { transform: `rotate(${value}deg)`, offset: 0.58 },
+        { transform: "rotate(0deg)" }
+      ];
+    case "opacity": {
+      const opacity = Math.max(0, Math.min(1, value / 100));
+      return [
+        { opacity: baseOpacity },
+        { opacity, offset: 0.5 },
+        { opacity: baseOpacity }
+      ];
+    }
+    case "blur":
+      return [
+        { filter: "blur(0) saturate(1)" },
+        { filter: `blur(${Math.max(0, value)}px) saturate(.72)`, offset: 0.48 },
+        { filter: "blur(0) saturate(1)" }
+      ];
+    case "glow": {
+      const alpha = Math.max(0, Math.min(1, value / 100));
+      const radius = 8 + alpha * 30;
+      return [
+        { filter: "brightness(1) drop-shadow(0 0 0 rgba(13, 153, 255, 0))" },
+        { filter: `brightness(${1 + alpha * 0.22}) drop-shadow(0 0 ${radius}px rgba(13, 153, 255, ${0.18 + alpha * 0.55}))`, offset: 0.5 },
+        { filter: "brightness(1) drop-shadow(0 0 0 rgba(13, 153, 255, 0))" }
+      ];
+    }
+    case "spring": {
+      const distance = Math.max(0, value);
+      return [
+        { transform: "translate(0, 0) scale(1)" },
+        { transform: `translate(${distance}px, ${distance * -0.32}px) scale(1.04)`, offset: 0.28 },
+        { transform: `translate(${distance * -0.38}px, ${distance * 0.16}px) scale(.98)`, offset: 0.52 },
+        { transform: `translate(${distance * 0.16}px, 0) scale(1.015)`, offset: 0.74 },
+        { transform: "translate(0, 0) scale(1)" }
+      ];
+    }
+    default:
+      return [
+        { transform: "scale(1)" },
+        { transform: "scale(1.08)", offset: 0.5 },
+        { transform: "scale(1)" }
+      ];
+  }
+}
+
+function animateAction(component, node, action, run) {
+  if (action.type === "sound") {
+    playComponentSound(component);
+    return Promise.resolve();
+  }
+
+  const target = actionTargetForNode(node);
+  const duration = Math.max(80, Number(action.duration) || actionConfig(action.type).duration);
+  const animation = target.animate(actionKeyframes(action, component), {
+    duration,
+    easing: action.easing || actionConfig(action.type).easing || "ease",
+    fill: "none"
+  });
+
+  run.animations.add(animation);
+  return new Promise((resolve) => {
+    const finish = () => {
+      run.animations.delete(animation);
+      resolve();
+    };
+    animation.addEventListener("finish", finish, { once: true });
+    animation.addEventListener("cancel", finish, { once: true });
+  });
+}
+
+async function runActionStack(component, node) {
+  stopComponentActionRun(component.id);
+  const run = {
+    cancelled: false,
+    animations: new Set(),
+    timers: new Set()
+  };
+  activeActionRuns.set(component.id, run);
+
+  for (const action of cloneActions(component.actions)) {
+    if (run.cancelled) break;
+    await waitForAction(Math.max(0, Number(action.delay) || 0), run);
+    if (run.cancelled) break;
+    await animateAction(component, node, action, run);
+  }
+
+  if (activeActionRuns.get(component.id) === run) {
+    activeActionRuns.delete(component.id);
+    resetActionTarget(node);
+  }
+}
+
 function triggerComponent(id) {
   const component = components.find((item) => item.id === id);
   const node = componentLayer.querySelector(`[data-id="${id}"]`);
@@ -2094,10 +2442,16 @@ function triggerComponent(id) {
   interactions += 1;
   component.count += 1;
   interactionCount.textContent = String(interactions);
-  playComponentSound(component);
 
   effectClasses.forEach((className) => node.classList.remove(className));
   void node.offsetWidth;
+
+  if (component.actions?.length) {
+    runActionStack(component, node);
+    return;
+  }
+
+  playComponentSound(component);
   node.classList.add(`effect-${component.effect}`);
 
   const duration = Number.parseFloat(getComputedStyle(node).getPropertyValue("--effect-duration")) || 560;
@@ -2173,7 +2527,7 @@ function playGeneratedTone(component, volume = 1) {
 
 
 function cloneComponentData(component) {
-  const copy = { ...component };
+  const copy = cloneComponent(component);
   delete copy.id;
   copy.count = 0;
   return copy;
@@ -2217,6 +2571,7 @@ function removeSelectedComponent() {
   if (!ids.size) return;
 
   saveHistory();
+  ids.forEach(stopComponentActionRun);
   components = components.filter((component) => !ids.has(component.id));
   setSelection([]);
   if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
@@ -2285,6 +2640,8 @@ function duplicateSelected() {
 }
 function resetDemo() {
   saveHistory();
+  stopAllActionRuns();
+  stopActiveSounds();
   components = [];
   setSelection([]);
   nextId = 1;
@@ -2351,6 +2708,26 @@ soundVolumeRange.addEventListener("input", () => {
 });
 soundVolumeRange.addEventListener("change", () => updateSelectedSoundFromControls({ volume: true }));
 soundFileInput.addEventListener("change", (event) => loadSoundFileForSelection(event.target.files));
+
+actionTypeSelect.addEventListener("change", () => {
+  delete actionValueRange.dataset.touched;
+  delete actionDurationRange.dataset.touched;
+  syncActionValueControl();
+});
+actionValueRange.addEventListener("input", () => {
+  actionValueRange.dataset.touched = "true";
+  syncActionValueControl();
+});
+actionDelayRange.addEventListener("input", () => {
+  actionDelayOutput.textContent = `${Math.round(actionDelayRange.value)}ms`;
+  updateRangeFill(actionDelayRange);
+});
+actionDurationRange.addEventListener("input", () => {
+  actionDurationRange.dataset.touched = "true";
+  syncActionValueControl();
+});
+addActionButton.addEventListener("click", addActionToSelected);
+clearActionsButton.addEventListener("click", clearSelectedActions);
 
 [
   triggerSelect,
