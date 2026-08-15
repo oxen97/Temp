@@ -12,6 +12,13 @@ const effectSelect = document.querySelector("#effectSelect");
 const zoomRange = document.querySelector("#zoomRange");
 const shakeRange = document.querySelector("#shakeRange");
 const speedRange = document.querySelector("#speedRange");
+const zoomControl = document.querySelector("#zoomControl");
+const shakeControl = document.querySelector("#shakeControl");
+const speedControl = document.querySelector("#speedControl");
+const zoomLabel = document.querySelector("#zoomLabel");
+const shakeLabel = document.querySelector("#shakeLabel");
+const shakeUnit = document.querySelector("#shakeUnit");
+const speedLabel = document.querySelector("#speedLabel");
 const actionTypeSelect = document.querySelector("#actionTypeSelect");
 const actionValueLabel = document.querySelector("#actionValueLabel");
 const actionValueRange = document.querySelector("#actionValueRange");
@@ -132,6 +139,21 @@ const effectLabels = {
   pulse: "Pulse Glow",
   blur: "Blur Focus",
   flicker: "Fade Flicker"
+};
+
+const effectControlConfigs = {
+  zoom: { zoom: { label: "Scale", unit: "%" }, speed: { label: "Speed" } },
+  shake: { shake: { label: "Distance", unit: "px" }, speed: { label: "Speed" } },
+  bounce: { shake: { label: "Power", unit: "" }, speed: { label: "Speed" } },
+  tilt: { shake: { label: "Angle", unit: "deg" }, speed: { label: "Speed" } },
+  glitch: { shake: { label: "Intensity", unit: "px" }, speed: { label: "Speed" } },
+  wave: { shake: { label: "Warp", unit: "" }, speed: { label: "Speed" } },
+  split: { shake: { label: "Separation", unit: "" }, speed: { label: "Speed" } },
+  reveal: { speed: { label: "Speed" } },
+  spin: { speed: { label: "Speed" } },
+  pulse: { zoom: { label: "Scale", unit: "%" }, speed: { label: "Speed" } },
+  blur: { shake: { label: "Blur", unit: "px" }, speed: { label: "Speed" } },
+  flicker: { speed: { label: "Speed" } }
 };
 
 const sampleSounds = {
@@ -1880,6 +1902,29 @@ function syncSoundControlsFromSelection(selected, component) {
   updateRangeFill(soundVolumeRange);
 }
 
+function syncEffectControlVisibility(effect = effectSelect.value) {
+  const config = effectControlConfigs[effect] || effectControlConfigs.zoom;
+  setVisible(zoomControl, Boolean(config.zoom));
+  setVisible(shakeControl, Boolean(config.shake));
+  setVisible(speedControl, Boolean(config.speed));
+  zoomRange.disabled = !config.zoom;
+  shakeRange.disabled = !config.shake;
+  speedRange.disabled = !config.speed;
+  zoomLabel.textContent = config.zoom?.label || "Zoom";
+  shakeLabel.textContent = config.shake?.label || "Intensity";
+  shakeUnit.textContent = config.shake?.unit || "";
+  speedLabel.textContent = config.speed?.label || "Speed";
+}
+
+function syncEffectControlOutputs() {
+  zoomOutput.textContent = zoomRange.value;
+  shakeOutput.textContent = shakeRange.value;
+  speedOutput.textContent = speedRange.value;
+  updateRangeFill(zoomRange);
+  updateRangeFill(shakeRange);
+  updateRangeFill(speedRange);
+}
+
 function actionConfig(type = actionTypeSelect.value) {
   return actionConfigs[type] || actionConfigs.scale;
 }
@@ -2046,6 +2091,7 @@ function syncControlsFromSelection() {
     cornerRadiusRange.disabled = true;
     cornerRadiusInput.disabled = true;
     [curveC1XRange, curveC1YRange, curveC2XRange, curveC2YRange].forEach((control) => { control.disabled = true; });
+    syncEffectControlVisibility(effectSelect.value);
     syncSoundControlsFromSelection(selected, component);
     syncActionBuilderFromSelection(selected, component);
     updateAllRangeFills();
@@ -2059,6 +2105,7 @@ function syncControlsFromSelection() {
   const transparentStroke = hasEditableAppearance && Boolean(component.strokeTransparent);
   triggerSelect.value = component.trigger;
   effectSelect.value = component.effect;
+  syncEffectControlVisibility(component.effect);
   zoomRange.value = component.zoom;
   shakeRange.value = component.shake;
   speedRange.value = component.speed;
@@ -2103,9 +2150,7 @@ function syncControlsFromSelection() {
   hOutput.textContent = hRange.value;
   rotationOutput.textContent = rotationRange.value;
   opacityOutput.textContent = opacityRange.value;
-  zoomOutput.textContent = zoomRange.value;
-  shakeOutput.textContent = shakeRange.value;
-  speedOutput.textContent = speedRange.value;
+  syncEffectControlOutputs();
   strokeWidthOutput.textContent = strokeWidthRange.value;
   cornerRadiusOutput.textContent = cornerRadiusRange.value;
   curveC1XOutput.textContent = curveC1XRange.value;
@@ -2269,8 +2314,16 @@ function applyBaseTransform(node, component) {
 
 function applyEffectVars(node, component) {
   const duration = Math.max(220, 900 - component.speed * 6.2);
+  const intensity = Math.max(0, Number(component.shake) || 0);
+  const wave = intensity / 2;
   node.style.setProperty("--zoom-scale", String(component.zoom / 100));
-  node.style.setProperty("--shake-amount", `${component.shake}px`);
+  node.style.setProperty("--shake-amount", `${intensity}px`);
+  node.style.setProperty("--wave-x-a", `${wave}deg`);
+  node.style.setProperty("--wave-y-a", `${wave * -0.5}deg`);
+  node.style.setProperty("--wave-x-b", `${wave * -0.75}deg`);
+  node.style.setProperty("--wave-y-b", `${wave * 0.38}deg`);
+  node.style.setProperty("--blur-amount", `${intensity}px`);
+  node.style.setProperty("--blur-soft", `${intensity * 0.12}px`);
   node.style.setProperty("--effect-duration", `${duration}ms`);
 }
 
@@ -2758,6 +2811,7 @@ clearActionsButton.addEventListener("click", clearSelectedActions);
   fontSizeRange
 ].forEach((control) => {
   const handleControlChange = () => {
+    if (control === effectSelect) syncEffectControlVisibility(effectSelect.value);
     if (control === strokeWidthRange) strokeWidthInput.value = strokeWidthRange.value;
     if (control === cornerRadiusRange) cornerRadiusInput.value = cornerRadiusRange.value;
     if (control === curveC1XRange) curveC1XOutput.textContent = curveC1XRange.value;
@@ -2765,6 +2819,7 @@ clearActionsButton.addEventListener("click", clearSelectedActions);
     if (control === curveC2XRange) curveC2XOutput.textContent = curveC2XRange.value;
     if (control === curveC2YRange) curveC2YOutput.textContent = curveC2YRange.value;
     updateRangeFill(control);
+    syncEffectControlOutputs();
     updateSelectedFromControls();
   };
   control.addEventListener("input", handleControlChange);
@@ -2786,6 +2841,7 @@ clearActionsButton.addEventListener("click", clearSelectedActions);
 
 syncArtboardInputs();
 applyArtboardSettings();
+syncEffectControlVisibility(effectSelect.value);
 updateAllRangeFills();
 syncControlsFromSelection();
 renderComponentList();

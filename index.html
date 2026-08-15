@@ -164,9 +164,9 @@
         </div>
         <label class="field"><span>Trigger</span><select id="triggerSelect"><option value="click">Click / Tap</option><option value="hover">Hover / Mobile Tap</option><option value="drag">Drag / Swipe</option><option value="wheel">Wheel / Pinch Policy</option></select></label>
         <label class="field"><span>Effect</span><select id="effectSelect"><option value="zoom">Zoom</option><option value="shake">Shake</option><option value="bounce">Bounce</option><option value="tilt">Tilt</option><option value="glitch">Glitch</option><option value="wave">Wave Distort</option><option value="split">Split Layer</option><option value="reveal">Reveal Note</option><option value="spin">Spin</option><option value="pulse">Pulse Glow</option><option value="blur">Blur Focus</option><option value="flicker">Fade Flicker</option></select></label>
-        <label class="range-field"><span>Zoom <output id="zoomOutput">130</output>%</span><input id="zoomRange" type="range" min="100" max="220" value="130"></label>
-        <label class="range-field"><span>Shake <output id="shakeOutput">14</output>px</span><input id="shakeRange" type="range" min="0" max="50" value="14"></label>
-        <label class="range-field"><span>Speed <output id="speedOutput">50</output></span><input id="speedRange" type="range" min="10" max="100" value="50"></label>
+        <label id="zoomControl" class="range-field"><span><span id="zoomLabel">Zoom</span> <output id="zoomOutput">130</output>%</span><input id="zoomRange" type="range" min="100" max="220" value="130"></label>
+        <label id="shakeControl" class="range-field"><span><span id="shakeLabel">Shake</span> <output id="shakeOutput">14</output><span id="shakeUnit">px</span></span><input id="shakeRange" type="range" min="0" max="50" value="14"></label>
+        <label id="speedControl" class="range-field"><span><span id="speedLabel">Speed</span> <output id="speedOutput">50</output></span><input id="speedRange" type="range" min="10" max="100" value="50"></label>
         <div class="action-builder">
           <div class="section-title action-builder-title">
             <h2>Action Stack</h2>
