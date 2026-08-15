@@ -158,6 +158,35 @@
         <label class="range-field"><span>Font Size <output id="fontSizeOutput">48</output>px</span><input id="fontSizeRange" type="range" min="12" max="120" value="48"></label>
       </section>
 
+      <section id="regionPanel" class="panel-section">
+        <div class="section-title">
+          <h2>Detail Areas</h2>
+          <div class="mini-actions">
+            <button class="region-add-button" type="button" data-region-shape="ellipse">Ellipse</button>
+            <button class="region-add-button" type="button" data-region-shape="rect">Rect</button>
+            <button class="region-add-button" type="button" data-region-shape="brush">Brush</button>
+          </div>
+        </div>
+        <div id="regionList" class="region-list" aria-label="Detail area list"></div>
+        <label class="field"><span>Area Shape</span><select id="regionShapeSelect"><option value="ellipse">Ellipse</option><option value="rect">Rectangle</option><option value="brush">Soft Brush</option></select></label>
+        <label class="field"><span>Trigger</span><select id="regionTriggerSelect"><option value="hover">Hover</option><option value="click">Click / Tap</option><option value="drag">Drag / Swipe</option><option value="move">Pointer Move</option></select></label>
+        <label class="field"><span>Effect</span><select id="regionEffectSelect"><option value="bulge">Bulge</option><option value="stretch">Stretch</option><option value="smear">Smear</option><option value="ripple">Ripple</option><option value="spotlight">Spotlight</option><option value="pinch">Pinch</option></select></label>
+        <div class="compact-grid two-col">
+          <label class="field"><span>X <output id="regionXOutput">30</output></span><input id="regionXRange" type="range" min="0" max="100" step="0.5" value="30"></label>
+          <label class="field"><span>Y <output id="regionYOutput">30</output></span><input id="regionYRange" type="range" min="0" max="100" step="0.5" value="30"></label>
+          <label class="field"><span>W <output id="regionWOutput">32</output></span><input id="regionWRange" type="range" min="5" max="100" step="0.5" value="32"></label>
+          <label class="field"><span>H <output id="regionHOutput">32</output></span><input id="regionHRange" type="range" min="5" max="100" step="0.5" value="32"></label>
+        </div>
+        <label class="range-field"><span>Strength <output id="regionStrengthOutput">48</output></span><input id="regionStrengthRange" type="range" min="0" max="100" value="48"></label>
+        <label class="range-field"><span>Softness <output id="regionSoftnessOutput">60</output></span><input id="regionSoftnessRange" type="range" min="0" max="100" value="60"></label>
+        <label class="range-field"><span>Angle <output id="regionAngleOutput">0</output>deg</span><input id="regionAngleRange" type="range" min="-180" max="180" value="0"></label>
+        <label class="range-field"><span>Speed <output id="regionSpeedOutput">55</output></span><input id="regionSpeedRange" type="range" min="10" max="100" value="55"></label>
+        <div class="button-row">
+          <button id="previewRegionButton" class="button" type="button">Preview Area</button>
+          <button id="removeRegionButton" class="button button-muted" type="button">Delete Area</button>
+        </div>
+      </section>
+
       <section class="panel-section">
         <div class="section-title">
           <h2>Interaction</h2>

@@ -103,6 +103,53 @@ const cornerRadiusField = cornerRadiusRange.closest(".range-field");
 const curvePanel = curveC1XRange.closest(".panel-section");
 const strokeStyleField = strokeStyleSelect.closest(".field");
 const lineCapField = lineCapSelect.closest(".field");
+const regionPanel = document.querySelector("#regionPanel");
+const addRegionButtons = document.querySelectorAll("[data-region-shape]");
+const regionList = document.querySelector("#regionList");
+const regionShapeSelect = document.querySelector("#regionShapeSelect");
+const regionTriggerSelect = document.querySelector("#regionTriggerSelect");
+const regionEffectSelect = document.querySelector("#regionEffectSelect");
+const regionXRange = document.querySelector("#regionXRange");
+const regionYRange = document.querySelector("#regionYRange");
+const regionWRange = document.querySelector("#regionWRange");
+const regionHRange = document.querySelector("#regionHRange");
+const regionStrengthRange = document.querySelector("#regionStrengthRange");
+const regionSoftnessRange = document.querySelector("#regionSoftnessRange");
+const regionAngleRange = document.querySelector("#regionAngleRange");
+const regionSpeedRange = document.querySelector("#regionSpeedRange");
+const regionXOutput = document.querySelector("#regionXOutput");
+const regionYOutput = document.querySelector("#regionYOutput");
+const regionWOutput = document.querySelector("#regionWOutput");
+const regionHOutput = document.querySelector("#regionHOutput");
+const regionStrengthOutput = document.querySelector("#regionStrengthOutput");
+const regionSoftnessOutput = document.querySelector("#regionSoftnessOutput");
+const regionAngleOutput = document.querySelector("#regionAngleOutput");
+const regionSpeedOutput = document.querySelector("#regionSpeedOutput");
+const previewRegionButton = document.querySelector("#previewRegionButton");
+const removeRegionButton = document.querySelector("#removeRegionButton");
+const regionControls = [
+  regionShapeSelect,
+  regionTriggerSelect,
+  regionEffectSelect,
+  regionXRange,
+  regionYRange,
+  regionWRange,
+  regionHRange,
+  regionStrengthRange,
+  regionSoftnessRange,
+  regionAngleRange,
+  regionSpeedRange
+].filter(Boolean);
+const regionRangeControls = [
+  regionXRange,
+  regionYRange,
+  regionWRange,
+  regionHRange,
+  regionStrengthRange,
+  regionSoftnessRange,
+  regionAngleRange,
+  regionSpeedRange
+].filter(Boolean);
 
 const effectClasses = [
   "effect-zoom",
@@ -190,6 +237,42 @@ const shapeLabels = {
   star: "Star"
 };
 
+const regionShapeLabels = {
+  ellipse: "Ellipse",
+  rect: "Rectangle",
+  brush: "Soft Brush"
+};
+
+const regionTriggerLabels = {
+  hover: "Hover",
+  click: "Click / Tap",
+  drag: "Drag / Swipe",
+  move: "Pointer Move"
+};
+
+const regionEffectLabels = {
+  bulge: "Bulge",
+  stretch: "Stretch",
+  smear: "Smear",
+  ripple: "Ripple",
+  spotlight: "Spotlight",
+  pinch: "Pinch"
+};
+
+const defaultRegion = {
+  shape: "ellipse",
+  trigger: "hover",
+  effect: "bulge",
+  x: 30,
+  y: 30,
+  w: 32,
+  h: 32,
+  strength: 48,
+  softness: 60,
+  angle: 0,
+  speed: 55
+};
+
 const defaultCurve = {
   curveC1X: 28,
   curveC1Y: 8,
@@ -205,10 +288,10 @@ const smartGuideCrossAxisPaddingPx = 28;
 const smartGuideMeasureLimitPx = 360;
 
 const sampleComponents = [
-  { name: "Green Orb", src: "./sample-components/01-green-orb.svg", x: 10, y: 10, w: 20, h: 28, effect: "zoom", trigger: "click", zoom: 150, shake: 12 },
-  { name: "Yellow Triangle", src: "./sample-components/02-yellow-triangle.svg", x: 25, y: 12, w: 20, h: 28, effect: "tilt", trigger: "hover", zoom: 130, shake: 16 },
+  { name: "Green Orb", src: "./sample-components/01-green-orb.svg", x: 10, y: 10, w: 20, h: 28, effect: "zoom", trigger: "click", zoom: 150, shake: 12, regions: [{ name: "Orb bulge", shape: "ellipse", x: 24, y: 22, w: 48, h: 48, effect: "bulge", trigger: "hover", strength: 58, softness: 72, speed: 58 }] },
+  { name: "Yellow Triangle", src: "./sample-components/02-yellow-triangle.svg", x: 25, y: 12, w: 20, h: 28, effect: "tilt", trigger: "hover", zoom: 130, shake: 16, regions: [{ name: "Top smear", shape: "brush", x: 28, y: 8, w: 40, h: 34, effect: "smear", trigger: "drag", strength: 54, softness: 80, angle: -28, speed: 68 }] },
   { name: "Red Disc", src: "./sample-components/03-red-disc.svg", x: 48, y: 26, w: 28, h: 32, effect: "bounce", trigger: "click", zoom: 135, shake: 18 },
-  { name: "Blue Card", src: "./sample-components/04-blue-card.svg", x: 68, y: 14, w: 24, h: 25, effect: "glitch", trigger: "hover", zoom: 130, shake: 16 },
+  { name: "Blue Card", src: "./sample-components/04-blue-card.svg", x: 68, y: 14, w: 24, h: 25, effect: "glitch", trigger: "hover", zoom: 130, shake: 16, regions: [{ name: "Card spotlight", shape: "rect", x: 18, y: 26, w: 58, h: 36, effect: "spotlight", trigger: "click", strength: 64, softness: 42, speed: 52 }] },
   { name: "Black Wave", src: "./sample-components/05-black-wave.svg", x: 9, y: 52, w: 70, h: 18, effect: "wave", trigger: "drag", zoom: 125, shake: 18 },
   { name: "Title Type", src: "./sample-components/06-title-type.svg", x: 8, y: 74, w: 58, h: 13, effect: "reveal", trigger: "click", zoom: 118, shake: 10 },
   { name: "Dot Grid", src: "./sample-components/07-dot-grid.svg", x: 70, y: 50, w: 20, h: 20, effect: "shake", trigger: "click", zoom: 120, shake: 22 },
@@ -224,20 +307,35 @@ const defaultArtboard = {
   transparent: false
 };
 let artboard = { ...defaultArtboard };
+let boardZoom = 1;
+let isSpacePanning = false;
+let stagePanState = null;
+const minBoardZoom = 0.25;
+const maxBoardZoom = 4;
 
 let nextId = 1;
+let nextRegionId = 1;
 let selectedId = null;
 let selectedIds = [];
+let selectedRegionId = null;
 let components = [];
 let interactions = 0;
 let audioContext = null;
 const activeAudioPlayers = new Set();
 const activeToneNodes = new Set();
 const activeActionRuns = new Map();
+const activeCssEffectRuns = new Map();
+const activeRegionTimers = new Map();
+const activeRegionCanvasRuns = new Map();
+const drawableImageCache = new Map();
+let nextRegionVectorId = 1;
 let dragState = null;
 let resizeState = null;
 let cornerRadiusState = null;
 let curveHandleState = null;
+let regionDragState = null;
+let brushDrawComponentId = null;
+let brushDrawState = null;
 let marqueeState = null;
 let marqueeNode = null;
 let copiedComponent = null;
@@ -261,6 +359,10 @@ function setSelection(ids) {
   const existingIds = new Set(components.map((component) => component.id));
   selectedIds = Array.from(new Set(ids)).filter((id) => existingIds.has(id));
   selectedId = selectedIds[selectedIds.length - 1] || null;
+  if (selectedRegionId && !components.some((component) => selectedIds.includes(component.id) && component.regions?.some((region) => region.id === selectedRegionId))) {
+    selectedRegionId = null;
+  }
+  if (brushDrawComponentId && brushDrawComponentId !== selectedId) cancelBrushDrawMode();
 }
 
 function selectOnly(id) {
@@ -322,10 +424,20 @@ function cloneActions(actions) {
   return Array.isArray(actions) ? actions.map((action) => ({ ...action })) : [];
 }
 
+function cloneRegions(regions) {
+  return Array.isArray(regions)
+    ? regions.map((region) => ({
+      ...region,
+      points: Array.isArray(region.points) ? region.points.map((point) => [...point]) : []
+    }))
+    : [];
+}
+
 function cloneComponent(component) {
   return {
     ...component,
-    actions: cloneActions(component.actions)
+    actions: cloneActions(component.actions),
+    regions: cloneRegions(component.regions)
   };
 }
 
@@ -334,7 +446,9 @@ function captureState() {
     components: components.map(cloneComponent),
     selectedIds: [...selectedIds],
     selectedId,
+    selectedRegionId,
     nextId,
+    nextRegionId,
     interactions,
     artboard: { ...artboard },
     artboardVisible: !artSurface.classList.contains("is-hidden")
@@ -353,10 +467,14 @@ function saveHistory() {
 function restoreState(record) {
   if (!record?.snapshot) return;
   isRestoringHistory = true;
+  cancelBrushDrawMode();
+  clearActiveRegionEffects();
   components = record.snapshot.components.map(cloneComponent);
   selectedIds = [...record.snapshot.selectedIds];
   selectedId = record.snapshot.selectedId;
+  selectedRegionId = record.snapshot.selectedRegionId || null;
   nextId = record.snapshot.nextId;
+  nextRegionId = record.snapshot.nextRegionId || nextRegionIdFromComponents();
   interactions = record.snapshot.interactions;
   artboard = { ...record.snapshot.artboard };
   interactionCount.textContent = String(interactions);
@@ -385,6 +503,72 @@ function clampNumber(value, min, max, fallback) {
   const number = Number(value);
   if (!Number.isFinite(number)) return fallback;
   return Math.max(min, Math.min(max, number));
+}
+
+function nextRegionIdFromComponents() {
+  const ids = components.flatMap((component) => (component.regions || []).map((region) => Number(region.id) || 0));
+  return Math.max(1, ...ids) + 1;
+}
+
+function normalizeBrushPoints(points) {
+  if (!Array.isArray(points)) return [];
+  return points
+    .map((point) => {
+      if (Array.isArray(point)) {
+        return [
+          clampNumber(point[0], 0, 100, 0),
+          clampNumber(point[1], 0, 100, 0)
+        ];
+      }
+      return [
+        clampNumber(point?.x, 0, 100, 0),
+        clampNumber(point?.y, 0, 100, 0)
+      ];
+    })
+    .filter((point) => Number.isFinite(point[0]) && Number.isFinite(point[1]));
+}
+
+function normalizeRegion(region = {}, index = 0) {
+  const shape = region.shape in regionShapeLabels ? region.shape : defaultRegion.shape;
+  const trigger = region.trigger in regionTriggerLabels ? region.trigger : defaultRegion.trigger;
+  const effect = region.effect in regionEffectLabels ? region.effect : defaultRegion.effect;
+  const normalized = {
+    id: Number.isFinite(Number(region.id)) ? Number(region.id) : nextRegionId++,
+    name: region.name || `Area ${index + 1}`,
+    shape,
+    trigger,
+    effect,
+    x: clampNumber(region.x ?? defaultRegion.x, 0, 95, defaultRegion.x),
+    y: clampNumber(region.y ?? defaultRegion.y, 0, 95, defaultRegion.y),
+    w: clampNumber(region.w ?? defaultRegion.w, 5, 100, defaultRegion.w),
+    h: clampNumber(region.h ?? defaultRegion.h, 5, 100, defaultRegion.h),
+    strength: clampNumber(region.strength ?? defaultRegion.strength, 0, 100, defaultRegion.strength),
+    softness: clampNumber(region.softness ?? defaultRegion.softness, 0, 100, defaultRegion.softness),
+    angle: clampNumber(region.angle ?? defaultRegion.angle, -180, 180, defaultRegion.angle),
+    speed: clampNumber(region.speed ?? defaultRegion.speed, 10, 100, defaultRegion.speed),
+    points: normalizeBrushPoints(region.points)
+  };
+  clampRegion(normalized);
+  return normalized;
+}
+
+function hydrateRegions(regions) {
+  return Array.isArray(regions) ? regions.map((region, index) => normalizeRegion(region, index)) : [];
+}
+
+function duplicateRegions(regions) {
+  return cloneRegions(regions).map((region, index) => normalizeRegion({ ...region, id: undefined, name: region.name || `Area ${index + 1}` }, index));
+}
+
+function clampRegion(region) {
+  region.w = clampNumber(region.w, 5, 100, defaultRegion.w);
+  region.h = clampNumber(region.h, 5, 100, defaultRegion.h);
+  region.x = clampNumber(region.x, 0, 100 - region.w, defaultRegion.x);
+  region.y = clampNumber(region.y, 0, 100 - region.h, defaultRegion.y);
+  region.strength = clampNumber(region.strength, 0, 100, defaultRegion.strength);
+  region.softness = clampNumber(region.softness, 0, 100, defaultRegion.softness);
+  region.angle = clampNumber(region.angle, -180, 180, defaultRegion.angle);
+  region.speed = clampNumber(region.speed, 10, 100, defaultRegion.speed);
 }
 
 function visualAspectForShape(shape) {
@@ -447,8 +631,36 @@ function applyArtboardSettings() {
   artSurface.style.setProperty("--artboard-width", `${artboard.width}px`);
   artSurface.style.setProperty("--artboard-aspect", `${artboard.width} / ${artboard.height}`);
   artSurface.style.setProperty("--artboard-bg", artboard.transparent ? "transparent" : artboard.background);
+  artSurface.style.setProperty("--board-zoom", String(boardZoom));
   artSurface.classList.toggle("is-transparent", artboard.transparent);
   artboardBgInput.disabled = artboard.transparent;
+}
+
+function applyBoardZoom() {
+  artSurface.style.setProperty("--board-zoom", String(boardZoom));
+}
+
+function setBoardZoom(nextZoom, originEvent = null) {
+  const previousZoom = boardZoom;
+  const next = clampNumber(nextZoom, minBoardZoom, maxBoardZoom, previousZoom);
+  if (Math.abs(next - previousZoom) < 0.001) return;
+
+  const previousRect = artSurface.getBoundingClientRect();
+  const focusX = originEvent && previousRect.width
+    ? clampNumber((originEvent.clientX - previousRect.left) / previousRect.width, 0, 1, 0.5)
+    : 0.5;
+  const focusY = originEvent && previousRect.height
+    ? clampNumber((originEvent.clientY - previousRect.top) / previousRect.height, 0, 1, 0.5)
+    : 0.5;
+  const clientX = originEvent?.clientX ?? previousRect.left + previousRect.width / 2;
+  const clientY = originEvent?.clientY ?? previousRect.top + previousRect.height / 2;
+
+  boardZoom = next;
+  applyBoardZoom();
+
+  const nextRect = artSurface.getBoundingClientRect();
+  stage.scrollLeft += nextRect.left + nextRect.width * focusX - clientX;
+  stage.scrollTop += nextRect.top + nextRect.height * focusY - clientY;
 }
 
 function syncArtboardInputs() {
@@ -503,6 +715,8 @@ function loadSamples() {
   components = [];
   setSelection([]);
   nextId = 1;
+  nextRegionId = 1;
+  selectedRegionId = null;
   interactions = 0;
   interactionCount.textContent = "0";
   const sampleSoundKeys = Object.keys(sampleSounds);
@@ -533,6 +747,8 @@ async function loadComponentFiles(files) {
   components = [];
   setSelection([]);
   nextId = 1;
+  nextRegionId = 1;
+  selectedRegionId = null;
   interactions = 0;
   interactionCount.textContent = "0";
 
@@ -642,6 +858,7 @@ function addComponent(config, shouldRender = true) {
     soundName: config.soundName || "",
     soundVolume: clampNumber(config.soundVolume ?? soundVolumeRange.value, 0, 100, 80),
     actions: cloneActions(config.actions),
+    regions: hydrateRegions(config.regions),
     fill: config.fill && config.fill !== "transparent" ? config.fill : fillInput.value || "#ffffff",
     fillTransparent,
     stroke: config.stroke && config.stroke !== "transparent" ? config.stroke : strokeInput.value || "#191714",
@@ -716,6 +933,7 @@ function renderComponents() {
     note.innerHTML = `<strong>${escapeHtml(component.name)}</strong><span>${triggerLabels[component.trigger]} + ${effectLabels[component.effect]}</span>`;
 
     node.appendChild(viewport);
+    node.appendChild(createRegionLayer(component));
     const selectionBox = createSelectionBox(component);
     node.appendChild(selectionBox);
     if (component.type === "shape" && component.shape === "curve") {
@@ -753,6 +971,1218 @@ function componentVisual(component, className) {
   img.alt = "";
   wrapper.appendChild(img);
   return wrapper;
+}
+
+function selectedRegion(component = selectedComponent()) {
+  if (!component || !selectedRegionId) return null;
+  return component.regions?.find((region) => region.id === selectedRegionId) || null;
+}
+
+function componentRegionSource(component, region) {
+  const source = document.createElement("div");
+  source.className = "region-source";
+  const safeW = Math.max(1, Number(region.w) || defaultRegion.w);
+  const safeH = Math.max(1, Number(region.h) || defaultRegion.h);
+  source.style.left = `${-(Number(region.x) || 0) / safeW * 100}%`;
+  source.style.top = `${-(Number(region.y) || 0) / safeH * 100}%`;
+  source.style.width = `${100 / safeW * 100}%`;
+  source.style.height = `${100 / safeH * 100}%`;
+  source.appendChild(componentVisual(component, "component-image region-source-visual"));
+  return source;
+}
+
+function componentRemainderSource(component, area) {
+  const source = document.createElement("div");
+  source.className = "region-source region-remainder-source";
+  const safeW = Math.max(0.1, Number(area.w) || 1);
+  const safeH = Math.max(0.1, Number(area.h) || 1);
+  source.style.left = `${-(Number(area.x) || 0) / safeW * 100}%`;
+  source.style.top = `${-(Number(area.y) || 0) / safeH * 100}%`;
+  source.style.width = `${100 / safeW * 100}%`;
+  source.style.height = `${100 / safeH * 100}%`;
+  source.appendChild(componentVisual(component, "component-image region-source-visual"));
+  return source;
+}
+
+function imageFromSource(src) {
+  if (!src) return Promise.resolve(null);
+  if (drawableImageCache.has(src)) return drawableImageCache.get(src);
+  const promise = new Promise((resolve) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => resolve(null);
+    image.src = src;
+  });
+  drawableImageCache.set(src, promise);
+  return promise;
+}
+
+function svgImageFromMarkup(markup) {
+  const svg = markup.includes("xmlns=")
+    ? markup
+    : markup.replace("<svg ", `<svg xmlns="http://www.w3.org/2000/svg" `);
+  return imageFromSource(`data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`);
+}
+
+async function drawComponentToContext(ctx, component, x, y, width, height) {
+  if (component.type === "image") {
+    const image = await imageFromSource(component.src);
+    if (image) ctx.drawImage(image, x, y, width, height);
+    return;
+  }
+
+  if (component.type === "shape") {
+    const image = await svgImageFromMarkup(shapeSvg(component));
+    if (image) ctx.drawImage(image, x, y, width, height);
+    return;
+  }
+
+  if (component.type === "text") {
+    const fontSize = Number(component.fontSize) || 48;
+    ctx.save();
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.font = `${fontSize}px ${component.font || "Arial"}`;
+    ctx.lineJoin = "round";
+    if (!component.strokeTransparent && Number(component.strokeWidth) > 0) {
+      ctx.strokeStyle = component.stroke || "#191714";
+      ctx.lineWidth = Number(component.strokeWidth) || 0;
+      ctx.strokeText(component.text || "Text", x + width / 2, y + height / 2, width * 0.96);
+    }
+    if (!component.fillTransparent) {
+      ctx.fillStyle = component.fill || "#191714";
+      ctx.fillText(component.text || "Text", x + width / 2, y + height / 2, width * 0.96);
+    }
+    ctx.restore();
+  }
+}
+
+async function componentSourceCanvas(component, width, height, dpr) {
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(width * dpr));
+  canvas.height = Math.max(1, Math.round(height * dpr));
+  const ctx = canvas.getContext("2d");
+  configureCanvasQuality(ctx);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  await drawComponentToContext(ctx, component, 0, 0, width, height);
+  return canvas;
+}
+
+function appendRemainderStrip(remainder, component, area) {
+  if (area.w <= 0.1 || area.h <= 0.1) return;
+  const strip = document.createElement("div");
+  strip.className = "region-remainder-strip";
+  strip.style.left = `${area.x}%`;
+  strip.style.top = `${area.y}%`;
+  strip.style.width = `${area.w}%`;
+  strip.style.height = `${area.h}%`;
+  strip.appendChild(componentRemainderSource(component, area));
+  remainder.appendChild(strip);
+}
+
+function createRegionRemainder(component, region) {
+  const remainder = document.createElement("div");
+  remainder.className = "region-remainder";
+  remainder.dataset.componentId = String(component.id);
+  remainder.dataset.regionId = String(region.id);
+  clampRegion(region);
+
+  const left = region.x;
+  const top = region.y;
+  const right = region.x + region.w;
+  const bottom = region.y + region.h;
+  appendRemainderStrip(remainder, component, { x: 0, y: 0, w: 100, h: top });
+  appendRemainderStrip(remainder, component, { x: 0, y: bottom, w: 100, h: 100 - bottom });
+  appendRemainderStrip(remainder, component, { x: 0, y: top, w: left, h: region.h });
+  appendRemainderStrip(remainder, component, { x: right, y: top, w: 100 - right, h: region.h });
+  return remainder;
+}
+
+function activeCanvasKey(componentId, regionId) {
+  return `${componentId}:${regionId}`;
+}
+
+function configureCanvasQuality(ctx) {
+  if (!ctx) return;
+  ctx.imageSmoothingEnabled = true;
+  try { ctx.imageSmoothingQuality = "high"; } catch {}
+}
+
+function roundedRectPath(ctx, x, y, width, height, radius) {
+  const r = Math.max(0, Math.min(radius, width / 2, height / 2));
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + width - r, y);
+  ctx.quadraticCurveTo(x + width, y, x + width, y + r);
+  ctx.lineTo(x + width, y + height - r);
+  ctx.quadraticCurveTo(x + width, y + height, x + width - r, y + height);
+  ctx.lineTo(x + r, y + height);
+  ctx.quadraticCurveTo(x, y + height, x, y + height - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+}
+
+function drawRegionMaskShape(ctx, region, x, y, width, height) {
+  if (hasBrushPath(region)) {
+    ctx.beginPath();
+    region.points.forEach((point, index) => {
+      const px = x + point[0] / 100 * width;
+      const py = y + point[1] / 100 * height;
+      if (index) ctx.lineTo(px, py);
+      else ctx.moveTo(px, py);
+    });
+    ctx.closePath();
+    ctx.fill();
+    return;
+  }
+
+  if (region.shape === "ellipse" || region.shape === "brush") {
+    ctx.beginPath();
+    ctx.ellipse(x + width / 2, y + height / 2, width / 2, height / 2, 0, 0, Math.PI * 2);
+    ctx.fill();
+    return;
+  }
+
+  roundedRectPath(ctx, x, y, width, height, 5);
+  ctx.fill();
+}
+
+function createRegionMask(region, canvasWidth, canvasHeight, dpr, rect, options = {}) {
+  const mask = document.createElement("canvas");
+  mask.width = Math.max(1, Math.round(canvasWidth * dpr));
+  mask.height = Math.max(1, Math.round(canvasHeight * dpr));
+  const ctx = mask.getContext("2d");
+  configureCanvasQuality(ctx);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const featherScale = options.featherScale ?? 0.18;
+  const expand = Math.max(0, options.expand ?? 0);
+  const insetFactor = options.insetFactor ?? 0.35;
+  const shapeRect = {
+    x: rect.x - expand,
+    y: rect.y - expand,
+    width: rect.width + expand * 2,
+    height: rect.height + expand * 2
+  };
+  const feather = Math.max(0, Math.min(shapeRect.width, shapeRect.height) * clampNumber(region.softness, 0, 100, defaultRegion.softness) / 100 * featherScale);
+  const inset = Math.max(0, feather * insetFactor);
+
+  ctx.save();
+  if (feather > 0.5) ctx.filter = `blur(${feather}px)`;
+  ctx.fillStyle = "#fff";
+  drawRegionMaskShape(
+    ctx,
+    region,
+    shapeRect.x + inset,
+    shapeRect.y + inset,
+    Math.max(1, shapeRect.width - inset * 2),
+    Math.max(1, shapeRect.height - inset * 2)
+  );
+  ctx.restore();
+  if (options.constrainToShape) {
+    ctx.save();
+    ctx.globalCompositeOperation = "destination-in";
+    ctx.fillStyle = "#fff";
+    drawRegionMaskShape(ctx, region, rect.x, rect.y, rect.width, rect.height);
+    ctx.restore();
+  }
+  return mask;
+}
+
+function regionTransformStrength(region, component) {
+  const strength = clampNumber(region.strength, 0, 100, defaultRegion.strength);
+  const hasVisibleStroke = component?.type === "shape" && !component.strokeTransparent && Number(component.strokeWidth) > 0;
+  if (!hasVisibleStroke) return strength;
+  const strokeWidth = clampNumber(component.strokeWidth, 0, maxStrokeWidth, 1);
+  const compensation = Math.max(0.88, 1 - Math.min(0.12, 0.04 + strokeWidth * 0.004));
+  return strength * compensation;
+}
+
+function applyRegionCanvasTransform(ctx, region, progress, centerX, centerY, component = null) {
+  const strength = regionTransformStrength(region, component);
+  const angle = clampNumber(region.angle, -180, 180, defaultRegion.angle);
+  const radians = angle * Math.PI / 180;
+  const amount = Math.sin(Math.PI * progress);
+  const push = strength * 0.95 * amount;
+
+  ctx.translate(centerX, centerY);
+  switch (region.effect) {
+    case "pinch":
+      ctx.scale(Math.max(0.35, 1 - strength / 220 * amount), Math.max(0.35, 1 - strength / 220 * amount));
+      break;
+    case "stretch":
+      ctx.rotate(radians);
+      ctx.scale(1 + strength / 105 * amount, Math.max(0.48, 1 - strength / 330 * amount));
+      ctx.rotate(-radians);
+      break;
+    case "smear":
+      ctx.translate(Math.cos(radians) * push, Math.sin(radians) * push);
+      ctx.transform(1, 0, Math.tan(Math.max(-0.35, Math.min(0.35, strength / 240 * amount))), 1, 0, 0);
+      break;
+    case "ripple":
+      ctx.scale(1 + Math.sin(progress * Math.PI * 3) * strength / 500, 1 - Math.sin(progress * Math.PI * 2.4) * strength / 620);
+      ctx.rotate(Math.sin(progress * Math.PI * 2) * strength / 900);
+      break;
+    case "spotlight":
+      ctx.scale(1 + strength / 950 * amount, 1 + strength / 950 * amount);
+      break;
+    case "bulge":
+    default:
+      ctx.scale(1 + strength / 150 * amount, 1 + strength / 150 * amount);
+      break;
+  }
+  ctx.translate(-centerX, -centerY);
+}
+
+function createRegionSvgElement(name, attributes = {}) {
+  const node = document.createElementNS("http://www.w3.org/2000/svg", name);
+  Object.entries(attributes).forEach(([key, value]) => node.setAttribute(key, String(value)));
+  return node;
+}
+
+function createRegionSvgShape(region, rect, fill) {
+  if (hasBrushPath(region)) {
+    const points = region.points.map((point) => {
+      const x = rect.x + point[0] / 100 * rect.width;
+      const y = rect.y + point[1] / 100 * rect.height;
+      return `${roundPathValue(x)},${roundPathValue(y)}`;
+    }).join(" ");
+    return createRegionSvgElement("polygon", { points, fill });
+  }
+
+  if (region.shape === "ellipse" || region.shape === "brush") {
+    return createRegionSvgElement("ellipse", {
+      cx: rect.x + rect.width / 2,
+      cy: rect.y + rect.height / 2,
+      rx: rect.width / 2,
+      ry: rect.height / 2,
+      fill
+    });
+  }
+
+  return createRegionSvgElement("rect", {
+    x: rect.x,
+    y: rect.y,
+    width: rect.width,
+    height: rect.height,
+    rx: Math.min(5, rect.width / 2, rect.height / 2),
+    fill
+  });
+}
+
+function createRegionSvgBlurFilter(id, amount, width, height) {
+  const filter = createRegionSvgElement("filter", {
+    id,
+    x: 0,
+    y: 0,
+    width,
+    height,
+    filterUnits: "userSpaceOnUse",
+    "color-interpolation-filters": "sRGB"
+  });
+  filter.appendChild(createRegionSvgElement("feGaussianBlur", { stdDeviation: amount }));
+  return filter;
+}
+
+function createEmbeddedShapeSvg(component, x, y, width, height) {
+  const markup = shapeSvg(component);
+  const namespacedMarkup = markup.includes("xmlns=")
+    ? markup
+    : markup.replace("<svg ", `<svg xmlns="http://www.w3.org/2000/svg" `);
+  const parsed = new DOMParser().parseFromString(namespacedMarkup, "image/svg+xml");
+  if (parsed.querySelector("parsererror")) return null;
+  const source = parsed.documentElement;
+  const svg = createRegionSvgElement("svg", {
+    x,
+    y,
+    width,
+    height,
+    viewBox: source.getAttribute("viewBox") || `0 0 ${width} ${height}`,
+    preserveAspectRatio: source.getAttribute("preserveAspectRatio") || "none",
+    overflow: "visible",
+    "aria-hidden": "true"
+  });
+  Array.from(source.childNodes).forEach((child) => svg.appendChild(document.importNode(child, true)));
+  return svg;
+}
+
+function applyRegionSvgTransform(node, region, progress, centerX, centerY) {
+  const strength = clampNumber(region.strength, 0, 100, defaultRegion.strength);
+  const angle = clampNumber(region.angle, -180, 180, defaultRegion.angle);
+  const amount = Math.sin(Math.PI * progress);
+  const push = strength * 0.95 * amount;
+  let transform = "";
+
+  switch (region.effect) {
+    case "pinch": {
+      const scale = Math.max(0.35, 1 - strength / 220 * amount);
+      transform = `translate(${centerX} ${centerY}) scale(${scale} ${scale}) translate(${-centerX} ${-centerY})`;
+      break;
+    }
+    case "stretch": {
+      const scaleX = 1 + strength / 105 * amount;
+      const scaleY = Math.max(0.48, 1 - strength / 330 * amount);
+      transform = `translate(${centerX} ${centerY}) rotate(${angle}) scale(${scaleX} ${scaleY}) rotate(${-angle}) translate(${-centerX} ${-centerY})`;
+      break;
+    }
+    case "smear": {
+      const pushX = Math.cos(angle * Math.PI / 180) * push;
+      const pushY = Math.sin(angle * Math.PI / 180) * push;
+      const skew = Math.atan(Math.max(-0.35, Math.min(0.35, strength / 240 * amount))) * 180 / Math.PI;
+      transform = `translate(${centerX + pushX} ${centerY + pushY}) skewX(${skew}) translate(${-centerX} ${-centerY})`;
+      break;
+    }
+    case "ripple": {
+      const scaleX = 1 + Math.sin(progress * Math.PI * 3) * strength / 500;
+      const scaleY = 1 - Math.sin(progress * Math.PI * 2.4) * strength / 620;
+      const rotation = Math.sin(progress * Math.PI * 2) * strength / 900 * 180 / Math.PI;
+      transform = `translate(${centerX} ${centerY}) scale(${scaleX} ${scaleY}) rotate(${rotation}) translate(${-centerX} ${-centerY})`;
+      break;
+    }
+    case "spotlight": {
+      const scale = 1 + strength / 950 * amount;
+      transform = `translate(${centerX} ${centerY}) scale(${scale} ${scale}) translate(${-centerX} ${-centerY})`;
+      break;
+    }
+    case "bulge":
+    default: {
+      const scale = 1 + strength / 150 * amount;
+      transform = `translate(${centerX} ${centerY}) scale(${scale} ${scale}) translate(${-centerX} ${-centerY})`;
+      break;
+    }
+  }
+
+  node.setAttribute("transform", transform);
+  node.style.filter = region.effect === "spotlight"
+    ? `brightness(${1 + strength / 250 * amount}) saturate(1.18)`
+    : "none";
+}
+
+function componentLocalSize(componentNode) {
+  const style = getComputedStyle(componentNode);
+  return {
+    width: Math.max(1, parseFloat(style.width) || componentNode.offsetWidth),
+    height: Math.max(1, parseFloat(style.height) || componentNode.offsetHeight)
+  };
+}
+
+function startRegionVectorEffect(component, region, componentNode) {
+  const { width, height } = componentLocalSize(componentNode);
+  const key = activeCanvasKey(component.id, region.id);
+  stopRegionCanvasRun(key);
+
+  const regionRect = {
+    x: width * region.x / 100,
+    y: height * region.y / 100,
+    width: Math.max(1, width * region.w / 100),
+    height: Math.max(1, height * region.h / 100)
+  };
+  const pad = Math.max(72, Math.max(regionRect.width, regionRect.height) * 0.7, clampNumber(region.strength, 0, 100, defaultRegion.strength) * 1.4);
+  const canvasWidth = width + pad * 2;
+  const canvasHeight = height + pad * 2;
+  const drawRect = {
+    x: pad + regionRect.x,
+    y: pad + regionRect.y,
+    width: regionRect.width,
+    height: regionRect.height
+  };
+  const uniqueId = nextRegionVectorId++;
+  const maskId = `region-base-mask-${uniqueId}`;
+  const clipId = `region-patch-clip-${uniqueId}`;
+  const patchMaskId = `region-patch-mask-${uniqueId}`;
+  const baseStrokeMaskId = `region-base-stroke-mask-${uniqueId}`;
+  const patchStrokeMaskId = `region-patch-stroke-mask-${uniqueId}`;
+  const baseBlurId = `region-base-blur-${uniqueId}`;
+  const patchBlurId = `region-patch-blur-${uniqueId}`;
+  const usesFreeformBrush = hasBrushPath(region);
+  const layer = document.createElement("div");
+  layer.className = "region-canvas-effect region-vector-effect";
+  layer.setAttribute("aria-hidden", "true");
+  layer.style.left = `${-pad}px`;
+  layer.style.top = `${-pad}px`;
+  layer.style.width = `${canvasWidth}px`;
+  layer.style.height = `${canvasHeight}px`;
+  layer.style.opacity = String(clampNumber(component.opacity ?? 100, 0, 100, 100) / 100);
+
+  const vectorStage = createRegionSvgElement("svg", {
+    class: "region-vector-stage",
+    viewBox: `0 0 ${canvasWidth} ${canvasHeight}`,
+    preserveAspectRatio: "none",
+    "aria-hidden": "true"
+  });
+
+  const defs = createRegionSvgElement("defs");
+  const createVectorMask = (id, background = null) => {
+    const svgMask = createRegionSvgElement("mask", {
+      id,
+      x: 0,
+      y: 0,
+      width: canvasWidth,
+      height: canvasHeight,
+      maskUnits: "userSpaceOnUse",
+      maskContentUnits: "userSpaceOnUse"
+    });
+    svgMask.style.maskType = "luminance";
+    if (background) {
+      svgMask.appendChild(createRegionSvgElement("rect", { x: 0, y: 0, width: canvasWidth, height: canvasHeight, fill: background }));
+    }
+    defs.appendChild(svgMask);
+    return svgMask;
+  };
+
+  const base = createRegionSvgElement("g");
+  const patch = createRegionSvgElement("g");
+
+  if (usesFreeformBrush) {
+    const softness = clampNumber(region.softness, 0, 100, defaultRegion.softness) / 100;
+    const brushSize = Math.min(drawRect.width, drawRect.height);
+    const eraseExpand = Math.max(2, brushSize * 0.025);
+    const hasFill = !component.fillTransparent && !["line", "curve"].includes(component.shape);
+    const hasStroke = !component.strokeTransparent && Number(component.strokeWidth) > 0;
+
+    if (hasFill) {
+      const eraseFeather = Math.min(8, brushSize * softness * 0.025);
+      const patchFeather = Math.min(16, brushSize * softness * 0.08);
+      const patchInset = patchFeather * 0.12;
+      const patchRect = {
+        x: drawRect.x + patchInset,
+        y: drawRect.y + patchInset,
+        width: Math.max(1, drawRect.width - patchInset * 2),
+        height: Math.max(1, drawRect.height - patchInset * 2)
+      };
+      const baseFillMask = createVectorMask(maskId, "white");
+      const baseFillCut = createRegionSvgShape(region, drawRect, "black");
+      baseFillCut.setAttribute("stroke", "black");
+      baseFillCut.setAttribute("stroke-width", String(eraseExpand * 2));
+      baseFillCut.setAttribute("stroke-linejoin", "round");
+      if (eraseFeather > 0.3) {
+        defs.appendChild(createRegionSvgBlurFilter(baseBlurId, eraseFeather, canvasWidth, canvasHeight));
+        baseFillCut.setAttribute("filter", `url(#${baseBlurId})`);
+      }
+      baseFillMask.appendChild(baseFillCut);
+
+      const patchFillMask = createVectorMask(patchMaskId);
+      const patchFillShape = createRegionSvgShape(region, patchRect, "white");
+      if (patchFeather > 0.3) {
+        defs.appendChild(createRegionSvgBlurFilter(patchBlurId, patchFeather, canvasWidth, canvasHeight));
+        patchFillShape.setAttribute("filter", `url(#${patchBlurId})`);
+      }
+      patchFillMask.appendChild(patchFillShape);
+
+      const baseFillSource = createEmbeddedShapeSvg({ ...component, strokeTransparent: true }, pad, pad, width, height);
+      const patchFillSource = createEmbeddedShapeSvg({ ...component, strokeTransparent: true }, pad, pad, width, height);
+      if (!baseFillSource || !patchFillSource) return false;
+      const baseFill = createRegionSvgElement("g", { mask: `url(#${maskId})` });
+      const patchFill = createRegionSvgElement("g", { mask: `url(#${patchMaskId})` });
+      baseFill.appendChild(baseFillSource);
+      patchFill.appendChild(patchFillSource);
+      base.appendChild(baseFill);
+      patch.appendChild(patchFill);
+    }
+
+    if (hasStroke) {
+      const baseStrokeMask = createVectorMask(baseStrokeMaskId, "white");
+      const baseStrokeCut = createRegionSvgShape(region, drawRect, "black");
+      baseStrokeCut.setAttribute("stroke", "black");
+      baseStrokeCut.setAttribute("stroke-width", String(eraseExpand * 2));
+      baseStrokeCut.setAttribute("stroke-linejoin", "round");
+      baseStrokeMask.appendChild(baseStrokeCut);
+
+      const patchStrokeMask = createVectorMask(patchStrokeMaskId);
+      const patchStrokeShape = createRegionSvgShape(region, drawRect, "white");
+      patchStrokeShape.setAttribute("stroke", "white");
+      patchStrokeShape.setAttribute("stroke-width", "2");
+      patchStrokeShape.setAttribute("stroke-linejoin", "round");
+      patchStrokeMask.appendChild(patchStrokeShape);
+
+      const baseStrokeSource = createEmbeddedShapeSvg({ ...component, fillTransparent: true }, pad, pad, width, height);
+      const patchStrokeSource = createEmbeddedShapeSvg({ ...component, fillTransparent: true }, pad, pad, width, height);
+      if (!baseStrokeSource || !patchStrokeSource) return false;
+      const baseStroke = createRegionSvgElement("g", { mask: `url(#${baseStrokeMaskId})` });
+      const patchStroke = createRegionSvgElement("g", { mask: `url(#${patchStrokeMaskId})` });
+      baseStroke.appendChild(baseStrokeSource);
+      patchStroke.appendChild(patchStrokeSource);
+      base.appendChild(baseStroke);
+      patch.appendChild(patchStroke);
+    }
+  } else {
+    const mask = createVectorMask(maskId, "white");
+    mask.appendChild(createRegionSvgShape(region, drawRect, "black"));
+    const clip = createRegionSvgElement("clipPath", { id: clipId, clipPathUnits: "userSpaceOnUse" });
+    clip.appendChild(createRegionSvgShape(region, drawRect, "white"));
+    defs.appendChild(clip);
+    const baseSource = createEmbeddedShapeSvg(component, pad, pad, width, height);
+    const patchSource = createEmbeddedShapeSvg(component, pad, pad, width, height);
+    if (!baseSource || !patchSource) return false;
+    const baseClipped = createRegionSvgElement("g", { mask: `url(#${maskId})` });
+    const patchClipped = createRegionSvgElement("g", { "clip-path": `url(#${clipId})` });
+    baseClipped.appendChild(baseSource);
+    patchClipped.appendChild(patchSource);
+    base.appendChild(baseClipped);
+    patch.appendChild(patchClipped);
+  }
+  vectorStage.append(defs, base, patch);
+
+  const fullSource = componentVisual(component, "region-vector-full-source");
+  fullSource.classList.add("region-canvas-effect");
+  fullSource.style.inset = "0";
+  fullSource.style.width = "100%";
+  fullSource.style.height = "100%";
+  fullSource.style.opacity = String(clampNumber(component.opacity ?? 100, 0, 100, 100) / 100);
+  fullSource.style.display = "none";
+  layer.appendChild(vectorStage);
+  componentNode.append(layer, fullSource);
+  syncCanvasWithRunningComponentEffect(layer, component);
+  syncCanvasWithRunningComponentEffect(fullSource, component);
+
+  const centerX = drawRect.x + drawRect.width / 2;
+  const centerY = drawRect.y + drawRect.height / 2;
+  const duration = regionDuration(region);
+  const run = { canvas: layer, finalSource: fullSource, frame: 0, cancelled: false, kind: "vector" };
+  activeRegionCanvasRuns.set(key, run);
+
+  const showFullSource = () => {
+    vectorStage.style.display = "none";
+    fullSource.style.display = "grid";
+  };
+  const showSplitSource = () => {
+    vectorStage.style.display = "block";
+    fullSource.style.display = "none";
+  };
+
+  showFullSource();
+  const renderFrame = (now) => {
+    if (run.cancelled) return;
+    if (!run.start) run.start = now;
+    const progress = Math.min(1, (now - run.start) / duration);
+    if (progress <= 0.001 || progress >= 0.999) {
+      showFullSource();
+    } else {
+      showSplitSource();
+      applyRegionSvgTransform(patch, region, progress, centerX, centerY);
+    }
+    if (progress < 1) run.frame = requestAnimationFrame(renderFrame);
+  };
+  run.frame = requestAnimationFrame(renderFrame);
+  return true;
+}
+
+function removeRegionCanvasRun(key, run) {
+  if (run.fadeTimer) window.clearTimeout(run.fadeTimer);
+  run.canvas?.remove();
+  run.finalSource?.remove();
+  if (activeRegionCanvasRuns.get(key) === run) {
+    activeRegionCanvasRuns.delete(key);
+    run.componentNode?.classList.remove("is-region-settling", "is-region-crossfading");
+  }
+}
+
+function stopRegionCanvasRun(key, options = {}) {
+  const run = activeRegionCanvasRuns.get(key);
+  if (!run) return;
+  run.cancelled = true;
+  if (run.frame) cancelAnimationFrame(run.frame);
+  if (options.fade && run.canvas?.isConnected && !run.isFading) {
+    run.isFading = true;
+    run.canvas.classList.add("is-fading-out");
+    const cleanup = () => removeRegionCanvasRun(key, run);
+    run.canvas.addEventListener("transitionend", cleanup, { once: true });
+    run.fadeTimer = window.setTimeout(cleanup, 300);
+    return;
+  }
+  removeRegionCanvasRun(key, run);
+}
+
+function finishRegionCanvasRun(key, componentNode) {
+  const run = activeRegionCanvasRuns.get(key);
+  if (!run) {
+    componentNode?.classList.remove("has-active-region");
+    return;
+  }
+
+  if (run.kind === "vector") {
+    componentNode?.classList.remove("has-active-region");
+    stopRegionCanvasRun(key);
+    return;
+  }
+
+  run.componentNode = componentNode;
+  run.isSettling = true;
+  componentNode?.classList.add("is-region-settling");
+  componentNode?.classList.remove("has-active-region");
+  const viewport = componentNode?.querySelector(".component-viewport");
+  if (viewport) void viewport.offsetWidth;
+  requestAnimationFrame(() => {
+    if (activeRegionCanvasRuns.get(key) !== run || run.cancelled) return;
+    componentNode?.classList.add("is-region-crossfading");
+    stopRegionCanvasRun(key, { fade: true });
+  });
+}
+
+async function startRegionCanvasEffect(component, region, componentNode) {
+  if (component.type === "shape" && startRegionVectorEffect(component, region, componentNode)) return;
+  const rect = componentLocalSize(componentNode);
+  const key = activeCanvasKey(component.id, region.id);
+  stopRegionCanvasRun(key);
+
+  const dpr = Math.min(3, Math.max(2, window.devicePixelRatio || 1));
+  const regionRect = {
+    x: rect.width * region.x / 100,
+    y: rect.height * region.y / 100,
+    width: Math.max(1, rect.width * region.w / 100),
+    height: Math.max(1, rect.height * region.h / 100)
+  };
+  const pad = Math.max(72, Math.max(regionRect.width, regionRect.height) * 0.7, clampNumber(region.strength, 0, 100, defaultRegion.strength) * 1.4);
+  const canvasWidth = rect.width + pad * 2;
+  const canvasHeight = rect.height + pad * 2;
+  const canvas = document.createElement("canvas");
+  canvas.className = "region-canvas-effect";
+  canvas.style.left = `${-pad}px`;
+  canvas.style.top = `${-pad}px`;
+  canvas.style.width = `${canvasWidth}px`;
+  canvas.style.height = `${canvasHeight}px`;
+  canvas.width = Math.max(1, Math.round(canvasWidth * dpr));
+  canvas.height = Math.max(1, Math.round(canvasHeight * dpr));
+  componentNode.appendChild(canvas);
+  syncCanvasWithRunningComponentEffect(canvas, component);
+
+  const ctx = canvas.getContext("2d");
+  configureCanvasQuality(ctx);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const source = await componentSourceCanvas(component, rect.width, rect.height, dpr);
+  const drawRect = {
+    x: pad + regionRect.x,
+    y: pad + regionRect.y,
+    width: regionRect.width,
+    height: regionRect.height
+  };
+  const usesFreeformBrush = hasBrushPath(region);
+  const eraseExpand = usesFreeformBrush ? Math.max(2, Math.min(drawRect.width, drawRect.height) * 0.025) : 0;
+  const eraseMask = createRegionMask(region, canvasWidth, canvasHeight, dpr, drawRect, {
+    expand: eraseExpand,
+    featherScale: usesFreeformBrush ? 0.025 : 0,
+    insetFactor: 0,
+    constrainToShape: !usesFreeformBrush
+  });
+  const patchMask = createRegionMask(region, canvasWidth, canvasHeight, dpr, drawRect, {
+    featherScale: usesFreeformBrush ? 0.08 : 0,
+    insetFactor: usesFreeformBrush ? 0.12 : 0,
+    constrainToShape: !usesFreeformBrush
+  });
+  const patch = document.createElement("canvas");
+  patch.width = canvas.width;
+  patch.height = canvas.height;
+  const patchCtx = patch.getContext("2d");
+  configureCanvasQuality(patchCtx);
+  patchCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  patchCtx.drawImage(source, pad, pad, rect.width, rect.height);
+  patchCtx.globalCompositeOperation = "destination-in";
+  patchCtx.drawImage(patchMask, 0, 0, canvasWidth, canvasHeight);
+  patchCtx.globalCompositeOperation = "source-over";
+
+  const centerX = drawRect.x + drawRect.width / 2;
+  const centerY = drawRect.y + drawRect.height / 2;
+  const duration = regionDuration(region);
+  const run = {
+    canvas,
+    frame: 0,
+    cancelled: false,
+    kind: "canvas",
+    componentNode
+  };
+  activeRegionCanvasRuns.set(key, run);
+
+  const renderFrame = (now) => {
+    if (run.cancelled) return;
+    if (!run.start) run.start = now;
+    const progress = Math.min(1, (now - run.start) / duration);
+    ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+    ctx.globalCompositeOperation = "source-over";
+    ctx.globalAlpha = clampNumber(component.opacity ?? 100, 0, 100, 100) / 100;
+    ctx.drawImage(source, pad, pad, rect.width, rect.height);
+
+    ctx.globalCompositeOperation = "destination-out";
+    ctx.globalAlpha = 1;
+    ctx.drawImage(eraseMask, 0, 0, canvasWidth, canvasHeight);
+
+    ctx.globalCompositeOperation = "source-over";
+    ctx.globalAlpha = clampNumber(component.opacity ?? 100, 0, 100, 100) / 100;
+    ctx.save();
+    applyRegionCanvasTransform(ctx, region, progress, centerX, centerY, component);
+    if (region.effect === "spotlight") {
+      ctx.filter = `brightness(${1 + clampNumber(region.strength, 0, 100, defaultRegion.strength) / 250 * Math.sin(Math.PI * progress)}) saturate(1.18)`;
+    }
+    ctx.drawImage(patch, 0, 0, canvasWidth, canvasHeight);
+    ctx.restore();
+    ctx.globalAlpha = 1;
+    ctx.filter = "none";
+
+    if (progress < 1) {
+      run.frame = requestAnimationFrame(renderFrame);
+    }
+  };
+
+  run.frame = requestAnimationFrame(renderFrame);
+}
+
+function hasBrushPath(region) {
+  return region?.shape === "brush" && Array.isArray(region.points) && region.points.length >= 3;
+}
+
+function brushPathD(points) {
+  if (!points?.length) return "";
+  return `${points.map((point, index) => `${index ? "L" : "M"}${roundPathValue(point[0])} ${roundPathValue(point[1])}`).join(" ")} Z`;
+}
+
+function brushClipPolygon(region) {
+  const points = normalizeBrushPoints(region.points);
+  if (points.length < 3) return "";
+  return `polygon(${points.map((point) => `${roundPathValue(point[0])}% ${roundPathValue(point[1])}%`).join(", ")})`;
+}
+
+function applyBrushRegionPath(node, region) {
+  const hasPath = hasBrushPath(region);
+  const clip = node.querySelector(".region-effect-clip");
+  const outline = node.querySelector(".region-outline");
+  node.classList.toggle("has-brush-path", hasPath);
+
+  if (!hasPath) {
+    if (clip) {
+      clip.style.clipPath = "";
+      clip.style.webkitClipPath = "";
+    }
+    if (outline) outline.replaceChildren();
+    return;
+  }
+
+  const polygon = brushClipPolygon(region);
+  if (clip) {
+    clip.style.clipPath = polygon;
+    clip.style.webkitClipPath = polygon;
+  }
+  if (outline) {
+    outline.innerHTML = `<svg class="region-brush-outline" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><path d="${brushPathD(region.points)}"></path></svg>`;
+  }
+}
+
+function regionDuration(region) {
+  return Math.max(180, 980 - clampNumber(region.speed, 10, 100, defaultRegion.speed) * 7.2);
+}
+
+function applyRegionVars(node, region) {
+  clampRegion(region);
+  const strength = clampNumber(region.strength, 0, 100, defaultRegion.strength);
+  const softness = clampNumber(region.softness, 0, 100, defaultRegion.softness);
+  const angle = clampNumber(region.angle, -180, 180, defaultRegion.angle);
+  const radians = angle * Math.PI / 180;
+  const push = strength * 0.9;
+  const maskStart = Math.max(24, 84 - softness * 0.46);
+  const maskMid = Math.max(maskStart + 8, 94 - softness * 0.12);
+
+  node.style.left = `${region.x}%`;
+  node.style.top = `${region.y}%`;
+  node.style.width = `${region.w}%`;
+  node.style.height = `${region.h}%`;
+  node.style.borderRadius = region.shape === "ellipse" ? "50%" : region.shape === "brush" ? "58% 42% 64% 36% / 52% 61% 39% 48%" : "5px";
+  node.style.setProperty("--region-duration", `${regionDuration(region)}ms`);
+  node.style.setProperty("--region-scale", String(1 + strength / 145));
+  node.style.setProperty("--region-stretch-x", String(1 + strength / 115));
+  node.style.setProperty("--region-stretch-y", String(Math.max(0.58, 1 - strength / 330)));
+  node.style.setProperty("--region-angle", `${angle}deg`);
+  node.style.setProperty("--region-push-x", `${Math.cos(radians) * push}px`);
+  node.style.setProperty("--region-push-y", `${Math.sin(radians) * push}px`);
+  node.style.setProperty("--region-skew", `${Math.max(-18, Math.min(18, strength * 0.22))}deg`);
+  node.style.setProperty("--region-blur", `${strength / 22}px`);
+  node.style.setProperty("--region-ripple-a", `${strength * 0.16}deg`);
+  node.style.setProperty("--region-ripple-b", `${strength * -0.1}deg`);
+  node.style.setProperty("--region-brightness", String(1 + strength / 210));
+  node.style.setProperty("--region-glow", `${8 + strength * 0.34}px`);
+  node.style.setProperty("--region-pinch-scale", String(Math.max(0.45, 1 - strength / 235)));
+  node.style.setProperty("--region-mask-start", `${maskStart}%`);
+  node.style.setProperty("--region-mask-mid", `${maskMid}%`);
+}
+
+function syncRegionNode(node, component, region) {
+  node.className = `region-effect-zone region-shape-${region.shape} region-effect-${region.effect}${selectedRegionId === region.id && isSelected(component.id) ? " is-selected" : ""}`;
+  node.dataset.componentId = String(component.id);
+  node.dataset.regionId = String(region.id);
+  node.dataset.regionName = region.name;
+  applyRegionVars(node, region);
+  const source = node.querySelector(".region-source");
+  if (source) {
+    const safeW = Math.max(1, Number(region.w) || defaultRegion.w);
+    const safeH = Math.max(1, Number(region.h) || defaultRegion.h);
+    source.style.left = `${-(Number(region.x) || 0) / safeW * 100}%`;
+    source.style.top = `${-(Number(region.y) || 0) / safeH * 100}%`;
+    source.style.width = `${100 / safeW * 100}%`;
+    source.style.height = `${100 / safeH * 100}%`;
+  }
+  const label = node.querySelector(".region-label");
+  if (label) label.textContent = region.name;
+  applyBrushRegionPath(node, region);
+}
+
+function createRegionNode(component, region, index) {
+  const node = document.createElement("div");
+  region.name = region.name || `Area ${index + 1}`;
+  syncRegionNode(node, component, region);
+
+  const clip = document.createElement("div");
+  clip.className = "region-effect-clip";
+  clip.appendChild(componentRegionSource(component, region));
+  node.appendChild(clip);
+
+  const outline = document.createElement("div");
+  outline.className = "region-outline";
+  node.appendChild(outline);
+  applyBrushRegionPath(node, region);
+
+  const label = document.createElement("span");
+  label.className = "region-label";
+  label.textContent = region.name;
+  node.appendChild(label);
+
+  const resizeHandle = document.createElement("button");
+  resizeHandle.type = "button";
+  resizeHandle.className = "region-resize-handle";
+  resizeHandle.setAttribute("aria-label", `Resize ${region.name}`);
+  resizeHandle.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    selectRegion(component.id, region.id);
+    startRegionDrag(event, component.id, region.id, "resize");
+  });
+  node.appendChild(resizeHandle);
+
+  node.addEventListener("pointerenter", (event) => {
+    setRegionPointerOrigin(node, event);
+    if (region.trigger === "hover" && window.matchMedia("(hover: hover)").matches) {
+      activateRegion(component.id, region.id, event);
+    }
+  });
+
+  node.addEventListener("pointermove", (event) => {
+    setRegionPointerOrigin(node, event);
+    if (!regionDragState && region.trigger === "move") activateRegion(component.id, region.id, event);
+  });
+
+  node.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (canStartBrushDraw(component.id)) {
+      startBrushRegionDraw(event, component.id);
+      return;
+    }
+    selectRegion(component.id, region.id);
+    setRegionPointerOrigin(node, event);
+    startRegionDrag(event, component.id, region.id, "move");
+    if (region.trigger === "drag") activateRegion(component.id, region.id, event);
+  });
+
+  return node;
+}
+
+function createRegionLayer(component) {
+  const layer = document.createElement("div");
+  layer.className = "component-region-layer";
+  (component.regions || []).forEach((region, index) => {
+    clampRegion(region);
+    layer.appendChild(createRegionRemainder(component, region));
+    layer.appendChild(createRegionNode(component, region, index));
+  });
+  return layer;
+}
+
+function syncRegionSelectionVisuals() {
+  componentLayer.querySelectorAll(".region-effect-zone").forEach((node) => {
+    const componentId = Number(node.dataset.componentId);
+    const regionId = Number(node.dataset.regionId);
+    node.classList.toggle("is-selected", isSelected(componentId) && selectedRegionId === regionId);
+  });
+}
+
+function selectRegion(componentId, regionId) {
+  selectOnly(componentId);
+  selectedRegionId = regionId;
+  syncSelectionVisuals();
+  syncRegionSelectionVisuals();
+}
+
+function setRegionPointerOrigin(node, event) {
+  const rect = node.getBoundingClientRect();
+  if (!rect.width || !rect.height) return;
+  const x = clampNumber((event.clientX - rect.left) / rect.width * 100, 0, 100, 50);
+  const y = clampNumber((event.clientY - rect.top) / rect.height * 100, 0, 100, 50);
+  node.style.setProperty("--region-origin-x", `${x}%`);
+  node.style.setProperty("--region-origin-y", `${y}%`);
+}
+
+function regionTimerKey(componentId, regionId) {
+  return `${componentId}:${regionId}`;
+}
+
+function activateRegion(componentId, regionId, event = null) {
+  const component = components.find((item) => item.id === componentId);
+  const region = component?.regions?.find((item) => item.id === regionId);
+  const node = componentLayer.querySelector(`.region-effect-zone[data-component-id="${componentId}"][data-region-id="${regionId}"]`);
+  const componentNode = componentLayer.querySelector(`[data-id="${componentId}"]`);
+  const remainder = componentLayer.querySelector(`.region-remainder[data-component-id="${componentId}"][data-region-id="${regionId}"]`);
+  if (!component || !region || !node) return;
+
+  if (event) setRegionPointerOrigin(node, event);
+  const key = regionTimerKey(componentId, regionId);
+  const previousTimer = activeRegionTimers.get(key);
+  if (previousTimer) window.clearTimeout(previousTimer);
+
+  node.classList.remove("is-active");
+  void node.offsetWidth;
+  node.classList.add("is-active");
+  remainder?.classList.add("is-active");
+  componentNode?.classList.add("has-active-region");
+  if (componentNode) startRegionCanvasEffect(component, region, componentNode);
+
+  const timer = window.setTimeout(() => {
+    node.classList.remove("is-active");
+    remainder?.classList.remove("is-active");
+    activeRegionTimers.delete(key);
+    const hasActiveRegion = componentLayer.querySelector(`.region-effect-zone[data-component-id="${componentId}"].is-active`);
+    if (hasActiveRegion) stopRegionCanvasRun(key);
+    else finishRegionCanvasRun(key, componentNode);
+  }, regionDuration(region) + 80);
+  activeRegionTimers.set(key, timer);
+}
+
+function clearActiveRegionEffects(componentId = null) {
+  activeRegionTimers.forEach((timer, key) => {
+    if (componentId !== null && !key.startsWith(`${componentId}:`)) return;
+    window.clearTimeout(timer);
+    activeRegionTimers.delete(key);
+  });
+
+  const selector = componentId === null ? ".region-effect-zone.is-active" : `.region-effect-zone[data-component-id="${componentId}"].is-active`;
+  componentLayer.querySelectorAll(selector).forEach((node) => node.classList.remove("is-active"));
+  Array.from(activeRegionCanvasRuns.keys()).forEach((key) => {
+    if (componentId === null || key.startsWith(`${componentId}:`)) stopRegionCanvasRun(key);
+  });
+  const remainderSelector = componentId === null ? ".region-remainder.is-active" : `.region-remainder[data-component-id="${componentId}"].is-active`;
+  componentLayer.querySelectorAll(remainderSelector).forEach((node) => node.classList.remove("is-active"));
+  if (componentId === null) {
+    componentLayer.querySelectorAll(".art-component.has-active-region").forEach((node) => node.classList.remove("has-active-region"));
+  } else {
+    componentLayer.querySelector(`[data-id="${componentId}"]`)?.classList.remove("has-active-region");
+  }
+}
+
+function startRegionDrag(event, componentId, regionId, mode) {
+  const component = components.find((item) => item.id === componentId);
+  const region = component?.regions?.find((item) => item.id === regionId);
+  const componentNode = componentLayer.querySelector(`[data-id="${componentId}"]`);
+  if (!component || !region || !componentNode) return;
+
+  saveHistory();
+  clearSmartGuides();
+  const rect = componentNode.getBoundingClientRect();
+  regionDragState = {
+    componentId,
+    regionId,
+    mode,
+    startX: event.clientX,
+    startY: event.clientY,
+    width: Math.max(1, rect.width),
+    height: Math.max(1, rect.height),
+    base: { x: region.x, y: region.y, w: region.w, h: region.h },
+    moved: false
+  };
+
+  movedDuringDrag = true;
+  window.addEventListener("pointermove", handleRegionDragMove);
+  window.addEventListener("pointerup", handleRegionDragUp, { once: true });
+}
+
+function handleRegionDragMove(event) {
+  if (!regionDragState) return;
+  const component = components.find((item) => item.id === regionDragState.componentId);
+  const region = component?.regions?.find((item) => item.id === regionDragState.regionId);
+  const node = componentLayer.querySelector(`.region-effect-zone[data-component-id="${regionDragState.componentId}"][data-region-id="${regionDragState.regionId}"]`);
+  if (!component || !region || !node) return;
+
+  const dx = (event.clientX - regionDragState.startX) / regionDragState.width * 100;
+  const dy = (event.clientY - regionDragState.startY) / regionDragState.height * 100;
+  regionDragState.moved = regionDragState.moved || Math.abs(dx) + Math.abs(dy) > 0.7;
+
+  if (regionDragState.mode === "resize") {
+    region.w = regionDragState.base.w + dx;
+    region.h = regionDragState.base.h + dy;
+  } else {
+    region.x = regionDragState.base.x + dx;
+    region.y = regionDragState.base.y + dy;
+  }
+
+  clampRegion(region);
+  syncRegionNode(node, component, region);
+  setRegionPointerOrigin(node, event);
+  if (region.trigger === "drag") activateRegion(component.id, region.id, event);
+  syncControlsFromSelection();
+}
+
+function handleRegionDragUp(event) {
+  const state = regionDragState;
+  window.removeEventListener("pointermove", handleRegionDragMove);
+  regionDragState = null;
+
+  if (state) {
+    const component = components.find((item) => item.id === state.componentId);
+    const region = component?.regions?.find((item) => item.id === state.regionId);
+    if (region && !state.moved && region.trigger === "click") activateRegion(state.componentId, state.regionId, event);
+  }
+
+  window.setTimeout(() => { movedDuringDrag = false; }, 0);
+}
+
+function syncBrushDrawButtonState() {
+  addRegionButtons.forEach((button) => {
+    button.classList.toggle("is-active", button.dataset.regionShape === "brush" && Boolean(brushDrawComponentId));
+  });
+  document.body.classList.toggle("is-brush-drawing", Boolean(brushDrawComponentId));
+}
+
+function cancelBrushDrawMode() {
+  brushDrawComponentId = null;
+  brushDrawState?.preview?.remove();
+  brushDrawState = null;
+  window.removeEventListener("pointermove", handleBrushRegionDrawMove);
+  window.removeEventListener("pointerup", handleBrushRegionDrawUp);
+  syncBrushDrawButtonState();
+}
+
+function beginBrushDrawMode() {
+  const component = selectedComponent();
+  if (!component || selectedIds.length !== 1) return;
+  brushDrawComponentId = component.id;
+  selectedRegionId = null;
+  syncBrushDrawButtonState();
+  syncSelectionVisuals();
+}
+
+function canStartBrushDraw(componentId) {
+  return brushDrawComponentId === componentId && selectedIds.length === 1 && selectedId === componentId && !brushDrawState;
+}
+
+function pointInComponentPercent(event, rect) {
+  return {
+    x: clampNumber((event.clientX - rect.left) / rect.width * 100, 0, 100, 0),
+    y: clampNumber((event.clientY - rect.top) / rect.height * 100, 0, 100, 0)
+  };
+}
+
+function brushPreviewPath(points) {
+  if (!points.length) return "";
+  return `${points.map((point, index) => `${index ? "L" : "M"}${roundPathValue(point.x)} ${roundPathValue(point.y)}`).join(" ")}${points.length > 2 ? " Z" : ""}`;
+}
+
+function updateBrushDrawPreview() {
+  if (!brushDrawState?.path) return;
+  brushDrawState.path.setAttribute("d", brushPreviewPath(brushDrawState.points));
+}
+
+function shouldAddBrushPoint(points, nextPoint) {
+  const previous = points[points.length - 1];
+  if (!previous) return true;
+  return Math.hypot(nextPoint.x - previous.x, nextPoint.y - previous.y) >= 0.7;
+}
+
+function createBrushRegionFromPoints(points, component) {
+  const safePoints = points.length >= 3 ? points : [
+    { x: points[0]?.x ?? 50, y: points[0]?.y ?? 50 },
+    { x: (points[0]?.x ?? 50) + 8, y: points[0]?.y ?? 50 },
+    { x: (points[0]?.x ?? 50) + 8, y: (points[0]?.y ?? 50) + 8 },
+    { x: points[0]?.x ?? 50, y: (points[0]?.y ?? 50) + 8 }
+  ];
+  const xs = safePoints.map((point) => point.x);
+  const ys = safePoints.map((point) => point.y);
+  const padding = 1.8;
+  const left = clampNumber(Math.min(...xs) - padding, 0, 95, 0);
+  const top = clampNumber(Math.min(...ys) - padding, 0, 95, 0);
+  const right = clampNumber(Math.max(...xs) + padding, left + 5, 100, left + 18);
+  const bottom = clampNumber(Math.max(...ys) + padding, top + 5, 100, top + 18);
+  const width = Math.max(5, right - left);
+  const height = Math.max(5, bottom - top);
+  const normalizedPoints = safePoints.map((point) => [
+    clampNumber((point.x - left) / width * 100, 0, 100, 0),
+    clampNumber((point.y - top) / height * 100, 0, 100, 0)
+  ]);
+
+  return normalizeRegion({
+    ...defaultRegion,
+    shape: "brush",
+    name: `Brush ${component.regions.length + 1}`,
+    trigger: "drag",
+    effect: "smear",
+    x: left,
+    y: top,
+    w: width,
+    h: height,
+    softness: 82,
+    angle: 0,
+    points: normalizedPoints
+  }, component.regions.length);
+}
+
+function startBrushRegionDraw(event, componentId) {
+  const component = components.find((item) => item.id === componentId);
+  const componentNode = componentLayer.querySelector(`[data-id="${componentId}"]`);
+  if (!component || !componentNode) return;
+
+  saveHistory();
+  const rect = componentNode.getBoundingClientRect();
+  const preview = document.createElement("div");
+  preview.className = "brush-draw-preview";
+  preview.innerHTML = `<svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><path></path></svg>`;
+  componentNode.appendChild(preview);
+
+  brushDrawState = {
+    componentId,
+    rect,
+    preview,
+    path: preview.querySelector("path"),
+    points: [pointInComponentPercent(event, rect)]
+  };
+  updateBrushDrawPreview();
+
+  movedDuringDrag = true;
+  window.addEventListener("pointermove", handleBrushRegionDrawMove);
+  window.addEventListener("pointerup", handleBrushRegionDrawUp, { once: true });
+}
+
+function handleBrushRegionDrawMove(event) {
+  if (!brushDrawState) return;
+  const point = pointInComponentPercent(event, brushDrawState.rect);
+  if (shouldAddBrushPoint(brushDrawState.points, point)) {
+    brushDrawState.points.push(point);
+    updateBrushDrawPreview();
+  }
+}
+
+function handleBrushRegionDrawUp() {
+  const state = brushDrawState;
+  if (!state) return;
+
+  window.removeEventListener("pointermove", handleBrushRegionDrawMove);
+  brushDrawState = null;
+  state.preview.remove();
+
+  const component = components.find((item) => item.id === state.componentId);
+  if (component && state.points.length >= 2) {
+    component.regions = cloneRegions(component.regions);
+    const region = createBrushRegionFromPoints(state.points, component);
+    component.regions.push(region);
+    selectedRegionId = region.id;
+  }
+
+  cancelBrushDrawMode();
+  render();
+  window.setTimeout(() => { movedDuringDrag = false; }, 0);
 }
 
 function componentPixelSize(component) {
@@ -964,6 +2394,11 @@ function bindComponentEvents(node, component) {
     if (event.button !== 0) return;
     event.preventDefault();
     event.stopPropagation();
+
+    if (canStartBrushDraw(component.id)) {
+      startBrushRegionDraw(event, component.id);
+      return;
+    }
 
     if (event.shiftKey) {
       toggleSelection(component.id);
@@ -1823,7 +3258,8 @@ function renderComponentList() {
     button.type = "button";
     button.className = `component-item${isSelected(component.id) ? " is-selected" : ""}`;
     const actionText = component.actions?.length ? ` / ${component.actions.length} actions` : "";
-    button.innerHTML = `<span>${escapeHtml(component.name)}</span><small>${component.type} / ${effectLabels[component.effect]}${actionText}</small>`;
+    const regionText = component.regions?.length ? ` / ${component.regions.length} areas` : "";
+    button.innerHTML = `<span>${escapeHtml(component.name)}</span><small>${component.type} / ${effectLabels[component.effect]}${actionText}${regionText}</small>`;
     button.addEventListener("click", (event) => {
       if (event.shiftKey) toggleSelection(component.id);
       else selectOnly(component.id);
@@ -1831,6 +3267,144 @@ function renderComponentList() {
     });
     componentList.appendChild(button);
   });
+}
+
+function renderRegionListForSelection(component) {
+  regionList.innerHTML = "";
+  if (!component || selectedIds.length !== 1) {
+    regionList.innerHTML = `<div class="region-item is-empty"><span>One component required</span><small>Select one layer</small></div>`;
+    return;
+  }
+
+  const regions = component.regions || [];
+  if (!regions.length) {
+    regionList.innerHTML = `<div class="region-item is-empty"><span>No detail areas</span><small>Add Ellipse, Rect, or Brush</small></div>`;
+    return;
+  }
+
+  regions.forEach((region) => {
+    const item = document.createElement("button");
+    item.type = "button";
+    item.className = `region-item${selectedRegionId === region.id ? " is-selected" : ""}`;
+    item.innerHTML = `<span>${escapeHtml(region.name)}</span><small>${regionEffectLabels[region.effect] || region.effect}</small>`;
+    item.addEventListener("click", () => {
+      selectedRegionId = region.id;
+      render();
+    });
+    regionList.appendChild(item);
+  });
+}
+
+function setRegionControlsDisabled(disabled, regionDisabled = disabled) {
+  addRegionButtons.forEach((button) => { button.disabled = disabled; });
+  regionControls.forEach((control) => { control.disabled = regionDisabled; });
+  previewRegionButton.disabled = regionDisabled;
+  removeRegionButton.disabled = regionDisabled;
+}
+
+function syncRegionOutputs() {
+  regionXOutput.textContent = regionXRange.value;
+  regionYOutput.textContent = regionYRange.value;
+  regionWOutput.textContent = regionWRange.value;
+  regionHOutput.textContent = regionHRange.value;
+  regionStrengthOutput.textContent = regionStrengthRange.value;
+  regionSoftnessOutput.textContent = regionSoftnessRange.value;
+  regionAngleOutput.textContent = regionAngleRange.value;
+  regionSpeedOutput.textContent = regionSpeedRange.value;
+  regionRangeControls.forEach(updateRangeFill);
+}
+
+function syncRegionControlsFromSelection(selected, component) {
+  const singleComponent = component && selected.length === 1;
+  const region = singleComponent ? selectedRegion(component) : null;
+  renderRegionListForSelection(singleComponent ? component : null);
+
+  if (!singleComponent) {
+    setRegionControlsDisabled(true);
+    syncRegionOutputs();
+    return;
+  }
+
+  if (!region) {
+    setRegionControlsDisabled(false, true);
+    syncRegionOutputs();
+    return;
+  }
+
+  regionShapeSelect.value = region.shape;
+  regionTriggerSelect.value = region.trigger;
+  regionEffectSelect.value = region.effect;
+  regionXRange.value = roundValue(region.x);
+  regionYRange.value = roundValue(region.y);
+  regionWRange.value = roundValue(region.w);
+  regionHRange.value = roundValue(region.h);
+  regionStrengthRange.value = Math.round(region.strength);
+  regionSoftnessRange.value = Math.round(region.softness);
+  regionAngleRange.value = Math.round(region.angle);
+  regionSpeedRange.value = Math.round(region.speed);
+  setRegionControlsDisabled(false, false);
+  syncRegionOutputs();
+}
+
+function addRegionToSelected(shape = "ellipse") {
+  const component = selectedComponent();
+  if (!component || selectedIds.length !== 1) return;
+
+  saveHistory();
+  component.regions = cloneRegions(component.regions);
+  const region = normalizeRegion({
+    ...defaultRegion,
+    shape,
+    name: `${regionShapeLabels[shape] || "Area"} ${component.regions.length + 1}`,
+    x: 34,
+    y: 34,
+    effect: shape === "brush" ? "smear" : "bulge",
+    trigger: shape === "brush" ? "drag" : "hover",
+    softness: shape === "brush" ? 78 : defaultRegion.softness
+  }, component.regions.length);
+  component.regions.push(region);
+  selectedRegionId = region.id;
+  render();
+}
+
+function removeSelectedRegion() {
+  const component = selectedComponent();
+  const region = selectedRegion(component);
+  if (!component || !region) return;
+
+  saveHistory();
+  clearActiveRegionEffects(component.id);
+  component.regions = (component.regions || []).filter((item) => item.id !== region.id);
+  selectedRegionId = component.regions[0]?.id || null;
+  render();
+}
+
+function updateSelectedRegionFromControls() {
+  const component = selectedComponent();
+  const region = selectedRegion(component);
+  if (!component || !region || selectedIds.length !== 1) return;
+
+  saveHistory();
+  region.shape = regionShapeSelect.value in regionShapeLabels ? regionShapeSelect.value : defaultRegion.shape;
+  region.trigger = regionTriggerSelect.value in regionTriggerLabels ? regionTriggerSelect.value : defaultRegion.trigger;
+  region.effect = regionEffectSelect.value in regionEffectLabels ? regionEffectSelect.value : defaultRegion.effect;
+  region.x = Number(regionXRange.value);
+  region.y = Number(regionYRange.value);
+  region.w = Number(regionWRange.value);
+  region.h = Number(regionHRange.value);
+  region.strength = Number(regionStrengthRange.value);
+  region.softness = Number(regionSoftnessRange.value);
+  region.angle = Number(regionAngleRange.value);
+  region.speed = Number(regionSpeedRange.value);
+  clampRegion(region);
+  render();
+}
+
+function previewSelectedRegion() {
+  const component = selectedComponent();
+  const region = selectedRegion(component);
+  if (!component || !region) return;
+  activateRegion(component.id, region.id);
 }
 
 function commonSelectedValue(selected, getter) {
@@ -2094,6 +3668,7 @@ function syncControlsFromSelection() {
     syncEffectControlVisibility(effectSelect.value);
     syncSoundControlsFromSelection(selected, component);
     syncActionBuilderFromSelection(selected, component);
+    syncRegionControlsFromSelection(selected, component);
     updateAllRangeFills();
     return;
   }
@@ -2143,6 +3718,7 @@ function syncControlsFromSelection() {
   fontSizeRange.value = component.fontSize ?? 48;
   syncSoundControlsFromSelection(selected, component);
   syncActionBuilderFromSelection(selected, component);
+  syncRegionControlsFromSelection(selected, component);
 
   xOutput.textContent = xRange.value;
   yOutput.textContent = yRange.value;
@@ -2158,7 +3734,8 @@ function syncControlsFromSelection() {
   curveC2XOutput.textContent = curveC2XRange.value;
   curveC2YOutput.textContent = curveC2YRange.value;
   fontSizeOutput.textContent = fontSizeRange.value;
-  selectedSummary.textContent = selected.length > 1 ? `${selected.length} selected` : component.name;
+  const region = selectedRegion(component);
+  selectedSummary.textContent = selected.length > 1 ? `${selected.length} selected` : region ? `${component.name} / ${region.name}` : component.name;
   effectSummary.textContent = component.actions?.length
     ? `${triggerLabels[component.trigger]} + ${component.actions.length} actions`
     : `${triggerLabels[component.trigger]} + ${effectLabels[component.effect]}`;
@@ -2327,6 +3904,31 @@ function applyEffectVars(node, component) {
   node.style.setProperty("--effect-duration", `${duration}ms`);
 }
 
+function clearCssEffectClasses(node) {
+  effectClasses.forEach((className) => node.classList.remove(className));
+}
+
+function stopCssEffectRun(id, shouldResetNode = true) {
+  const run = activeCssEffectRuns.get(id);
+  if (!run) return;
+  window.clearTimeout(run.timer);
+  activeCssEffectRuns.delete(id);
+
+  if (shouldResetNode) {
+    const node = componentLayer.querySelector(`[data-id="${id}"]`);
+    if (node) clearCssEffectClasses(node);
+  }
+}
+
+function syncCanvasWithRunningComponentEffect(canvas, component) {
+  const run = activeCssEffectRuns.get(component.id);
+  if (!run) return;
+  const elapsed = Math.max(0, performance.now() - run.start);
+  if (elapsed > run.duration + 100) return;
+  canvas.style.setProperty("--effect-sync-delay", `${-elapsed}ms`);
+  canvas.dataset.componentEffect = run.effect;
+}
+
 function actionTargetForNode(node) {
   return node.querySelector(".component-viewport") || node;
 }
@@ -2354,6 +3956,7 @@ function stopComponentActionRun(id) {
 
 function stopAllActionRuns() {
   Array.from(activeActionRuns.keys()).forEach(stopComponentActionRun);
+  Array.from(activeCssEffectRuns.keys()).forEach((id) => stopCssEffectRun(id));
 }
 
 function waitForAction(ms, run) {
@@ -2496,7 +4099,8 @@ function triggerComponent(id) {
   component.count += 1;
   interactionCount.textContent = String(interactions);
 
-  effectClasses.forEach((className) => node.classList.remove(className));
+  stopCssEffectRun(component.id, false);
+  clearCssEffectClasses(node);
   void node.offsetWidth;
 
   if (component.actions?.length) {
@@ -2505,12 +4109,24 @@ function triggerComponent(id) {
   }
 
   playComponentSound(component);
-  node.classList.add(`effect-${component.effect}`);
+  const effectClass = `effect-${component.effect}`;
+  node.classList.add(effectClass);
 
   const duration = Number.parseFloat(getComputedStyle(node).getPropertyValue("--effect-duration")) || 560;
-  window.setTimeout(() => {
-    node.classList.remove(`effect-${component.effect}`);
-  }, component.effect === "reveal" ? 1700 : duration + 80);
+  const cleanupDelay = component.effect === "reveal" ? 1700 : duration + 80;
+  const run = {
+    effect: component.effect,
+    className: effectClass,
+    start: performance.now(),
+    duration,
+    timer: 0
+  };
+  run.timer = window.setTimeout(() => {
+    if (activeCssEffectRuns.get(component.id) !== run) return;
+    node.classList.remove(effectClass);
+    activeCssEffectRuns.delete(component.id);
+  }, cleanupDelay);
+  activeCssEffectRuns.set(component.id, run);
 }
 
 function stopActiveSounds() {
@@ -2606,6 +4222,7 @@ function pasteCopiedComponent() {
       name: `${copied.name} Copy`,
       x: copied.x + 3,
       y: copied.y + 3,
+      regions: duplicateRegions(copied.regions),
       count: 0
     };
     clampComponent(pasted);
@@ -2624,13 +4241,59 @@ function removeSelectedComponent() {
   if (!ids.size) return;
 
   saveHistory();
-  ids.forEach(stopComponentActionRun);
+  cancelBrushDrawMode();
+  ids.forEach((id) => {
+    stopComponentActionRun(id);
+    clearActiveRegionEffects(id);
+  });
   components = components.filter((component) => !ids.has(component.id));
   setSelection([]);
   if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
   emptyState.classList.add("is-hidden");
   artSurface.classList.remove("is-hidden");
   render();
+}
+
+function syncStagePanMode() {
+  document.body.classList.toggle("is-space-panning", isSpacePanning);
+  document.body.classList.toggle("is-stage-panning", Boolean(stagePanState));
+}
+
+function handleStageWheel(event) {
+  if (!event.ctrlKey && !event.metaKey) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const direction = event.deltaY < 0 ? 1 : -1;
+  const factor = direction > 0 ? 1.08 : 1 / 1.08;
+  setBoardZoom(boardZoom * factor, event);
+}
+
+function startStagePan(event) {
+  if (!isSpacePanning || event.button !== 0 || artSurface.classList.contains("is-hidden")) return;
+  event.preventDefault();
+  event.stopPropagation();
+  stagePanState = {
+    startX: event.clientX,
+    startY: event.clientY,
+    scrollLeft: stage.scrollLeft,
+    scrollTop: stage.scrollTop
+  };
+  syncStagePanMode();
+  window.addEventListener("pointermove", handleStagePanMove);
+  window.addEventListener("pointerup", handleStagePanUp, { once: true });
+}
+
+function handleStagePanMove(event) {
+  if (!stagePanState) return;
+  event.preventDefault();
+  stage.scrollLeft = stagePanState.scrollLeft - (event.clientX - stagePanState.startX);
+  stage.scrollTop = stagePanState.scrollTop - (event.clientY - stagePanState.startY);
+}
+
+function handleStagePanUp() {
+  window.removeEventListener("pointermove", handleStagePanMove);
+  stagePanState = null;
+  syncStagePanMode();
 }
 
 function isTextEntryTarget(target) {
@@ -2642,13 +4305,22 @@ function isTextEntryTarget(target) {
 
 function handleEditorShortcut(event) {
   const key = event.key.toLowerCase();
+  const isTextEntry = isTextEntryTarget(event.target);
+
+  if (!isTextEntry && event.code === "Space") {
+    event.preventDefault();
+    if (!isSpacePanning) {
+      isSpacePanning = true;
+      syncStagePanMode();
+    }
+    return;
+  }
+
   if ((event.ctrlKey || event.metaKey) && key === "z") {
     event.preventDefault();
     undoLastAction();
     return;
   }
-
-  const isTextEntry = isTextEntryTarget(event.target);
 
   if (!isTextEntry && (event.ctrlKey || event.metaKey) && key === "a") {
     event.preventDefault();
@@ -2672,8 +4344,18 @@ function handleEditorShortcut(event) {
   if (event.key === "Delete" || event.key === "Backspace") {
     if (isTextEntry) return;
     event.preventDefault();
+    if (selectedRegion()) {
+      removeSelectedRegion();
+      return;
+    }
     removeSelectedComponent();
   }
+}
+
+function handleEditorKeyUp(event) {
+  if (event.code !== "Space") return;
+  isSpacePanning = false;
+  syncStagePanMode();
 }
 function bringSelectedFront() {
   const ids = new Set(selectedIds);
@@ -2695,14 +4377,26 @@ function resetDemo() {
   saveHistory();
   stopAllActionRuns();
   stopActiveSounds();
+  clearActiveRegionEffects();
+  cancelBrushDrawMode();
   components = [];
   setSelection([]);
   nextId = 1;
+  nextRegionId = 1;
+  selectedRegionId = null;
   interactions = 0;
   dragState = null;
   resizeState = null;
   cornerRadiusState = null;
   curveHandleState = null;
+  regionDragState = null;
+  brushDrawComponentId = null;
+  brushDrawState = null;
+  isSpacePanning = false;
+  stagePanState = null;
+  boardZoom = 1;
+  syncBrushDrawButtonState();
+  syncStagePanMode();
   artboard = { ...defaultArtboard };
   syncArtboardInputs();
   applyArtboardSettings();
@@ -2739,6 +4433,12 @@ addTextButton.addEventListener("click", addText);
 bringFrontButton.addEventListener("click", bringSelectedFront);
 duplicateButton.addEventListener("click", duplicateSelected);
 testEffectButton.addEventListener("click", () => {
+  const component = selectedComponent();
+  const region = selectedRegion(component);
+  if (component && region) {
+    activateRegion(component.id, region.id);
+    return;
+  }
   selectedComponents().forEach((component) => triggerComponent(component.id));
 });
 testSoundButton.addEventListener("click", () => {
@@ -2746,6 +4446,9 @@ testSoundButton.addEventListener("click", () => {
   selectedComponents().forEach(playComponentSound);
 });
 window.addEventListener("keydown", handleEditorShortcut);
+window.addEventListener("keyup", handleEditorKeyUp);
+stage.addEventListener("wheel", handleStageWheel, { passive: false, capture: true });
+stage.addEventListener("pointerdown", startStagePan, { capture: true });
 artSurface.addEventListener("pointerdown", startMarqueeSelection);
 [artboardWidthInput, artboardHeightInput, artboardBgInput, artboardTransparentToggle].forEach((control) => {
   control.addEventListener("input", syncArtboardFromControls);
@@ -2781,6 +4484,27 @@ actionDurationRange.addEventListener("input", () => {
 });
 addActionButton.addEventListener("click", addActionToSelected);
 clearActionsButton.addEventListener("click", clearSelectedActions);
+
+addRegionButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    if (button.dataset.regionShape === "brush") {
+      beginBrushDrawMode();
+      return;
+    }
+    cancelBrushDrawMode();
+    addRegionToSelected(button.dataset.regionShape);
+  });
+});
+previewRegionButton.addEventListener("click", previewSelectedRegion);
+removeRegionButton.addEventListener("click", removeSelectedRegion);
+regionControls.forEach((control) => {
+  const handleRegionControlChange = () => {
+    syncRegionOutputs();
+    updateSelectedRegionFromControls();
+  };
+  control.addEventListener("input", handleRegionControlChange);
+  control.addEventListener("change", handleRegionControlChange);
+});
 
 [
   triggerSelect,

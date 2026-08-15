@@ -14,7 +14,11 @@
 }
 
 * { box-sizing: border-box; }
-html, body { min-height: 100%; }
+html, body {
+  height: 100%;
+  min-height: 100%;
+  overflow: hidden;
+}
 body {
   margin: 0;
   color: var(--ink);
@@ -27,7 +31,9 @@ button, input, select { font: inherit; }
   display: grid;
   grid-template-columns: 280px minmax(520px, 1fr) 320px;
   grid-template-rows: 48px minmax(0, 1fr);
-  min-height: 100vh;
+  height: 100vh;
+  min-height: 0;
+  overflow: hidden;
   background: #ececec;
 }
 
@@ -71,6 +77,7 @@ button, input, select { font: inherit; }
   flex-direction: column;
   min-height: 0;
   overflow: auto;
+  overscroll-behavior: contain;
   background: var(--panel);
 }
 .left-sidebar { border-right: 1px solid var(--line-strong); }
@@ -99,6 +106,11 @@ h2 { font-size: 12px; font-weight: 700; letter-spacing: 0; }
   color: var(--ink);
   font-size: 11px;
   cursor: pointer;
+}
+.mini-actions button.is-active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: #f1f8ff;
 }
 
 .upload-box {
@@ -172,6 +184,34 @@ h2 { font-size: 12px; font-weight: 700; letter-spacing: 0; }
 .component-item:hover { background: #f1f1f1; }
 .component-item.is-selected { border-color: #b8daf4; background: #e8f3ff; }
 .component-item small { color: var(--muted); font-size: 11px; }
+.region-list {
+  display: grid;
+  gap: 4px;
+  min-height: 32px;
+}
+.region-item {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: #fff;
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+  font-size: 12px;
+}
+.region-item:hover { border-color: var(--accent); background: #f1f8ff; }
+.region-item.is-selected { border-color: #b8daf4; background: #e8f3ff; }
+.region-item.is-empty {
+  color: var(--muted);
+  background: var(--panel-muted);
+  cursor: default;
+}
+.region-item small { color: var(--muted); font-size: 10px; }
 
 .field, .range-field, .toggle {
   display: grid;
@@ -328,6 +368,7 @@ input[type="range"]::-moz-range-thumb {
   grid-template-rows: minmax(0, 1fr) 50px;
   min-width: 0;
   min-height: 0;
+  overflow: hidden;
   background: #e5e5e5;
 }
 .hidden-status { display: none; }
@@ -347,8 +388,7 @@ input[type="range"]::-moz-range-thumb {
 .stage:focus, .stage:focus-visible, .art-surface:focus, .art-surface:focus-visible { outline: 0; }
 .stage {
   position: relative;
-  display: grid;
-  place-items: center;
+  display: block;
   overflow: auto;
   min-height: 0;
   padding: 56px;
@@ -359,8 +399,28 @@ input[type="range"]::-moz-range-thumb {
   background-size: 24px 24px;
   touch-action: none;
   user-select: none;
+  overscroll-behavior: contain;
 }
-.empty-state { display: grid; place-items: center; gap: 8px; max-width: 360px; color: var(--muted); text-align: center; }
+.is-space-panning .stage {
+  cursor: grab;
+}
+.is-stage-panning .stage,
+.is-stage-panning .art-component,
+.is-stage-panning .region-effect-zone {
+  cursor: grabbing;
+}
+.empty-state {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  display: grid;
+  place-items: center;
+  gap: 8px;
+  width: min(360px, calc(100% - 40px));
+  color: var(--muted);
+  text-align: center;
+  transform: translate(-50%, -50%);
+}
 .empty-state strong { color: var(--ink); font-size: 15px; }
 .empty-state p { font-size: 12px; line-height: 1.5; }
 .empty-symbol {
@@ -371,7 +431,8 @@ input[type="range"]::-moz-range-thumb {
 }
 .art-surface {
   position: relative;
-  width: min(100%, var(--artboard-width, 940px));
+  width: calc(var(--artboard-width, 940px) * var(--board-zoom, 1));
+  margin: 0 auto;
   aspect-ratio: var(--artboard-aspect, 16 / 10);
   overflow: hidden;
   border: 1px solid var(--line-strong);
@@ -641,7 +702,219 @@ input[type="range"]::-moz-range-thumb {
   top: calc(50% - 4px);
   cursor: ew-resize;
 }
-.component-viewport { position: absolute; inset: 0; display: grid; place-items: center; overflow: hidden; opacity: var(--component-opacity, 1); }
+.component-viewport { position: absolute; inset: 0; display: grid; place-items: center; overflow: visible; opacity: var(--component-opacity, 1); }
+.art-component.has-active-region .component-viewport {
+  opacity: 0;
+  visibility: hidden;
+}
+.art-component.is-region-settling .component-viewport {
+  opacity: 0;
+  visibility: visible;
+  transition: none;
+}
+.art-component.is-region-settling.is-region-crossfading .component-viewport {
+  opacity: var(--component-opacity, 1);
+  transition: opacity 240ms cubic-bezier(.2, .8, .2, 1);
+}
+.region-canvas-effect {
+  position: absolute;
+  display: block;
+  overflow: visible;
+  pointer-events: none;
+  z-index: 6;
+  opacity: 1;
+  visibility: visible;
+  transition: opacity 240ms cubic-bezier(.2, .8, .2, 1);
+  will-change: opacity, transform, filter;
+}
+.region-canvas-effect.is-fading-out {
+  opacity: 0;
+}
+.region-vector-stage {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+.region-vector-full-source {
+  position: absolute;
+  place-items: center;
+  pointer-events: none;
+}
+.component-region-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 5;
+}
+.brush-draw-preview {
+  position: absolute;
+  inset: 0;
+  z-index: 9;
+  pointer-events: none;
+}
+.brush-draw-preview svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+.brush-draw-preview path {
+  fill: rgba(13, 153, 255, .12);
+  stroke: var(--accent);
+  stroke-width: 1.4;
+  stroke-dasharray: 5 4;
+  vector-effect: non-scaling-stroke;
+}
+.is-brush-drawing .art-component.is-selected,
+.is-brush-drawing .art-component.is-selected .region-effect-zone {
+  cursor: crosshair;
+}
+.region-effect-zone {
+  position: absolute;
+  overflow: visible;
+  pointer-events: auto;
+  cursor: grab;
+  transform-origin: var(--region-origin-x, 50%) var(--region-origin-y, 50%);
+  transform: translateZ(0);
+  touch-action: none;
+  will-change: transform, filter;
+  z-index: 3;
+}
+.region-effect-zone:active { cursor: grabbing; }
+.region-effect-clip {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: inherit;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+  will-change: transform, filter, opacity;
+}
+.region-source {
+  position: absolute;
+  transform-origin: var(--region-origin-x, 50%) var(--region-origin-y, 50%);
+  will-change: transform, filter, opacity;
+}
+.region-remainder {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  pointer-events: none;
+  z-index: 1;
+}
+.region-remainder.is-active {
+  opacity: var(--component-opacity, 1);
+}
+.art-component.has-active-region .region-remainder.is-active {
+  opacity: 0;
+  visibility: hidden;
+}
+.region-remainder-strip {
+  position: absolute;
+  overflow: hidden;
+}
+.region-remainder-source {
+  pointer-events: none;
+}
+.region-shape-ellipse .region-effect-clip,
+.region-shape-ellipse .region-outline { border-radius: 50%; }
+.region-shape-rect .region-effect-clip,
+.region-shape-rect .region-outline { border-radius: 5px; }
+.region-shape-brush .region-effect-clip,
+.region-shape-brush .region-outline {
+  border-radius: 58% 42% 64% 36% / 52% 61% 39% 48%;
+}
+.region-effect-zone.has-brush-path {
+  border-radius: 0;
+}
+.region-effect-zone.has-brush-path .region-effect-clip {
+  border-radius: 0;
+  -webkit-mask-image: none;
+  mask-image: none;
+}
+.region-effect-zone.has-brush-path .region-outline {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+.region-brush-outline {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+.region-brush-outline path {
+  fill: rgba(13, 153, 255, .08);
+  stroke: rgba(13, 153, 255, .92);
+  stroke-width: 1.4;
+  stroke-dasharray: 5 4;
+  vector-effect: non-scaling-stroke;
+}
+.region-shape-brush .region-effect-clip {
+  -webkit-mask-image: radial-gradient(ellipse at var(--region-origin-x, 50%) var(--region-origin-y, 50%), #000 0 var(--region-mask-start, 58%), rgba(0, 0, 0, .68) var(--region-mask-mid, 78%), transparent 100%);
+  mask-image: radial-gradient(ellipse at var(--region-origin-x, 50%) var(--region-origin-y, 50%), #000 0 var(--region-mask-start, 58%), rgba(0, 0, 0, .68) var(--region-mask-mid, 78%), transparent 100%);
+}
+.region-outline {
+  position: absolute;
+  inset: 0;
+  border: 1px dashed rgba(13, 153, 255, .86);
+  background: rgba(13, 153, 255, .08);
+  opacity: 0;
+  pointer-events: none;
+}
+.region-label {
+  position: absolute;
+  left: 0;
+  top: -20px;
+  max-width: 160px;
+  padding: 2px 5px;
+  border-radius: 4px;
+  color: #fff;
+  background: rgba(13, 153, 255, .92);
+  font-size: 10px;
+  line-height: 1.2;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+}
+.region-resize-handle {
+  position: absolute;
+  right: -5px;
+  bottom: -5px;
+  width: 10px;
+  height: 10px;
+  padding: 0;
+  border: 1px solid #fff;
+  border-radius: 2px;
+  background: var(--accent);
+  opacity: 0;
+  cursor: nwse-resize;
+  pointer-events: auto;
+}
+.art-component.is-selected .region-outline,
+.art-component.is-selected .region-label,
+.art-component.is-selected .region-resize-handle,
+.region-effect-zone.is-selected .region-outline,
+.region-effect-zone.is-selected .region-label,
+.region-effect-zone.is-selected .region-resize-handle {
+  opacity: 1;
+}
+.region-effect-zone.is-selected .region-outline {
+  border-style: solid;
+  background: rgba(13, 153, 255, .14);
+}
+.region-effect-zone.is-active .region-effect-clip {
+  opacity: 0;
+  visibility: hidden;
+  transition: none;
+}
+.art-component.has-active-region .region-effect-zone.is-active {
+  animation: none;
+}
 .component-image, .component-ghost-a, .component-ghost-b {
   position: absolute;
   inset: 0;
@@ -658,9 +931,18 @@ input[type="range"]::-moz-range-thumb {
   width: 100%;
   height: 100%;
   object-fit: fill;
-  overflow: hidden;
+  overflow: visible;
 }
-.component-svg { display: block; width: 100%; height: 100%; overflow: hidden; }
+.component-svg {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: visible;
+}
 .component-ghost-a, .component-ghost-b { opacity: 0; }
 .text-visual {
   display: grid;
@@ -717,6 +999,26 @@ input[type="range"]::-moz-range-thumb {
 .effect-pulse .component-ghost-a { opacity: .35; animation: pulseHaloEffect var(--effect-duration, 620ms) ease-out; }
 .effect-blur .component-image { animation: blurFocusEffect var(--effect-duration, 620ms) ease-in-out; }
 .effect-flicker .component-viewport { animation: flickerEffect var(--effect-duration, 520ms) steps(1, end); }
+.effect-glitch .region-canvas-effect { animation: glitchEffect var(--effect-duration, 440ms) steps(2, jump-none); }
+.effect-wave .region-canvas-effect { animation: waveEffect var(--effect-duration, 680ms) ease-in-out; }
+.effect-split .region-canvas-effect { animation: splitCanvasEffect var(--effect-duration, 580ms) ease-out; }
+.effect-pulse .region-canvas-effect { animation: pulseGlowEffect var(--effect-duration, 620ms) ease-out; }
+.effect-blur .region-canvas-effect { animation: blurFocusEffect var(--effect-duration, 620ms) ease-in-out; }
+.effect-flicker .region-canvas-effect { animation: flickerEffect var(--effect-duration, 520ms) steps(1, end); }
+.effect-glitch .region-canvas-effect,
+.effect-wave .region-canvas-effect,
+.effect-split .region-canvas-effect,
+.effect-pulse .region-canvas-effect,
+.effect-blur .region-canvas-effect,
+.effect-flicker .region-canvas-effect {
+  animation-delay: var(--effect-sync-delay, 0ms);
+}
+.region-effect-zone.is-active.region-effect-bulge { animation: regionBulge var(--region-duration, 560ms) cubic-bezier(.18, .89, .32, 1.24); }
+.region-effect-zone.is-active.region-effect-stretch { animation: regionStretch var(--region-duration, 560ms) cubic-bezier(.2, .8, .2, 1); }
+.region-effect-zone.is-active.region-effect-smear { animation: regionSmear var(--region-duration, 520ms) ease-out; }
+.region-effect-zone.is-active.region-effect-ripple { animation: regionRipple var(--region-duration, 640ms) ease-in-out; }
+.region-effect-zone.is-active.region-effect-spotlight { animation: regionSpotlight var(--region-duration, 620ms) ease-out; }
+.region-effect-zone.is-active.region-effect-pinch { animation: regionPinch var(--region-duration, 520ms) cubic-bezier(.2, .8, .2, 1); }
 @keyframes zoomEffect { 0% { transform: var(--base-transform) scale(1); } 48% { transform: var(--base-transform) scale(var(--zoom-scale, 1.3)); } 100% { transform: var(--base-transform) scale(1); } }
 @keyframes shakeEffect { 0%, 100% { transform: var(--base-transform) translate(0, 0); } 18% { transform: var(--base-transform) translate(calc(var(--shake-amount, 14px) * -1), 2px); } 36% { transform: var(--base-transform) translate(var(--shake-amount, 14px), -2px); } 54% { transform: var(--base-transform) translate(calc(var(--shake-amount, 14px) * -.65), 1px); } 72% { transform: var(--base-transform) translate(calc(var(--shake-amount, 14px) * .55), -1px); } }
 @keyframes bounceEffect { 0% { transform: var(--base-transform) translateY(0) scale(1); } 35% { transform: var(--base-transform) translateY(calc(var(--shake-amount, 14px) * -3.4)) scale(1.04, .96); } 65% { transform: var(--base-transform) translateY(calc(var(--shake-amount, 14px) * 1.2)) scale(.98, 1.02); } 100% { transform: var(--base-transform) translateY(0) scale(1); } }
@@ -725,20 +1027,32 @@ input[type="range"]::-moz-range-thumb {
 @keyframes waveEffect { 0%, 100% { transform: skew(0deg, 0deg) scale(1); filter: blur(0) drop-shadow(0 12px 18px rgba(0, 0, 0, .14)); } 35% { transform: skew(var(--wave-x-a, 8deg), var(--wave-y-a, -4deg)) scale(1.018); filter: blur(.4px); } 70% { transform: skew(var(--wave-x-b, -6deg), var(--wave-y-b, 3deg)) scale(1.01); } }
 @keyframes splitA { 0% { transform: translate(0); } 55% { transform: translate(calc(var(--shake-amount, 14px) * -3.6), calc(var(--shake-amount, 14px) * -1.4)); } 100% { transform: translate(0); } }
 @keyframes splitB { 0% { transform: translate(0); } 55% { transform: translate(calc(var(--shake-amount, 14px) * 3.6), calc(var(--shake-amount, 14px) * 1.4)); } 100% { transform: translate(0); } }
+@keyframes splitCanvasEffect { 0%, 100% { transform: translate(0); filter: none; } 35% { transform: translate(calc(var(--shake-amount, 14px) * -1.1), calc(var(--shake-amount, 14px) * -.42)); filter: drop-shadow(calc(var(--shake-amount, 14px) * 1.6) calc(var(--shake-amount, 14px) * .56) 0 rgba(13, 153, 255, .32)); } 62% { transform: translate(calc(var(--shake-amount, 14px) * .8), calc(var(--shake-amount, 14px) * .28)); filter: drop-shadow(calc(var(--shake-amount, 14px) * -1.4) calc(var(--shake-amount, 14px) * -.48) 0 rgba(255, 65, 104, .28)); } }
 @keyframes spinEffect { 0% { transform: var(--base-transform) rotate(0deg) scale(1); } 45% { transform: var(--base-transform) rotate(220deg) scale(1.04); } 100% { transform: var(--base-transform) rotate(360deg) scale(1); } }
 @keyframes pulseGlowEffect { 0%, 100% { transform: scale(1); filter: saturate(1) drop-shadow(0 12px 18px rgba(0, 0, 0, .14)); } 48% { transform: scale(var(--zoom-scale, 1.3)); filter: saturate(1.35) brightness(1.08) drop-shadow(0 0 22px rgba(13, 153, 255, .48)); } }
 @keyframes pulseHaloEffect { 0% { transform: scale(1); opacity: 0; filter: blur(0); } 45% { transform: scale(1.28); opacity: .4; filter: blur(3px); } 100% { transform: scale(1.48); opacity: 0; filter: blur(8px); } }
 @keyframes blurFocusEffect { 0%, 100% { transform: scale(1); filter: blur(0) saturate(1); } 28% { transform: scale(.96); filter: blur(var(--blur-amount, 6px)) saturate(.65); } 62% { transform: scale(1.04); filter: blur(var(--blur-soft, .7px)) saturate(1.25); } }
 @keyframes flickerEffect { 0%, 100% { opacity: var(--component-opacity, 1); filter: contrast(1); } 12% { opacity: calc(var(--component-opacity, 1) * .2); filter: contrast(1.6); } 24% { opacity: var(--component-opacity, 1); } 38% { opacity: calc(var(--component-opacity, 1) * .42); } 48% { opacity: var(--component-opacity, 1); filter: brightness(1.28); } 62% { opacity: calc(var(--component-opacity, 1) * .12); } 76% { opacity: var(--component-opacity, 1); } }
+@keyframes regionBulge { 0%, 100% { transform: scale(1); filter: none; } 46% { transform: scale(var(--region-scale, 1.28)); filter: saturate(1.08) contrast(1.05); } }
+@keyframes regionStretch { 0%, 100% { transform: rotate(var(--region-angle, 0deg)) scale(1); filter: none; } 48% { transform: rotate(var(--region-angle, 0deg)) scale(var(--region-stretch-x, 1.28), var(--region-stretch-y, .9)); filter: saturate(1.08); } }
+@keyframes regionSmear { 0%, 100% { transform: translate(0, 0) skew(0deg); filter: blur(0); } 44% { transform: translate(var(--region-push-x, 28px), var(--region-push-y, 0)) skew(var(--region-skew, 8deg)); filter: blur(var(--region-blur, 2px)); } }
+@keyframes regionRipple { 0%, 100% { transform: scale(1) skew(0deg, 0deg); filter: blur(0) contrast(1); } 30% { transform: scale(1.03) skew(var(--region-ripple-a, 8deg), var(--region-ripple-b, -5deg)); filter: blur(var(--region-blur, 2px)) contrast(1.08); } 64% { transform: scale(.98) skew(calc(var(--region-ripple-a, 8deg) * -0.7), calc(var(--region-ripple-b, -5deg) * -0.7)); } }
+@keyframes regionSpotlight { 0%, 100% { transform: scale(1); filter: brightness(1) saturate(1) drop-shadow(0 0 0 rgba(13, 153, 255, 0)); } 45% { transform: scale(1.025); filter: brightness(var(--region-brightness, 1.26)) saturate(1.28) drop-shadow(0 0 var(--region-glow, 22px) rgba(13, 153, 255, .45)); } }
+@keyframes regionPinch { 0%, 100% { transform: scale(1); filter: none; } 48% { transform: scale(var(--region-pinch-scale, .82)); filter: contrast(1.08); } }
 
 @media (max-width: 1120px) {
-  .editor-shell { grid-template-columns: 260px minmax(0, 1fr); }
-  .right-sidebar { grid-column: 1 / -1; border-left: 0; border-top: 1px solid var(--line-strong); max-height: 420px; }
+  .editor-shell {
+    grid-template-columns: 260px minmax(0, 1fr);
+    grid-template-rows: 48px minmax(0, 1fr) minmax(220px, 420px);
+  }
+  .right-sidebar { grid-column: 1 / -1; border-left: 0; border-top: 1px solid var(--line-strong); max-height: none; }
 }
 @media (max-width: 760px) {
-  .editor-shell { display: flex; flex-direction: column; min-height: 100vh; }
+  html, body { height: auto; overflow: auto; }
+  body { min-height: 100%; }
+  .editor-shell { display: flex; flex-direction: column; height: auto; min-height: 100vh; overflow: visible; }
   .editor-topbar { flex-wrap: wrap; height: auto; min-height: 48px; padding: 8px; }
-  .sidebar { max-height: none; border: 0; }
+  .sidebar { max-height: none; border: 0; overflow: visible; }
   .canvas-column { min-height: 560px; }
   .stage:focus, .stage:focus-visible, .art-surface:focus, .art-surface:focus-visible { outline: 0; }
 .stage { padding: 20px; }
