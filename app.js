@@ -2,7 +2,10 @@ const componentInput = document.querySelector("#componentInput");
 const sampleButton = document.querySelector("#sampleButton");
 const resetButton = document.querySelector("#resetButton");
 const shapeButtons = document.querySelectorAll("[data-shape]");
+const addArtboardButton = document.querySelector("#addArtboardButton");
 const addTextButton = document.querySelector("#addTextButton");
+const addHorizontalGuideButton = document.querySelector("#addHorizontalGuideButton");
+const addVerticalGuideButton = document.querySelector("#addVerticalGuideButton");
 const bringFrontButton = document.querySelector("#bringFrontButton");
 const duplicateButton = document.querySelector("#duplicateButton");
 const testEffectButton = document.querySelector("#testEffectButton");
@@ -82,10 +85,12 @@ const interactionCount = document.querySelector("#interactionCount");
 const statusTitle = document.querySelector("#statusTitle");
 const statusText = document.querySelector("#statusText");
 const emptyState = document.querySelector("#emptyState");
-const artSurface = document.querySelector("#artSurface");
 const stage = document.querySelector("#stage");
-const componentLayer = document.querySelector("#componentLayer");
-const smartGuideLayer = document.querySelector("#smartGuideLayer");
+const artboardWorkspace = document.querySelector("#artboardWorkspace");
+let artSurface = null;
+let componentLayer = null;
+let smartGuideLayer = null;
+let artboardGuideLayer = null;
 const artboardWidthInput = document.querySelector("#artboardWidthInput");
 const artboardHeightInput = document.querySelector("#artboardHeightInput");
 const artboardBgInput = document.querySelector("#artboardBgInput");
@@ -174,6 +179,7 @@ const triggerLabels = {
 };
 
 const effectLabels = {
+  none: "None",
   zoom: "Zoom",
   shake: "Shake",
   bounce: "Bounce",
@@ -189,6 +195,7 @@ const effectLabels = {
 };
 
 const effectControlConfigs = {
+  none: {},
   zoom: { zoom: { label: "Scale", unit: "%" }, speed: { label: "Speed" } },
   shake: { shake: { label: "Distance", unit: "px" }, speed: { label: "Speed" } },
   bounce: { shake: { label: "Power", unit: "" }, speed: { label: "Speed" } },
@@ -286,6 +293,9 @@ const smartGuideSpacingReleasePx = 16;
 const smartGuideSpacingPriorityPx = 6;
 const smartGuideCrossAxisPaddingPx = 28;
 const smartGuideMeasureLimitPx = 360;
+const workspaceInsetX = 520;
+const workspaceInsetY = 356;
+const workspaceCoordinateLimit = 100000;
 
 const sampleComponents = [
   { name: "Green Orb", src: "./sample-components/01-green-orb.svg", x: 10, y: 10, w: 20, h: 28, effect: "zoom", trigger: "click", zoom: 150, shake: 12, regions: [{ name: "Orb bulge", shape: "ellipse", x: 24, y: 22, w: 48, h: 48, effect: "bulge", trigger: "hover", strength: 58, softness: 72, speed: 58 }] },
@@ -307,18 +317,27 @@ const defaultArtboard = {
   transparent: false
 };
 let artboard = { ...defaultArtboard };
+let artboards = [];
+let activeArtboardId = null;
+let nextArtboardId = 1;
 let boardZoom = 1;
+let workspaceOriginX = workspaceInsetX;
+let workspaceOriginY = workspaceInsetY;
 let isSpacePanning = false;
 let stagePanState = null;
-const minBoardZoom = 0.25;
+const minBoardZoom = 0.02;
 const maxBoardZoom = 4;
 
 let nextId = 1;
 let nextRegionId = 1;
+let nextGuideId = 1;
 let selectedId = null;
 let selectedIds = [];
 let selectedRegionId = null;
+let selectedGuideId = null;
+let selectedGuideIds = [];
 let components = [];
+let guides = [];
 let interactions = 0;
 let audioContext = null;
 const activeAudioPlayers = new Set();
@@ -338,11 +357,294 @@ let brushDrawComponentId = null;
 let brushDrawState = null;
 let marqueeState = null;
 let marqueeNode = null;
+let artboardDragState = null;
+let guideDragState = null;
+let measurementGuidesVisible = false;
+let lastCanvasPointer = null;
 let copiedComponent = null;
 let movedDuringDrag = false;
 const maxHistory = 100;
 let historyStack = [];
 let isRestoringHistory = false;
+
+function activeArtboardRecord() {
+  return artboards.find((record) => record.id === activeArtboardId) || null;
+}
+
+function commitActiveArtboardState() {
+  const record = activeArtboardRecord();
+  if (!record) return;
+  record.artboard = { ...artboard };
+  record.components = components;
+  record.guides = guides.map((guide) => ({ ...guide }));
+  record.selectedIds = [...selectedIds];
+  record.selectedId = selectedId;
+  record.selectedRegionId = selectedRegionId;
+  record.selectedGuideId = selectedGuideId;
+  record.selectedGuideIds = [...selectedGuideIds];
+}
+
+function setActiveArtboardRefs(record) {
+  activeArtboardId = record?.id || null;
+  artboard = record ? { ...record.artboard } : { ...defaultArtboard };
+  components = record?.components || [];
+  guides = record?.guides?.map((guide) => ({ ...guide })) || [];
+  selectedIds = record ? [...(record.selectedIds || [])] : [];
+  selectedId = record?.selectedId || null;
+  selectedRegionId = record?.selectedRegionId || null;
+  selectedGuideIds = record
+    ? [...(record.selectedGuideIds || (record.selectedGuideId ? [record.selectedGuideId] : []))]
+    : [];
+  selectedGuideId = selectedGuideIds.includes(record?.selectedGuideId)
+    ? record.selectedGuideId
+    : selectedGuideIds[selectedGuideIds.length - 1] || null;
+  artSurface = record?.surface || null;
+  componentLayer = record?.componentLayer || null;
+  smartGuideLayer = record?.smartGuideLayer || null;
+  artboardGuideLayer = record?.artboardGuideLayer || null;
+}
+
+function applyArtboardVisual(record) {
+  if (!record?.surface) return;
+  const settings = record.artboard || defaultArtboard;
+  const position = record.position || { x: 0, y: 0 };
+  record.frame.style.left = `${workspaceOriginX + position.x * boardZoom}px`;
+  record.frame.style.top = `${workspaceOriginY + position.y * boardZoom}px`;
+  record.surface.style.setProperty("--artboard-width", `${settings.width}px`);
+  record.surface.style.setProperty("--artboard-aspect", `${settings.width} / ${settings.height}`);
+  record.surface.style.setProperty("--artboard-bg", settings.transparent ? "transparent" : settings.background);
+  record.surface.style.setProperty("--board-zoom", String(boardZoom));
+  record.surface.classList.toggle("is-transparent", settings.transparent);
+}
+
+function refreshWorkspaceBounds({ preserveViewport = false } = {}) {
+  const previousOriginX = workspaceOriginX;
+  const previousOriginY = workspaceOriginY;
+  const minX = artboards.length ? Math.min(...artboards.map((record) => record.position.x)) : 0;
+  const minY = artboards.length ? Math.min(...artboards.map((record) => record.position.y)) : 0;
+  workspaceOriginX = workspaceInsetX + Math.max(0, -minX * boardZoom);
+  workspaceOriginY = workspaceInsetY + Math.max(0, -minY * boardZoom);
+
+  const right = artboards.length
+    ? Math.max(...artboards.map((record) => workspaceOriginX + (record.position.x + record.artboard.width) * boardZoom))
+    : 0;
+  const bottom = artboards.length
+    ? Math.max(...artboards.map((record) => workspaceOriginY + (record.position.y + record.artboard.height) * boardZoom))
+    : 0;
+
+  artboards.forEach((record) => {
+    record.frame.style.left = `${workspaceOriginX + record.position.x * boardZoom}px`;
+    record.frame.style.top = `${workspaceOriginY + record.position.y * boardZoom}px`;
+    syncArtboardGuidePositions(record);
+  });
+  artboardWorkspace.style.width = `${Math.max(stage.clientWidth + 1040, right + 520)}px`;
+  artboardWorkspace.style.height = `${Math.max(stage.clientHeight + 760, bottom + 420)}px`;
+
+  if (preserveViewport) {
+    stage.scrollLeft += workspaceOriginX - previousOriginX;
+    stage.scrollTop += workspaceOriginY - previousOriginY;
+  }
+}
+
+function nextArtboardPosition(settings = defaultArtboard) {
+  if (!artboards.length) return { x: 0, y: 0 };
+  const right = Math.max(...artboards.map((record) => record.position.x + record.artboard.width));
+  const top = Math.min(...artboards.map((record) => record.position.y));
+  return { x: right + 96, y: top };
+}
+
+function createArtboardRecord(data = {}) {
+  const id = Number(data.id) || nextArtboardId++;
+  nextArtboardId = Math.max(nextArtboardId, id + 1);
+  const record = {
+    id,
+    name: data.name || `Artboard ${id}`,
+    artboard: { ...defaultArtboard, ...(data.artboard || {}) },
+    position: {
+      x: clampNumber(data.position?.x ?? data.x, -workspaceCoordinateLimit, workspaceCoordinateLimit, 0),
+      y: clampNumber(data.position?.y ?? data.y, -workspaceCoordinateLimit, workspaceCoordinateLimit, 0)
+    },
+    components: (data.components || []).map(cloneComponent),
+    guides: (data.guides || []).map((guide) => ({ ...guide })),
+    selectedIds: [...(data.selectedIds || [])],
+    selectedId: data.selectedId || null,
+    selectedRegionId: data.selectedRegionId || null,
+    selectedGuideId: data.selectedGuideId || null,
+    selectedGuideIds: [...(data.selectedGuideIds || (data.selectedGuideId ? [data.selectedGuideId] : []))],
+    frame: null,
+    surface: null,
+    componentLayer: null,
+    smartGuideLayer: null,
+    artboardGuideLayer: null
+  };
+
+  const frame = document.createElement("div");
+  frame.className = "artboard-frame";
+  frame.dataset.artboardId = String(id);
+
+  const label = document.createElement("button");
+  label.type = "button";
+  label.className = "artboard-label";
+  label.textContent = record.name;
+  label.addEventListener("pointerdown", (event) => startArtboardDrag(event, id));
+  label.addEventListener("click", (event) => {
+    event.stopPropagation();
+    activateArtboard(id);
+  });
+
+  const surface = document.createElement("div");
+  surface.className = "art-surface";
+  surface.dataset.artboardId = String(id);
+  surface.setAttribute("aria-label", record.name);
+  surface.addEventListener("pointerdown", () => {
+    if (activeArtboardId !== id) activateArtboard(id);
+  }, { capture: true });
+  surface.addEventListener("pointerdown", startMarqueeSelection);
+
+  const smartLayer = document.createElement("div");
+  smartLayer.className = "smart-guide-layer";
+  smartLayer.setAttribute("aria-hidden", "true");
+
+  const guideLayer = document.createElement("div");
+  guideLayer.className = "guide-layer";
+
+  const layer = document.createElement("div");
+  layer.className = "component-layer";
+
+  surface.append(layer, smartLayer);
+  frame.append(label, surface);
+  artboardWorkspace.append(frame, guideLayer);
+  record.frame = frame;
+  record.surface = surface;
+  record.componentLayer = layer;
+  record.smartGuideLayer = smartLayer;
+  record.artboardGuideLayer = guideLayer;
+  applyArtboardVisual(record);
+  return record;
+}
+
+function updateArtboardEmptyState() {
+  emptyState.classList.toggle("is-hidden", artboards.length > 0);
+}
+
+function focusArtboard(record) {
+  if (!record?.surface) return;
+  window.requestAnimationFrame(() => {
+    const stageRect = stage.getBoundingClientRect();
+    const surfaceRect = record.surface.getBoundingClientRect();
+    stage.scrollLeft += surfaceRect.left - stageRect.left - Math.max(28, (stage.clientWidth - surfaceRect.width) / 2);
+    stage.scrollTop += surfaceRect.top - stageRect.top - Math.max(28, (stage.clientHeight - surfaceRect.height) / 2);
+  });
+}
+
+function startArtboardDrag(event, artboardId) {
+  if (event.button !== 0 || isSpacePanning) return;
+  const record = activateArtboard(artboardId);
+  if (!record) return;
+  event.preventDefault();
+  event.stopPropagation();
+  event.stopImmediatePropagation();
+  saveHistory();
+  setSelection([]);
+  setGuideSelection([]);
+  syncSelectionVisuals();
+  artboardDragState = {
+    id: artboardId,
+    startX: event.clientX,
+    startY: event.clientY,
+    baseX: record.position.x,
+    baseY: record.position.y
+  };
+  document.body.classList.add("is-artboard-dragging");
+  window.addEventListener("pointermove", handleArtboardDragMove);
+  window.addEventListener("pointerup", handleArtboardDragUp, { once: true });
+}
+
+function handleArtboardDragMove(event) {
+  if (!artboardDragState) return;
+  const record = artboards.find((item) => item.id === artboardDragState.id);
+  if (!record) return;
+  const dx = (event.clientX - artboardDragState.startX) / boardZoom;
+  const dy = (event.clientY - artboardDragState.startY) / boardZoom;
+  record.position.x = clampNumber(artboardDragState.baseX + dx, -workspaceCoordinateLimit, workspaceCoordinateLimit, artboardDragState.baseX);
+  record.position.y = clampNumber(artboardDragState.baseY + dy, -workspaceCoordinateLimit, workspaceCoordinateLimit, artboardDragState.baseY);
+  refreshWorkspaceBounds({ preserveViewport: true });
+}
+
+function handleArtboardDragUp() {
+  window.removeEventListener("pointermove", handleArtboardDragMove);
+  artboardDragState = null;
+  document.body.classList.remove("is-artboard-dragging");
+  commitActiveArtboardState();
+}
+
+function activateArtboard(id, { focus = false, renderBoard = false } = {}) {
+  const record = artboards.find((item) => item.id === id);
+  if (!record) return null;
+
+  if (activeArtboardId !== id) {
+    if (componentLayer) clearActiveRegionEffects();
+    cancelBrushDrawMode();
+    commitActiveArtboardState();
+    setActiveArtboardRefs(record);
+  }
+
+  artboards.forEach((item) => {
+    const isActive = item.id === id;
+    item.frame?.classList.toggle("is-active", isActive);
+    item.artboardGuideLayer?.classList.toggle("is-active", isActive);
+  });
+  applyArtboardSettings();
+  syncArtboardInputs();
+  updateArtboardEmptyState();
+  if (renderBoard) render();
+  else {
+    renderComponentList();
+    syncControlsFromSelection();
+    syncSelectionVisuals();
+  }
+  if (focus) focusArtboard(record);
+  return record;
+}
+
+function createArtboard({ save = true, focus = true, artboard: settings = null } = {}) {
+  if (save) saveHistory();
+  commitActiveArtboardState();
+  const nextSettings = settings || { ...defaultArtboard };
+  const record = createArtboardRecord({ artboard: nextSettings, position: nextArtboardPosition(nextSettings) });
+  artboards.push(record);
+  setActiveArtboardRefs(record);
+  artboards.forEach((item) => {
+    const isActive = item.id === record.id;
+    item.frame?.classList.toggle("is-active", isActive);
+    item.artboardGuideLayer?.classList.toggle("is-active", isActive);
+  });
+  updateArtboardEmptyState();
+  syncArtboardInputs();
+  applyArtboardSettings();
+  render();
+  refreshWorkspaceBounds();
+  if (focus) focusArtboard(record);
+  return record;
+}
+
+function ensureActiveArtboard() {
+  return activeArtboardRecord() || createArtboard({ save: false, focus: true });
+}
+
+function clearArtboards() {
+  artboards.forEach((record) => {
+    record.frame?.remove();
+    record.artboardGuideLayer?.remove();
+  });
+  artboards = [];
+  activeArtboardId = null;
+  workspaceOriginX = workspaceInsetX;
+  workspaceOriginY = workspaceInsetY;
+  setActiveArtboardRefs(null);
+  refreshWorkspaceBounds();
+  updateArtboardEmptyState();
+}
 
 function selectedComponents() {
   const ids = new Set(selectedIds);
@@ -355,10 +657,19 @@ function selectedComponent() {
   return selected.find((component) => component.id === selectedId) || selected[selected.length - 1];
 }
 
-function setSelection(ids) {
+function setGuideSelection(ids, primaryId = null) {
+  const existingIds = new Set(guides.map((guide) => guide.id));
+  selectedGuideIds = Array.from(new Set(ids)).filter((id) => existingIds.has(id));
+  selectedGuideId = primaryId && selectedGuideIds.includes(primaryId)
+    ? primaryId
+    : selectedGuideIds[selectedGuideIds.length - 1] || null;
+}
+
+function setSelection(ids, { preserveGuides = false } = {}) {
   const existingIds = new Set(components.map((component) => component.id));
   selectedIds = Array.from(new Set(ids)).filter((id) => existingIds.has(id));
   selectedId = selectedIds[selectedIds.length - 1] || null;
+  if (selectedIds.length && !preserveGuides) setGuideSelection([]);
   if (selectedRegionId && !components.some((component) => selectedIds.includes(component.id) && component.regions?.some((region) => region.id === selectedRegionId))) {
     selectedRegionId = null;
   }
@@ -383,9 +694,12 @@ function toggleSelection(id) {
 
 function syncSelectionVisuals() {
   preserveScrollPosition(() => {
-    componentLayer.querySelectorAll(".art-component").forEach((node) => {
-      node.classList.toggle("is-selected", isSelected(Number(node.dataset.id)));
+    componentLayer?.querySelectorAll(".art-component").forEach((node) => {
+      const id = Number(node.dataset.id);
+      node.classList.toggle("is-selected", isSelected(id));
+      node.classList.toggle("has-selected-region", Boolean(selectedRegionId && components.find((component) => component.id === id)?.regions?.some((region) => region.id === selectedRegionId)));
     });
+    syncGuideSelectionVisuals();
     renderComponentList();
     syncControlsFromSelection();
   });
@@ -442,16 +756,29 @@ function cloneComponent(component) {
 }
 
 function captureState() {
+  commitActiveArtboardState();
   return {
-    components: components.map(cloneComponent),
-    selectedIds: [...selectedIds],
-    selectedId,
-    selectedRegionId,
+    artboards: artboards.map((record) => ({
+      id: record.id,
+      name: record.name,
+      artboard: { ...record.artboard },
+      position: { ...record.position },
+      components: record.components.map(cloneComponent),
+      guides: (record.guides || []).map((guide) => ({ ...guide })),
+      selectedIds: [...(record.selectedIds || [])],
+      selectedId: record.selectedId || null,
+      selectedRegionId: record.selectedRegionId || null,
+      selectedGuideId: record.selectedGuideId || null,
+      selectedGuideIds: [...(record.selectedGuideIds || [])]
+    })),
+    activeArtboardId,
+    nextArtboardId,
+    boardZoom,
+    stageScroll: { left: stage.scrollLeft, top: stage.scrollTop },
     nextId,
     nextRegionId,
-    interactions,
-    artboard: { ...artboard },
-    artboardVisible: !artSurface.classList.contains("is-hidden")
+    nextGuideId,
+    interactions
   };
 }
 
@@ -468,28 +795,47 @@ function restoreState(record) {
   if (!record?.snapshot) return;
   isRestoringHistory = true;
   cancelBrushDrawMode();
-  clearActiveRegionEffects();
-  components = record.snapshot.components.map(cloneComponent);
-  selectedIds = [...record.snapshot.selectedIds];
-  selectedId = record.snapshot.selectedId;
-  selectedRegionId = record.snapshot.selectedRegionId || null;
+  if (componentLayer) clearActiveRegionEffects();
+  clearArtboards();
   nextId = record.snapshot.nextId;
-  nextRegionId = record.snapshot.nextRegionId || nextRegionIdFromComponents();
+  nextRegionId = record.snapshot.nextRegionId || 1;
+  nextGuideId = record.snapshot.nextGuideId || 1;
+  nextArtboardId = record.snapshot.nextArtboardId || 1;
+  boardZoom = clampNumber(record.snapshot.boardZoom, minBoardZoom, maxBoardZoom, 1);
   interactions = record.snapshot.interactions;
-  artboard = { ...record.snapshot.artboard };
   interactionCount.textContent = String(interactions);
-  syncArtboardInputs();
-  applyArtboardSettings();
 
-  if (record.snapshot.artboardVisible || components.length) {
-    emptyState.classList.add("is-hidden");
-    artSurface.classList.remove("is-hidden");
-  } else {
-    emptyState.classList.remove("is-hidden");
-    artSurface.classList.add("is-hidden");
+  (record.snapshot.artboards || []).forEach((data) => {
+    const boardRecord = createArtboardRecord(data);
+    artboards.push(boardRecord);
+    setActiveArtboardRefs(boardRecord);
+    renderComponents();
+    renderGuides();
+    commitActiveArtboardState();
+  });
+
+  const restoredActive = artboards.find((item) => item.id === record.snapshot.activeArtboardId) || artboards[0] || null;
+  setActiveArtboardRefs(restoredActive);
+  artboards.forEach((item) => {
+    const isActive = item.id === restoredActive?.id;
+    item.frame?.classList.toggle("is-active", isActive);
+    item.artboardGuideLayer?.classList.toggle("is-active", isActive);
+  });
+  if (restoredActive) {
+    syncArtboardInputs();
+    applyArtboardSettings();
   }
-
-  render();
+  updateArtboardEmptyState();
+  refreshWorkspaceBounds();
+  renderComponentList();
+  syncControlsFromSelection();
+  const restoredScroll = record.snapshot.stageScroll;
+  if (restoredScroll) {
+    window.requestAnimationFrame(() => {
+      stage.scrollLeft = restoredScroll.left;
+      stage.scrollTop = restoredScroll.top;
+    });
+  }
   isRestoringHistory = false;
 }
 
@@ -628,19 +974,21 @@ function updateInspectorVisibility(component) {
   setVisible(lineCapField, isShape && ["line", "curve"].includes(component.shape));
 }
 function applyArtboardSettings() {
-  artSurface.style.setProperty("--artboard-width", `${artboard.width}px`);
-  artSurface.style.setProperty("--artboard-aspect", `${artboard.width} / ${artboard.height}`);
-  artSurface.style.setProperty("--artboard-bg", artboard.transparent ? "transparent" : artboard.background);
-  artSurface.style.setProperty("--board-zoom", String(boardZoom));
-  artSurface.classList.toggle("is-transparent", artboard.transparent);
+  if (!artSurface) return;
+  const record = activeArtboardRecord();
+  if (record) record.artboard = { ...artboard };
+  applyArtboardVisual(record);
+  refreshWorkspaceBounds();
   artboardBgInput.disabled = artboard.transparent;
 }
 
 function applyBoardZoom() {
-  artSurface.style.setProperty("--board-zoom", String(boardZoom));
+  artboards.forEach(applyArtboardVisual);
+  refreshWorkspaceBounds();
 }
 
 function setBoardZoom(nextZoom, originEvent = null) {
+  if (!artSurface) return;
   const previousZoom = boardZoom;
   const next = clampNumber(nextZoom, minBoardZoom, maxBoardZoom, previousZoom);
   if (Math.abs(next - previousZoom) < 0.001) return;
@@ -664,10 +1012,15 @@ function setBoardZoom(nextZoom, originEvent = null) {
 }
 
 function syncArtboardInputs() {
+  const hasArtboard = Boolean(activeArtboardRecord());
+  [artboardWidthInput, artboardHeightInput, artboardBgInput, artboardTransparentToggle].forEach((control) => {
+    control.disabled = !hasArtboard;
+  });
   artboardWidthInput.value = Math.round(artboard.width);
   artboardHeightInput.value = Math.round(artboard.height);
   artboardBgInput.value = artboard.background;
   artboardTransparentToggle.checked = artboard.transparent;
+  if (hasArtboard) artboardBgInput.disabled = artboard.transparent;
 }
 
 function preserveComponentPixelsForArtboardResize(previousArtboard, nextArtboard) {
@@ -685,6 +1038,7 @@ function preserveComponentPixelsForArtboardResize(previousArtboard, nextArtboard
 }
 
 function syncArtboardFromControls() {
+  if (!activeArtboardRecord()) return;
   saveHistory();
   const previousArtboard = { ...artboard };
   const nextArtboard = {
@@ -696,6 +1050,7 @@ function syncArtboardFromControls() {
   const sizeChanged = previousArtboard.width !== nextArtboard.width || previousArtboard.height !== nextArtboard.height;
   if (sizeChanged) preserveComponentPixelsForArtboardResize(previousArtboard, nextArtboard);
   artboard = nextArtboard;
+  commitActiveArtboardState();
   syncArtboardInputs();
   applyArtboardSettings();
   if (sizeChanged) {
@@ -704,18 +1059,17 @@ function syncArtboardFromControls() {
   }
 }
 function setCanvasReady(title = "Components loaded") {
-  emptyState.classList.add("is-hidden");
-  artSurface.classList.remove("is-hidden");
+  ensureActiveArtboard();
+  updateArtboardEmptyState();
   statusTitle.textContent = title;
   statusText.textContent = "Select a component, drag it into place, then freely change style or effect.";
 }
 
 function loadSamples() {
   saveHistory();
+  ensureActiveArtboard();
   components = [];
   setSelection([]);
-  nextId = 1;
-  nextRegionId = 1;
   selectedRegionId = null;
   interactions = 0;
   interactionCount.textContent = "0";
@@ -744,10 +1098,9 @@ async function loadComponentFiles(files) {
   if (!list.length) return;
   const loaded = await Promise.all(list.map(readFileAsDataUrl));
   saveHistory();
+  ensureActiveArtboard();
   components = [];
   setSelection([]);
-  nextId = 1;
-  nextRegionId = 1;
   selectedRegionId = null;
   interactions = 0;
   interactionCount.textContent = "0";
@@ -763,7 +1116,7 @@ async function loadComponentFiles(files) {
       y: 10 + row * 23,
       w: 18,
       h: 18,
-      effect: index % 2 ? "shake" : "zoom",
+      effect: "none",
       trigger: "click"
     }, false);
   });
@@ -805,12 +1158,12 @@ function addShape(shape) {
     y: 35,
     ...size,
     fill: "#ffffff",
-    fillTransparent: !["line", "curve"].includes(shape),
+    fillTransparent: false,
     strokeTransparent: false,
     strokeWidth: 1,
     cornerRadius: 0,
     ...defaultCurve,
-    effect: effectSelect.value,
+    effect: "none",
     trigger: triggerSelect.value
   }, true);
 }
@@ -826,12 +1179,13 @@ function addText() {
     fill: "#191714",
     fillTransparent: false,
     strokeTransparent: false,
-    effect: effectSelect.value,
+    effect: "none",
     trigger: triggerSelect.value
   }, true);
 }
 function addComponent(config, shouldRender = true) {
   if (shouldRender) saveHistory();
+  ensureActiveArtboard();
   const id = nextId++;
   const fillTransparent = Boolean(config.fillTransparent ?? config.fill === "transparent");
   const strokeTransparent = Boolean(config.strokeTransparent ?? config.stroke === "transparent");
@@ -848,7 +1202,7 @@ function addComponent(config, shouldRender = true) {
     rotation: config.rotation ?? 0,
     opacity: config.opacity ?? 100,
     trigger: config.trigger || triggerSelect.value,
-    effect: config.effect || effectSelect.value,
+    effect: config.effect ?? effectSelect.value ?? "none",
     zoom: config.zoom ?? Number(zoomRange.value),
     shake: config.shake ?? Number(shakeRange.value),
     speed: config.speed ?? Number(speedRange.value),
@@ -895,19 +1249,25 @@ function clampComponent(component) {
 
 function render() {
   preserveScrollPosition(() => {
-    renderComponents();
+    if (componentLayer) {
+      renderComponents();
+      renderGuides();
+    }
     renderComponentList();
     syncControlsFromSelection();
+    commitActiveArtboardState();
   });
 }
 
 function renderComponents() {
+  if (!componentLayer) return;
   componentLayer.innerHTML = "";
 
   components.forEach((component, index) => {
     clampComponent(component);
     const node = document.createElement("div");
-    node.className = `art-component${component.type === "shape" ? ` is-${component.shape}` : ""}${isSelected(component.id) ? " is-selected" : ""}`;
+    const hasSelectedRegion = Boolean(selectedRegionId && component.regions?.some((region) => region.id === selectedRegionId));
+    node.className = `art-component${component.type === "shape" ? ` is-${component.shape}` : ""}${isSelected(component.id) ? " is-selected" : ""}${hasSelectedRegion ? " has-selected-region" : ""}`;
     node.dataset.id = component.id;
     node.dataset.name = component.name;
     node.style.left = `${component.x}%`;
@@ -930,7 +1290,7 @@ function renderComponents() {
 
     const note = document.createElement("div");
     note.className = "component-note";
-    note.innerHTML = `<strong>${escapeHtml(component.name)}</strong><span>${triggerLabels[component.trigger]} + ${effectLabels[component.effect]}</span>`;
+    note.innerHTML = `<strong>${escapeHtml(component.name)}</strong><span>${triggerLabels[component.trigger]} + ${effectLabels[component.effect] || "None"}</span>`;
 
     node.appendChild(viewport);
     node.appendChild(createRegionLayer(component));
@@ -943,6 +1303,144 @@ function renderComponents() {
     bindComponentEvents(node, component);
     componentLayer.appendChild(node);
   });
+}
+
+function selectedGuide() {
+  return guides.find((guide) => guide.id === selectedGuideId) || null;
+}
+
+function selectedGuides() {
+  const ids = new Set(selectedGuideIds);
+  return guides.filter((guide) => ids.has(guide.id));
+}
+
+function isGuideSelected(id) {
+  return selectedGuideIds.includes(id);
+}
+
+function guideLimit(orientation, record = activeArtboardRecord()) {
+  const settings = record?.artboard || artboard;
+  return orientation === "vertical" ? settings.width : settings.height;
+}
+
+function syncGuideNode(node, guide, record = activeArtboardRecord()) {
+  if (!record) return;
+  const limit = Math.max(1, guideLimit(guide.orientation, record));
+  const frameLeft = workspaceOriginX + record.position.x * boardZoom;
+  const surfaceTop = workspaceOriginY + record.position.y * boardZoom + 24;
+  guide.position = clampNumber(guide.position, 0, limit, limit / 2);
+  node.className = `artboard-guide is-${guide.orientation}${isGuideSelected(guide.id) ? " is-selected" : ""}`;
+  node.dataset.guideId = String(guide.id);
+  node.dataset.positionLabel = `${Math.round(guide.position)}px`;
+  if (guide.orientation === "vertical") {
+    node.style.left = `${frameLeft + guide.position * boardZoom}px`;
+    node.style.setProperty("--guide-label-offset", `${surfaceTop + 4}px`);
+  } else {
+    node.style.top = `${surfaceTop + guide.position * boardZoom}px`;
+    node.style.setProperty("--guide-label-offset", `${frameLeft + 4}px`);
+  }
+}
+
+function syncArtboardGuidePositions(record) {
+  if (!record?.artboardGuideLayer) return;
+  const boardGuides = record.id === activeArtboardId ? guides : (record.guides || []);
+  record.artboardGuideLayer.querySelectorAll(".artboard-guide").forEach((node) => {
+    const guide = boardGuides.find((item) => item.id === Number(node.dataset.guideId));
+    if (guide) syncGuideNode(node, guide, record);
+  });
+}
+
+function syncGuideSelectionVisuals() {
+  artboardGuideLayer?.querySelectorAll(".artboard-guide").forEach((node) => {
+    node.classList.toggle("is-selected", isGuideSelected(Number(node.dataset.guideId)));
+  });
+}
+
+function renderGuides() {
+  if (!artboardGuideLayer) return;
+  artboardGuideLayer.replaceChildren();
+  guides.forEach((guide) => {
+    const node = document.createElement("button");
+    node.type = "button";
+    node.setAttribute("aria-label", `${guide.orientation} guide at ${Math.round(guide.position)} pixels`);
+    syncGuideNode(node, guide, activeArtboardRecord());
+    node.addEventListener("pointerdown", (event) => startGuideDrag(event, guide.id));
+    node.addEventListener("click", (event) => event.stopPropagation());
+    artboardGuideLayer.appendChild(node);
+  });
+}
+
+function addGuide(orientation) {
+  saveHistory();
+  ensureActiveArtboard();
+  const normalizedOrientation = orientation === "vertical" ? "vertical" : "horizontal";
+  const guide = {
+    id: nextGuideId++,
+    orientation: normalizedOrientation,
+    position: guideLimit(normalizedOrientation) / 2
+  };
+  setSelection([]);
+  selectedRegionId = null;
+  guides.push(guide);
+  setGuideSelection([guide.id], guide.id);
+  renderGuides();
+  syncSelectionVisuals();
+  commitActiveArtboardState();
+}
+
+function startGuideDrag(event, guideId) {
+  if (event.button !== 0 || isSpacePanning) return;
+  const guide = guides.find((item) => item.id === guideId);
+  if (!guide || !artSurface) return;
+  event.preventDefault();
+  event.stopPropagation();
+  event.stopImmediatePropagation();
+  saveHistory();
+  setSelection([]);
+  selectedRegionId = null;
+  setGuideSelection([guideId], guideId);
+  syncSelectionVisuals();
+  clearSmartGuides();
+  guideDragState = { guideId, orientation: guide.orientation };
+  window.addEventListener("pointermove", handleGuideDragMove);
+  window.addEventListener("pointerup", handleGuideDragUp, { once: true });
+}
+
+function handleGuideDragMove(event) {
+  if (!guideDragState || !artSurface) return;
+  const guide = guides.find((item) => item.id === guideDragState.guideId);
+  if (!guide) return;
+  const rect = artSurface.getBoundingClientRect();
+  const limit = guideLimit(guide.orientation);
+  const ratio = guide.orientation === "vertical"
+    ? (event.clientX - rect.left) / Math.max(1, rect.width)
+    : (event.clientY - rect.top) / Math.max(1, rect.height);
+  guide.position = clampNumber(ratio * limit, 0, limit, limit / 2);
+  const node = artboardGuideLayer?.querySelector(`[data-guide-id="${guide.id}"]`);
+  if (node) syncGuideNode(node, guide, activeArtboardRecord());
+  if (event.altKey) showMeasurementGuides(guideDistanceMeasures(guide));
+  else clearMeasurementGuides();
+  selectedSummary.textContent = `${guide.orientation === "vertical" ? "Vertical" : "Horizontal"} guide / ${Math.round(guide.position)}px`;
+}
+
+function handleGuideDragUp() {
+  window.removeEventListener("pointermove", handleGuideDragMove);
+  guideDragState = null;
+  clearSmartGuides();
+  commitActiveArtboardState();
+  syncControlsFromSelection();
+}
+
+function removeSelectedGuide() {
+  const ids = new Set(selectedGuideIds);
+  if (!ids.size) return false;
+  saveHistory();
+  guides = guides.filter((guide) => !ids.has(guide.id));
+  setGuideSelection([]);
+  renderGuides();
+  syncControlsFromSelection();
+  commitActiveArtboardState();
+  return true;
 }
 
 function componentVisual(component, className) {
@@ -1769,6 +2267,21 @@ function regionDuration(region) {
   return Math.max(180, 980 - clampNumber(region.speed, 10, 100, defaultRegion.speed) * 7.2);
 }
 
+function hasActiveEditorGesture() {
+  return Boolean(
+    dragState
+    || resizeState
+    || cornerRadiusState
+    || curveHandleState
+    || regionDragState
+    || brushDrawState
+    || marqueeState
+    || stagePanState
+    || artboardDragState
+    || guideDragState
+  );
+}
+
 function applyRegionVars(node, region) {
   clampRegion(region);
   const strength = clampNumber(region.strength, 0, 100, defaultRegion.strength);
@@ -1849,6 +2362,8 @@ function createRegionNode(component, region, index) {
   resizeHandle.addEventListener("pointerdown", (event) => {
     event.preventDefault();
     event.stopPropagation();
+    event.stopImmediatePropagation();
+    clearActiveRegionEffects(component.id);
     selectRegion(component.id, region.id);
     startRegionDrag(event, component.id, region.id, "resize");
   });
@@ -1856,28 +2371,29 @@ function createRegionNode(component, region, index) {
 
   node.addEventListener("pointerenter", (event) => {
     setRegionPointerOrigin(node, event);
-    if (region.trigger === "hover" && window.matchMedia("(hover: hover)").matches) {
+    if (!hasActiveEditorGesture() && region.trigger === "hover" && window.matchMedia("(hover: hover)").matches) {
       activateRegion(component.id, region.id, event);
     }
   });
 
   node.addEventListener("pointermove", (event) => {
     setRegionPointerOrigin(node, event);
-    if (!regionDragState && region.trigger === "move") activateRegion(component.id, region.id, event);
+    if (!hasActiveEditorGesture() && region.trigger === "move") activateRegion(component.id, region.id, event);
   });
 
   node.addEventListener("pointerdown", (event) => {
     if (event.button !== 0) return;
     event.preventDefault();
     event.stopPropagation();
+    event.stopImmediatePropagation();
     if (canStartBrushDraw(component.id)) {
       startBrushRegionDraw(event, component.id);
       return;
     }
     selectRegion(component.id, region.id);
     setRegionPointerOrigin(node, event);
+    clearActiveRegionEffects(component.id);
     startRegionDrag(event, component.id, region.id, "move");
-    if (region.trigger === "drag") activateRegion(component.id, region.id, event);
   });
 
   return node;
@@ -1923,6 +2439,7 @@ function regionTimerKey(componentId, regionId) {
 }
 
 function activateRegion(componentId, regionId, event = null) {
+  if (hasActiveEditorGesture()) return;
   const component = components.find((item) => item.id === componentId);
   const region = component?.regions?.find((item) => item.id === regionId);
   const node = componentLayer.querySelector(`.region-effect-zone[data-component-id="${componentId}"][data-region-id="${regionId}"]`);
@@ -1954,6 +2471,7 @@ function activateRegion(componentId, regionId, event = null) {
 }
 
 function clearActiveRegionEffects(componentId = null) {
+  if (!componentLayer) return;
   activeRegionTimers.forEach((timer, key) => {
     if (componentId !== null && !key.startsWith(`${componentId}:`)) return;
     window.clearTimeout(timer);
@@ -1981,6 +2499,7 @@ function startRegionDrag(event, componentId, regionId, mode) {
   if (!component || !region || !componentNode) return;
 
   saveHistory();
+  clearActiveRegionEffects(componentId);
   clearSmartGuides();
   const rect = componentNode.getBoundingClientRect();
   regionDragState = {
@@ -2022,7 +2541,6 @@ function handleRegionDragMove(event) {
   clampRegion(region);
   syncRegionNode(node, component, region);
   setRegionPointerOrigin(node, event);
-  if (region.trigger === "drag") activateRegion(component.id, region.id, event);
   syncControlsFromSelection();
 }
 
@@ -2384,7 +2902,8 @@ function bindComponentEvents(node, component) {
     event.stopPropagation();
   });
 
-  node.addEventListener("pointerenter", () => {
+  node.addEventListener("pointerenter", (event) => {
+    if (event.altKey) return;
     if (component.trigger === "hover" && window.matchMedia("(hover: hover)").matches) {
       triggerComponent(component.id);
     }
@@ -2801,6 +3320,288 @@ function addNearestDistanceMeasures(axis, group, targets, surface, measures) {
   }
 }
 
+function addArtboardEdgeMeasures(group, surface, measures) {
+  const left = clampPx(group.left, 0, surface.width);
+  const right = clampPx(group.right, 0, surface.width);
+  const top = clampPx(group.top, 0, surface.height);
+  const bottom = clampPx(group.bottom, 0, surface.height);
+  const horizontalLane = clampPx(group.centerY, 12, surface.height - 12);
+  const verticalLane = clampPx(group.centerX, 12, surface.width - 12);
+
+  [
+    horizontalMeasure(0, left, horizontalLane, surface),
+    horizontalMeasure(right, surface.width, horizontalLane, surface),
+    verticalMeasure(0, top, verticalLane, surface),
+    verticalMeasure(bottom, surface.height, verticalLane, surface)
+  ].forEach((measure) => {
+    if (measure) measures.push({ ...measure, kind: "figma-measure" });
+  });
+}
+
+function measurementsBetweenRects(source, target, surface) {
+  const measures = [];
+  if (source.right <= target.left) {
+    const measure = horizontalMeasure(source.right, target.left, horizontalMeasureLane(source, target, surface), surface);
+    if (measure) measures.push({ ...measure, kind: "figma-measure" });
+  } else if (target.right <= source.left) {
+    const measure = horizontalMeasure(target.right, source.left, horizontalMeasureLane(target, source, surface), surface);
+    if (measure) measures.push({ ...measure, kind: "figma-measure" });
+  }
+
+  if (source.bottom <= target.top) {
+    const measure = verticalMeasure(source.bottom, target.top, verticalMeasureLane(source, target, surface), surface);
+    if (measure) measures.push({ ...measure, kind: "figma-measure" });
+  } else if (target.bottom <= source.top) {
+    const measure = verticalMeasure(target.bottom, source.top, verticalMeasureLane(target, source, surface), surface);
+    if (measure) measures.push({ ...measure, kind: "figma-measure" });
+  }
+
+  if (measures.length === 2) {
+    const horizontal = measures.find((measure) => measure.orientation === "horizontal");
+    const vertical = measures.find((measure) => measure.orientation === "vertical");
+    if (horizontal) horizontal.labelTop = clampPx(horizontal.labelTop - 12, 10, surface.height - 10);
+    if (vertical) vertical.labelLeft = clampPx(vertical.labelLeft + 16, 12, surface.width - 12);
+  }
+  return measures;
+}
+
+function figmaMeasurementsForTarget(targetId = null) {
+  if (!selectedIds.length || !artSurface) return [];
+  const selectedIdSet = new Set(selectedIds);
+  const surface = smartGuideSurface();
+  const selectedRects = components
+    .filter((component) => selectedIdSet.has(component.id))
+    .map((component) => rectForSmartGuide(component, surface));
+  if (!selectedRects.length) return [];
+  const selectedBounds = smartGuideBounds(selectedRects);
+
+  if (targetId && !selectedIdSet.has(targetId)) {
+    const target = components.find((component) => component.id === targetId);
+    return target ? measurementsBetweenRects(selectedBounds, rectForSmartGuide(target, surface), surface) : [];
+  }
+
+  const measures = [];
+  addArtboardEdgeMeasures(selectedBounds, surface, measures);
+  return measures;
+}
+
+function guideFigmaMeasurements(guide, targetId = null) {
+  if (!guide || !artSurface) return [];
+  const surface = smartGuideSurface();
+  const target = targetId ? components.find((component) => component.id === targetId) : null;
+  const targetRect = target ? rectForSmartGuide(target, surface) : null;
+  const measures = [];
+
+  if (guide.orientation === "vertical") {
+    const x = clampPx(guide.position / surface.scaleX, 0, surface.width);
+    const lane = targetRect ? clampPx(targetRect.centerY, 12, surface.height - 12) : 18;
+    const segments = targetRect
+      ? x <= targetRect.left
+        ? [[x, targetRect.left]]
+        : x >= targetRect.right
+          ? [[targetRect.right, x]]
+          : [[targetRect.left, x], [x, targetRect.right]]
+      : [[0, x], [x, surface.width]];
+    segments.forEach(([start, end]) => {
+      const measure = horizontalMeasure(start, end, lane, surface);
+      if (measure) measures.push({ ...measure, kind: "guide-distance" });
+    });
+    return measures;
+  }
+
+  const y = clampPx(guide.position / surface.scaleY, 0, surface.height);
+  const lane = targetRect ? clampPx(targetRect.centerX, 12, surface.width - 12) : 18;
+  const segments = targetRect
+    ? y <= targetRect.top
+      ? [[y, targetRect.top]]
+      : y >= targetRect.bottom
+        ? [[targetRect.bottom, y]]
+        : [[targetRect.top, y], [y, targetRect.bottom]]
+    : [[0, y], [y, surface.height]];
+  segments.forEach(([start, end]) => {
+    const measure = verticalMeasure(start, end, lane, surface);
+    if (measure) measures.push({ ...measure, kind: "guide-distance" });
+  });
+  return measures;
+}
+
+function figmaMeasurementsToGuide(guide) {
+  if (!guide || !selectedIds.length || !artSurface) return [];
+  const selectedIdSet = new Set(selectedIds);
+  const surface = smartGuideSurface();
+  const selectedRects = components
+    .filter((component) => selectedIdSet.has(component.id))
+    .map((component) => rectForSmartGuide(component, surface));
+  if (!selectedRects.length) return [];
+  const bounds = smartGuideBounds(selectedRects);
+  const measures = [];
+
+  if (guide.orientation === "vertical") {
+    const x = clampPx(guide.position / surface.scaleX, 0, surface.width);
+    const lane = clampPx(bounds.centerY, 12, surface.height - 12);
+    const segments = x <= bounds.left
+      ? [[x, bounds.left]]
+      : x >= bounds.right
+        ? [[bounds.right, x]]
+        : [[bounds.left, x], [x, bounds.right]];
+    segments.forEach(([start, end]) => {
+      const measure = horizontalMeasure(start, end, lane, surface);
+      if (measure) measures.push({ ...measure, kind: "figma-measure" });
+    });
+    return measures;
+  }
+
+  const y = clampPx(guide.position / surface.scaleY, 0, surface.height);
+  const lane = clampPx(bounds.centerX, 12, surface.width - 12);
+  const segments = y <= bounds.top
+    ? [[y, bounds.top]]
+    : y >= bounds.bottom
+      ? [[bounds.bottom, y]]
+      : [[bounds.top, y], [y, bounds.bottom]];
+  segments.forEach(([start, end]) => {
+    const measure = verticalMeasure(start, end, lane, surface);
+    if (measure) measures.push({ ...measure, kind: "figma-measure" });
+  });
+  return measures;
+}
+
+function showMeasurementGuides(measures) {
+  renderSmartGuides([], measures);
+  measurementGuidesVisible = Boolean(measures.length);
+}
+
+function clearMeasurementGuides() {
+  if (!measurementGuidesVisible) return;
+  clearSmartGuides();
+}
+
+function renderFigmaMeasurementAtPoint(clientX, clientY) {
+  const guide = selectedGuide();
+  if (!artSurface || (!selectedIds.length && !guide) || hasActiveEditorGesture()) {
+    clearMeasurementGuides();
+    return;
+  }
+  const element = document.elementFromPoint(clientX, clientY);
+  const hoveredGuideNode = element?.closest(".artboard-guide");
+  const hoveredGuideId = Number(hoveredGuideNode?.dataset.guideId) || null;
+  const hoveredGuide = hoveredGuideId ? guides.find((item) => item.id === hoveredGuideId) : null;
+  if (!guide && hoveredGuide && selectedIds.length) {
+    showMeasurementGuides(figmaMeasurementsToGuide(hoveredGuide));
+    return;
+  }
+  const hoveredSurface = element?.closest(".art-surface");
+  const surfaceRect = artSurface.getBoundingClientRect();
+  const pointIsInsideSurface = clientX >= surfaceRect.left
+    && clientX <= surfaceRect.right
+    && clientY >= surfaceRect.top
+    && clientY <= surfaceRect.bottom;
+  if (!guide && hoveredSurface !== artSurface) {
+    clearMeasurementGuides();
+    return;
+  }
+  const targetNode = pointIsInsideSurface ? element?.closest(".art-component") : null;
+  const targetId = Number(targetNode?.dataset.id) || null;
+  if (guide) {
+    showMeasurementGuides(guideFigmaMeasurements(guide, targetId));
+    return;
+  }
+  if (targetId && selectedIds.includes(targetId)) {
+    clearMeasurementGuides();
+    return;
+  }
+  showMeasurementGuides(figmaMeasurementsForTarget(targetId));
+}
+
+function handleMeasurementPointerMove(event) {
+  lastCanvasPointer = { clientX: event.clientX, clientY: event.clientY };
+  if (!event.altKey || hasActiveEditorGesture()) {
+    if (!hasActiveEditorGesture()) clearMeasurementGuides();
+    return;
+  }
+  renderFigmaMeasurementAtPoint(event.clientX, event.clientY);
+}
+
+function handleMeasurementPointerLeave() {
+  lastCanvasPointer = null;
+  clearMeasurementGuides();
+}
+
+function guideDistanceMeasures(guide) {
+  if (!guide || !artSurface) return [];
+  const surface = smartGuideSurface();
+  const targets = components.map((component) => ({
+    id: component.id,
+    rect: rectForSmartGuide(component, surface)
+  }));
+
+  const nearestCandidate = (candidates) => candidates.sort((a, b) => {
+    const distanceDelta = a.distance - b.distance;
+    if (Math.abs(distanceDelta) > 0.01) return distanceDelta;
+    if (a.source === b.source) return 0;
+    return a.source === "component" ? -1 : 1;
+  })[0];
+
+  if (guide.orientation === "vertical") {
+    const guideX = clampPx(guide.position / surface.scaleX, 0, surface.width);
+    const candidates = [
+      { source: "artboard", distance: guideX, start: 0, end: guideX, lane: 18 },
+      { source: "artboard", distance: surface.width - guideX, start: guideX, end: surface.width, lane: 18 }
+    ];
+    targets.forEach((target) => {
+      if (target.rect.right <= guideX) {
+        candidates.push({
+          source: "component",
+          distance: guideX - target.rect.right,
+          start: target.rect.right,
+          end: guideX,
+          lane: clampPx(target.rect.centerY, 12, surface.height - 12)
+        });
+      }
+      if (target.rect.left >= guideX) {
+        candidates.push({
+          source: "component",
+          distance: target.rect.left - guideX,
+          start: guideX,
+          end: target.rect.left,
+          lane: clampPx(target.rect.centerY, 12, surface.height - 12)
+        });
+      }
+    });
+    const nearest = nearestCandidate(candidates);
+    const measure = horizontalMeasure(nearest.start, nearest.end, nearest.lane, surface);
+    return measure ? [{ ...measure, kind: "guide-distance" }] : [];
+  }
+
+  const guideY = clampPx(guide.position / surface.scaleY, 0, surface.height);
+  const candidates = [
+    { source: "artboard", distance: guideY, start: 0, end: guideY, lane: 18 },
+    { source: "artboard", distance: surface.height - guideY, start: guideY, end: surface.height, lane: 18 }
+  ];
+  targets.forEach((target) => {
+    if (target.rect.bottom <= guideY) {
+      candidates.push({
+        source: "component",
+        distance: guideY - target.rect.bottom,
+        start: target.rect.bottom,
+        end: guideY,
+        lane: clampPx(target.rect.centerX, 12, surface.width - 12)
+      });
+    }
+    if (target.rect.top >= guideY) {
+      candidates.push({
+        source: "component",
+        distance: target.rect.top - guideY,
+        start: guideY,
+        end: target.rect.top,
+        lane: clampPx(target.rect.centerX, 12, surface.width - 12)
+      });
+    }
+  });
+  const nearest = nearestCandidate(candidates);
+  const measure = verticalMeasure(nearest.start, nearest.end, nearest.lane, surface);
+  return measure ? [{ ...measure, kind: "guide-distance" }] : [];
+}
+
 function renderSmartGuides(guides, measures) {
   if (!smartGuideLayer) return;
   smartGuideLayer.replaceChildren();
@@ -2822,7 +3623,7 @@ function renderSmartGuides(guides, measures) {
 
   measures.forEach((measure) => {
     const line = document.createElement("div");
-    line.className = `smart-distance is-${measure.orientation}`;
+    line.className = `smart-distance is-${measure.orientation}${measure.kind ? ` is-${measure.kind}` : ""}`;
     if (measure.orientation === "horizontal") {
       line.style.left = `${measure.left}px`;
       line.style.top = `${measure.top}px`;
@@ -2835,7 +3636,7 @@ function renderSmartGuides(guides, measures) {
     smartGuideLayer.appendChild(line);
 
     const label = document.createElement("div");
-    label.className = "smart-distance-label";
+    label.className = `smart-distance-label${measure.kind ? ` is-${measure.kind}` : ""}`;
     label.textContent = measure.label;
     label.style.left = `${measure.labelLeft}px`;
     label.style.top = `${measure.labelTop}px`;
@@ -2845,6 +3646,7 @@ function renderSmartGuides(guides, measures) {
 
 function clearSmartGuides() {
   if (smartGuideLayer) smartGuideLayer.replaceChildren();
+  measurementGuidesVisible = false;
 }
 
 function resolveSmartGuides(proposedItems, movingIds, lockedSnaps = {}) {
@@ -2992,7 +3794,7 @@ function rectsIntersect(a, b) {
 
 function startMarqueeSelection(event) {
   if (event.button !== 0 || event.target.closest(".art-component")) return;
-  if (artSurface.classList.contains("is-hidden")) return;
+  if (!artSurface) return;
 
   event.preventDefault();
   clearSmartGuides();
@@ -3001,10 +3803,14 @@ function startMarqueeSelection(event) {
     startX: start.x,
     startY: start.y,
     baseIds: event.shiftKey ? [...selectedIds] : [],
+    baseGuideIds: event.shiftKey ? [...selectedGuideIds] : [],
     moved: false
   };
 
-  if (!event.shiftKey) setSelection([]);
+  if (!event.shiftKey) {
+    setSelection([]);
+    setGuideSelection([]);
+  }
   marqueeNode = document.createElement("div");
   marqueeNode.className = "selection-marquee";
   artSurface.appendChild(marqueeNode);
@@ -3041,14 +3847,21 @@ function handleMarqueeMove(event) {
       return node && rectsIntersect(node.getBoundingClientRect(), selectionRect);
     })
     .map((component) => component.id);
+  const hitGuideIds = Array.from(artboardGuideLayer?.querySelectorAll(".artboard-guide") || [])
+    .filter((node) => rectsIntersect(node.getBoundingClientRect(), selectionRect))
+    .map((node) => Number(node.dataset.guideId));
 
-  setSelection([...marqueeState.baseIds, ...hitIds]);
+  setSelection([...marqueeState.baseIds, ...hitIds], { preserveGuides: true });
+  setGuideSelection([...marqueeState.baseGuideIds, ...hitGuideIds], hitGuideIds[hitGuideIds.length - 1]);
   syncSelectionVisuals();
 }
 
 function handleMarqueeUp() {
   window.removeEventListener("pointermove", handleMarqueeMove);
-  if (!marqueeState?.moved && !marqueeState?.baseIds.length) setSelection([]);
+  if (!marqueeState?.moved && !marqueeState?.baseIds.length && !marqueeState?.baseGuideIds.length) {
+    setSelection([]);
+    setGuideSelection([]);
+  }
   marqueeNode?.remove();
   marqueeNode = null;
   marqueeState = null;
@@ -3259,7 +4072,7 @@ function renderComponentList() {
     button.className = `component-item${isSelected(component.id) ? " is-selected" : ""}`;
     const actionText = component.actions?.length ? ` / ${component.actions.length} actions` : "";
     const regionText = component.regions?.length ? ` / ${component.regions.length} areas` : "";
-    button.innerHTML = `<span>${escapeHtml(component.name)}</span><small>${component.type} / ${effectLabels[component.effect]}${actionText}${regionText}</small>`;
+    button.innerHTML = `<span>${escapeHtml(component.name)}</span><small>${component.type} / ${effectLabels[component.effect] || "None"}${actionText}${regionText}</small>`;
     button.addEventListener("click", (event) => {
       if (event.shiftKey) toggleSelection(component.id);
       else selectOnly(component.id);
@@ -3477,7 +4290,7 @@ function syncSoundControlsFromSelection(selected, component) {
 }
 
 function syncEffectControlVisibility(effect = effectSelect.value) {
-  const config = effectControlConfigs[effect] || effectControlConfigs.zoom;
+  const config = effectControlConfigs[effect] || effectControlConfigs.none;
   setVisible(zoomControl, Boolean(config.zoom));
   setVisible(shakeControl, Boolean(config.shake));
   setVisible(speedControl, Boolean(config.speed));
@@ -3648,11 +4461,18 @@ function clearSelectedActions() {
 
 function syncControlsFromSelection() {
   const selected = selectedComponents();
-  const component = selectedComponent();
+  const guideSelection = selectedGuides();
+  const component = guideSelection.length ? null : selectedComponent();
+  const guide = selectedGuide();
+  const totalSelectionCount = selected.length + guideSelection.length;
   updateInspectorVisibility(component);
 
   if (!component) {
-    selectedSummary.textContent = "None";
+    selectedSummary.textContent = totalSelectionCount > 1
+      ? `${totalSelectionCount} selected`
+      : guide
+      ? `${guide.orientation === "vertical" ? "Vertical" : "Horizontal"} guide / ${Math.round(guide.position)}px`
+      : activeArtboardRecord()?.name || "None";
     effectSummary.textContent = "None";
     fillInput.disabled = false;
     fillTransparentToggle.checked = false;
@@ -3738,7 +4558,7 @@ function syncControlsFromSelection() {
   selectedSummary.textContent = selected.length > 1 ? `${selected.length} selected` : region ? `${component.name} / ${region.name}` : component.name;
   effectSummary.textContent = component.actions?.length
     ? `${triggerLabels[component.trigger]} + ${component.actions.length} actions`
-    : `${triggerLabels[component.trigger]} + ${effectLabels[component.effect]}`;
+    : `${triggerLabels[component.trigger]} + ${effectLabels[component.effect] || "None"}`;
   updateAllRangeFills();
 }
 function updateRangeFill(control) {
@@ -4109,6 +4929,7 @@ function triggerComponent(id) {
   }
 
   playComponentSound(component);
+  if (!component.effect || component.effect === "none") return;
   const effectClass = `effect-${component.effect}`;
   node.classList.add(effectClass);
 
@@ -4249,9 +5070,29 @@ function removeSelectedComponent() {
   components = components.filter((component) => !ids.has(component.id));
   setSelection([]);
   if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
-  emptyState.classList.add("is-hidden");
-  artSurface.classList.remove("is-hidden");
+  updateArtboardEmptyState();
   render();
+}
+
+function removeCombinedSelection() {
+  const componentIds = new Set(selectedIds);
+  const guideIds = new Set(selectedGuideIds);
+  if (!componentIds.size || !guideIds.size) return false;
+
+  saveHistory();
+  cancelBrushDrawMode();
+  componentIds.forEach((id) => {
+    stopComponentActionRun(id);
+    clearActiveRegionEffects(id);
+  });
+  components = components.filter((component) => !componentIds.has(component.id));
+  guides = guides.filter((guide) => !guideIds.has(guide.id));
+  setSelection([]);
+  setGuideSelection([]);
+  if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+  updateArtboardEmptyState();
+  render();
+  return true;
 }
 
 function syncStagePanMode() {
@@ -4263,13 +5104,16 @@ function handleStageWheel(event) {
   if (!event.ctrlKey && !event.metaKey) return;
   event.preventDefault();
   event.stopPropagation();
+  const targetSurface = event.target instanceof Element ? event.target.closest(".art-surface") : null;
+  const targetArtboardId = Number(targetSurface?.dataset.artboardId);
+  if (targetArtboardId && targetArtboardId !== activeArtboardId) activateArtboard(targetArtboardId);
   const direction = event.deltaY < 0 ? 1 : -1;
-  const factor = direction > 0 ? 1.08 : 1 / 1.08;
+  const factor = direction > 0 ? 1.12 : 1 / 1.12;
   setBoardZoom(boardZoom * factor, event);
 }
 
 function startStagePan(event) {
-  if (!isSpacePanning || event.button !== 0 || artSurface.classList.contains("is-hidden")) return;
+  if (!isSpacePanning || event.button !== 0) return;
   event.preventDefault();
   event.stopPropagation();
   stagePanState = {
@@ -4306,6 +5150,18 @@ function isTextEntryTarget(target) {
 function handleEditorShortcut(event) {
   const key = event.key.toLowerCase();
   const isTextEntry = isTextEntryTarget(event.target);
+
+  if (!isTextEntry && event.key === "Alt") {
+    event.preventDefault();
+    if (!hasActiveEditorGesture()) {
+      if (lastCanvasPointer) {
+        renderFigmaMeasurementAtPoint(lastCanvasPointer.clientX, lastCanvasPointer.clientY);
+      } else if (selectedGuide()) {
+        showMeasurementGuides(guideFigmaMeasurements(selectedGuide()));
+      }
+    }
+    return;
+  }
 
   if (!isTextEntry && event.code === "Space") {
     event.preventDefault();
@@ -4344,6 +5200,8 @@ function handleEditorShortcut(event) {
   if (event.key === "Delete" || event.key === "Backspace") {
     if (isTextEntry) return;
     event.preventDefault();
+    if (removeCombinedSelection()) return;
+    if (removeSelectedGuide()) return;
     if (selectedRegion()) {
       removeSelectedRegion();
       return;
@@ -4353,9 +5211,14 @@ function handleEditorShortcut(event) {
 }
 
 function handleEditorKeyUp(event) {
-  if (event.code !== "Space") return;
-  isSpacePanning = false;
-  syncStagePanMode();
+  if (event.key === "Alt") {
+    clearMeasurementGuides();
+    return;
+  }
+  if (event.code === "Space") {
+    isSpacePanning = false;
+    syncStagePanMode();
+  }
 }
 function bringSelectedFront() {
   const ids = new Set(selectedIds);
@@ -4377,13 +5240,16 @@ function resetDemo() {
   saveHistory();
   stopAllActionRuns();
   stopActiveSounds();
-  clearActiveRegionEffects();
+  if (componentLayer) clearActiveRegionEffects();
   cancelBrushDrawMode();
-  components = [];
-  setSelection([]);
+  clearArtboards();
   nextId = 1;
   nextRegionId = 1;
+  nextArtboardId = 1;
+  nextGuideId = 1;
   selectedRegionId = null;
+  selectedGuideId = null;
+  selectedGuideIds = [];
   interactions = 0;
   dragState = null;
   resizeState = null;
@@ -4392,6 +5258,13 @@ function resetDemo() {
   regionDragState = null;
   brushDrawComponentId = null;
   brushDrawState = null;
+  window.removeEventListener("pointermove", handleArtboardDragMove);
+  window.removeEventListener("pointermove", handleGuideDragMove);
+  artboardDragState = null;
+  guideDragState = null;
+  measurementGuidesVisible = false;
+  lastCanvasPointer = null;
+  document.body.classList.remove("is-artboard-dragging");
   isSpacePanning = false;
   stagePanState = null;
   boardZoom = 1;
@@ -4399,12 +5272,9 @@ function resetDemo() {
   syncStagePanMode();
   artboard = { ...defaultArtboard };
   syncArtboardInputs();
-  applyArtboardSettings();
   componentInput.value = "";
-  componentLayer.innerHTML = "";
   clearSmartGuides();
-  emptyState.classList.remove("is-hidden");
-  artSurface.classList.add("is-hidden");
+  updateArtboardEmptyState();
   interactionCount.textContent = "0";
   selectedSummary.textContent = "None";
   effectSummary.textContent = "None";
@@ -4428,8 +5298,11 @@ function escapeHtml(value) {
 componentInput.addEventListener("change", (event) => loadComponentFiles(event.target.files));
 sampleButton.addEventListener("click", loadSamples);
 resetButton.addEventListener("click", resetDemo);
+addArtboardButton.addEventListener("click", () => createArtboard());
 shapeButtons.forEach((button) => button.addEventListener("click", () => addShape(button.dataset.shape)));
 addTextButton.addEventListener("click", addText);
+addHorizontalGuideButton.addEventListener("click", () => addGuide("horizontal"));
+addVerticalGuideButton.addEventListener("click", () => addGuide("vertical"));
 bringFrontButton.addEventListener("click", bringSelectedFront);
 duplicateButton.addEventListener("click", duplicateSelected);
 testEffectButton.addEventListener("click", () => {
@@ -4449,7 +5322,8 @@ window.addEventListener("keydown", handleEditorShortcut);
 window.addEventListener("keyup", handleEditorKeyUp);
 stage.addEventListener("wheel", handleStageWheel, { passive: false, capture: true });
 stage.addEventListener("pointerdown", startStagePan, { capture: true });
-artSurface.addEventListener("pointerdown", startMarqueeSelection);
+stage.addEventListener("pointermove", handleMeasurementPointerMove);
+stage.addEventListener("pointerleave", handleMeasurementPointerLeave);
 [artboardWidthInput, artboardHeightInput, artboardBgInput, artboardTransparentToggle].forEach((control) => {
   control.addEventListener("input", syncArtboardFromControls);
   control.addEventListener("change", syncArtboardFromControls);
