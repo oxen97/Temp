@@ -6,8 +6,10 @@ const addArtboardButton = document.querySelector("#addArtboardButton");
 const addTextButton = document.querySelector("#addTextButton");
 const addHorizontalGuideButton = document.querySelector("#addHorizontalGuideButton");
 const addVerticalGuideButton = document.querySelector("#addVerticalGuideButton");
+const insertToolButtons = [...shapeButtons, addTextButton, addHorizontalGuideButton, addVerticalGuideButton];
 const bringFrontButton = document.querySelector("#bringFrontButton");
 const duplicateButton = document.querySelector("#duplicateButton");
+const alignmentButtons = document.querySelectorAll("[data-align]");
 const testEffectButton = document.querySelector("#testEffectButton");
 const componentList = document.querySelector("#componentList");
 const triggerSelect = document.querySelector("#triggerSelect");
@@ -87,6 +89,9 @@ const statusText = document.querySelector("#statusText");
 const emptyState = document.querySelector("#emptyState");
 const stage = document.querySelector("#stage");
 const artboardWorkspace = document.querySelector("#artboardWorkspace");
+const rulerOverlay = document.querySelector("#rulerOverlay");
+const horizontalRuler = document.querySelector("#horizontalRuler");
+const verticalRuler = document.querySelector("#verticalRuler");
 let artSurface = null;
 let componentLayer = null;
 let smartGuideLayer = null;
@@ -296,6 +301,15 @@ const smartGuideMeasureLimitPx = 360;
 const workspaceInsetX = 520;
 const workspaceInsetY = 356;
 const workspaceCoordinateLimit = 100000;
+const componentCoordinateLimit = 1000;
+const rulerSize = 24;
+const canvasRecordSettings = {
+  width: 4000,
+  height: 3000,
+  background: "#ffffff",
+  transparent: true
+};
+const canvasRecordPosition = { x: -1000, y: -700 };
 
 const sampleComponents = [
   { name: "Green Orb", src: "./sample-components/01-green-orb.svg", x: 10, y: 10, w: 20, h: 28, effect: "zoom", trigger: "click", zoom: 150, shake: 12, regions: [{ name: "Orb bulge", shape: "ellipse", x: 24, y: 22, w: 48, h: 48, effect: "bulge", trigger: "hover", strength: 58, softness: 72, speed: 58 }] },
@@ -319,6 +333,8 @@ const defaultArtboard = {
 let artboard = { ...defaultArtboard };
 let artboards = [];
 let activeArtboardId = null;
+let selectedArtboardId = null;
+let selectedArtboardIds = [];
 let nextArtboardId = 1;
 let boardZoom = 1;
 let workspaceOriginX = workspaceInsetX;
@@ -349,6 +365,7 @@ const activeRegionCanvasRuns = new Map();
 const drawableImageCache = new Map();
 let nextRegionVectorId = 1;
 let dragState = null;
+let layerDragState = null;
 let resizeState = null;
 let cornerRadiusState = null;
 let curveHandleState = null;
@@ -357,8 +374,17 @@ let brushDrawComponentId = null;
 let brushDrawState = null;
 let marqueeState = null;
 let marqueeNode = null;
+let workspaceMarqueeState = null;
+let workspaceMarqueeNode = null;
 let artboardDragState = null;
+let artboardDragDidMove = false;
 let guideDragState = null;
+let rulerGuideDragState = null;
+let activeInsertTool = null;
+let insertDrawState = null;
+let insertPreviewNode = null;
+let rulersVisible = false;
+let rulerRenderFrame = 0;
 let measurementGuidesVisible = false;
 let lastCanvasPointer = null;
 let copiedComponent = null;
@@ -369,6 +395,24 @@ let isRestoringHistory = false;
 
 function activeArtboardRecord() {
   return artboards.find((record) => record.id === activeArtboardId) || null;
+}
+
+function selectedArtboardRecords() {
+  const ids = new Set(selectedArtboardIds);
+  return artboards.filter((record) => !record.isCanvas && ids.has(record.id));
+}
+
+function setArtboardSelection(ids, primaryId = null) {
+  const existingIds = new Set(artboards.filter((record) => !record.isCanvas).map((record) => record.id));
+  selectedArtboardIds = Array.from(new Set(ids)).filter((id) => existingIds.has(id));
+  selectedArtboardId = primaryId && selectedArtboardIds.includes(primaryId)
+    ? primaryId
+    : selectedArtboardIds[selectedArtboardIds.length - 1] || null;
+}
+
+function clearArtboardSelection() {
+  selectedArtboardIds = [];
+  selectedArtboardId = null;
 }
 
 function commitActiveArtboardState() {
@@ -444,12 +488,14 @@ function refreshWorkspaceBounds({ preserveViewport = false } = {}) {
     stage.scrollLeft += workspaceOriginX - previousOriginX;
     stage.scrollTop += workspaceOriginY - previousOriginY;
   }
+  scheduleRulerRender();
 }
 
 function nextArtboardPosition(settings = defaultArtboard) {
-  if (!artboards.length) return { x: 0, y: 0 };
-  const right = Math.max(...artboards.map((record) => record.position.x + record.artboard.width));
-  const top = Math.min(...artboards.map((record) => record.position.y));
+  const frameRecords = artboards.filter((record) => !record.isCanvas);
+  if (!frameRecords.length) return { x: 0, y: 0 };
+  const right = Math.max(...frameRecords.map((record) => record.position.x + record.artboard.width));
+  const top = Math.min(...frameRecords.map((record) => record.position.y));
   return { x: right + 96, y: top };
 }
 
@@ -458,7 +504,8 @@ function createArtboardRecord(data = {}) {
   nextArtboardId = Math.max(nextArtboardId, id + 1);
   const record = {
     id,
-    name: data.name || `Artboard ${id}`,
+    name: data.name || (data.isCanvas ? "Canvas" : `Artboard ${id}`),
+    isCanvas: Boolean(data.isCanvas),
     artboard: { ...defaultArtboard, ...(data.artboard || {}) },
     position: {
       x: clampNumber(data.position?.x ?? data.x, -workspaceCoordinateLimit, workspaceCoordinateLimit, 0),
@@ -471,7 +518,9 @@ function createArtboardRecord(data = {}) {
     selectedRegionId: data.selectedRegionId || null,
     selectedGuideId: data.selectedGuideId || null,
     selectedGuideIds: [...(data.selectedGuideIds || (data.selectedGuideId ? [data.selectedGuideId] : []))],
+    expanded: data.expanded !== false,
     frame: null,
+    label: null,
     surface: null,
     componentLayer: null,
     smartGuideLayer: null,
@@ -479,7 +528,7 @@ function createArtboardRecord(data = {}) {
   };
 
   const frame = document.createElement("div");
-  frame.className = "artboard-frame";
+  frame.className = `artboard-frame${record.isCanvas ? " is-canvas-record" : ""}`;
   frame.dataset.artboardId = String(id);
 
   const label = document.createElement("button");
@@ -489,15 +538,27 @@ function createArtboardRecord(data = {}) {
   label.addEventListener("pointerdown", (event) => startArtboardDrag(event, id));
   label.addEventListener("click", (event) => {
     event.stopPropagation();
-    activateArtboard(id);
+    if (artboardDragDidMove) {
+      artboardDragDidMove = false;
+      return;
+    }
+    if (event.shiftKey) {
+      syncSelectionVisuals();
+      return;
+    }
+    selectArtboard(id);
   });
 
   const surface = document.createElement("div");
-  surface.className = "art-surface";
+  surface.className = `art-surface${record.isCanvas ? " is-canvas-surface" : ""}`;
   surface.dataset.artboardId = String(id);
   surface.setAttribute("aria-label", record.name);
-  surface.addEventListener("pointerdown", () => {
+  surface.addEventListener("pointerdown", (event) => {
+    if (!record.isCanvas && !activeInsertTool && !event.target.closest(".art-component")) {
+      setArtboardSelection(event.shiftKey ? [...selectedArtboardIds, id] : [id], id);
+    }
     if (activeArtboardId !== id) activateArtboard(id);
+    if (activeInsertTool) startInsertDraw(event, id);
   }, { capture: true });
   surface.addEventListener("pointerdown", startMarqueeSelection);
 
@@ -506,7 +567,7 @@ function createArtboardRecord(data = {}) {
   smartLayer.setAttribute("aria-hidden", "true");
 
   const guideLayer = document.createElement("div");
-  guideLayer.className = "guide-layer";
+  guideLayer.className = `guide-layer${record.isCanvas ? " is-canvas-guide-layer" : ""}`;
 
   const layer = document.createElement("div");
   layer.className = "component-layer";
@@ -515,6 +576,7 @@ function createArtboardRecord(data = {}) {
   frame.append(label, surface);
   artboardWorkspace.append(frame, guideLayer);
   record.frame = frame;
+  record.label = label;
   record.surface = surface;
   record.componentLayer = layer;
   record.smartGuideLayer = smartLayer;
@@ -528,7 +590,7 @@ function updateArtboardEmptyState() {
 }
 
 function focusArtboard(record) {
-  if (!record?.surface) return;
+  if (!record?.surface || record.isCanvas) return;
   window.requestAnimationFrame(() => {
     const stageRect = stage.getBoundingClientRect();
     const surfaceRect = record.surface.getBoundingClientRect();
@@ -539,21 +601,29 @@ function focusArtboard(record) {
 
 function startArtboardDrag(event, artboardId) {
   if (event.button !== 0 || isSpacePanning) return;
+  if (!selectedArtboardIds.includes(artboardId)) {
+    setArtboardSelection(event.shiftKey ? [...selectedArtboardIds, artboardId] : [artboardId], artboardId);
+  }
   const record = activateArtboard(artboardId);
-  if (!record) return;
+  if (!record || record.isCanvas) return;
   event.preventDefault();
   event.stopPropagation();
   event.stopImmediatePropagation();
+  const historyLengthBeforeDrag = historyStack.length;
   saveHistory();
   setSelection([]);
   setGuideSelection([]);
   syncSelectionVisuals();
+  const movingRecords = selectedArtboardRecords();
+  artboardDragDidMove = false;
   artboardDragState = {
     id: artboardId,
+    ids: movingRecords.map((item) => item.id),
     startX: event.clientX,
     startY: event.clientY,
-    baseX: record.position.x,
-    baseY: record.position.y
+    bases: movingRecords.map((item) => ({ id: item.id, x: item.position.x, y: item.position.y })),
+    moved: false,
+    historyEntryAdded: historyStack.length > historyLengthBeforeDrag
   };
   document.body.classList.add("is-artboard-dragging");
   window.addEventListener("pointermove", handleArtboardDragMove);
@@ -562,20 +632,26 @@ function startArtboardDrag(event, artboardId) {
 
 function handleArtboardDragMove(event) {
   if (!artboardDragState) return;
-  const record = artboards.find((item) => item.id === artboardDragState.id);
-  if (!record) return;
   const dx = (event.clientX - artboardDragState.startX) / boardZoom;
   const dy = (event.clientY - artboardDragState.startY) / boardZoom;
-  record.position.x = clampNumber(artboardDragState.baseX + dx, -workspaceCoordinateLimit, workspaceCoordinateLimit, artboardDragState.baseX);
-  record.position.y = clampNumber(artboardDragState.baseY + dy, -workspaceCoordinateLimit, workspaceCoordinateLimit, artboardDragState.baseY);
+  if (Math.abs(dx) + Math.abs(dy) > 1) artboardDragState.moved = true;
+  artboardDragState.bases.forEach((base) => {
+    const record = artboards.find((item) => item.id === base.id);
+    if (!record) return;
+    record.position.x = clampNumber(base.x + dx, -workspaceCoordinateLimit, workspaceCoordinateLimit, base.x);
+    record.position.y = clampNumber(base.y + dy, -workspaceCoordinateLimit, workspaceCoordinateLimit, base.y);
+  });
   refreshWorkspaceBounds({ preserveViewport: true });
 }
 
 function handleArtboardDragUp() {
   window.removeEventListener("pointermove", handleArtboardDragMove);
+  artboardDragDidMove = Boolean(artboardDragState?.moved);
+  if (!artboardDragState?.moved && artboardDragState?.historyEntryAdded) historyStack.pop();
   artboardDragState = null;
   document.body.classList.remove("is-artboard-dragging");
   commitActiveArtboardState();
+  window.setTimeout(() => { artboardDragDidMove = false; }, 0);
 }
 
 function activateArtboard(id, { focus = false, renderBoard = false } = {}) {
@@ -587,6 +663,7 @@ function activateArtboard(id, { focus = false, renderBoard = false } = {}) {
     cancelBrushDrawMode();
     commitActiveArtboardState();
     setActiveArtboardRefs(record);
+    if (!selectedArtboardIds.includes(id)) clearArtboardSelection();
   }
 
   artboards.forEach((item) => {
@@ -607,6 +684,23 @@ function activateArtboard(id, { focus = false, renderBoard = false } = {}) {
   return record;
 }
 
+function selectArtboard(id, { focus = false, toggle = false } = {}) {
+  const existing = selectedArtboardIds.includes(id);
+  if (toggle && existing) {
+    setArtboardSelection(selectedArtboardIds.filter((selected) => selected !== id));
+    syncSelectionVisuals();
+    return artboards.find((record) => record.id === id) || null;
+  }
+  setArtboardSelection(toggle ? [...selectedArtboardIds, id] : [id], id);
+  const record = activateArtboard(id, { focus });
+  if (!record || record.isCanvas) return null;
+  setSelection([]);
+  setGuideSelection([]);
+  selectedRegionId = null;
+  syncSelectionVisuals();
+  return record;
+}
+
 function createArtboard({ save = true, focus = true, artboard: settings = null } = {}) {
   if (save) saveHistory();
   commitActiveArtboardState();
@@ -614,6 +708,7 @@ function createArtboard({ save = true, focus = true, artboard: settings = null }
   const record = createArtboardRecord({ artboard: nextSettings, position: nextArtboardPosition(nextSettings) });
   artboards.push(record);
   setActiveArtboardRefs(record);
+  setArtboardSelection([record.id], record.id);
   artboards.forEach((item) => {
     const isActive = item.id === record.id;
     item.frame?.classList.toggle("is-active", isActive);
@@ -628,6 +723,26 @@ function createArtboard({ save = true, focus = true, artboard: settings = null }
   return record;
 }
 
+function canvasRecord() {
+  return artboards.find((record) => record.isCanvas) || null;
+}
+
+function ensureCanvasRecord() {
+  const existing = canvasRecord();
+  if (existing) return existing;
+  commitActiveArtboardState();
+  const record = createArtboardRecord({
+    name: "Canvas",
+    isCanvas: true,
+    artboard: canvasRecordSettings,
+    position: canvasRecordPosition
+  });
+  artboards.unshift(record);
+  updateArtboardEmptyState();
+  refreshWorkspaceBounds({ preserveViewport: true });
+  return record;
+}
+
 function ensureActiveArtboard() {
   return activeArtboardRecord() || createArtboard({ save: false, focus: true });
 }
@@ -639,6 +754,7 @@ function clearArtboards() {
   });
   artboards = [];
   activeArtboardId = null;
+  clearArtboardSelection();
   workspaceOriginX = workspaceInsetX;
   workspaceOriginY = workspaceInsetY;
   setActiveArtboardRefs(null);
@@ -663,12 +779,14 @@ function setGuideSelection(ids, primaryId = null) {
   selectedGuideId = primaryId && selectedGuideIds.includes(primaryId)
     ? primaryId
     : selectedGuideIds[selectedGuideIds.length - 1] || null;
+  if (selectedGuideIds.length) clearArtboardSelection();
 }
 
 function setSelection(ids, { preserveGuides = false } = {}) {
   const existingIds = new Set(components.map((component) => component.id));
   selectedIds = Array.from(new Set(ids)).filter((id) => existingIds.has(id));
   selectedId = selectedIds[selectedIds.length - 1] || null;
+  if (selectedIds.length) clearArtboardSelection();
   if (selectedIds.length && !preserveGuides) setGuideSelection([]);
   if (selectedRegionId && !components.some((component) => selectedIds.includes(component.id) && component.regions?.some((region) => region.id === selectedRegionId))) {
     selectedRegionId = null;
@@ -698,6 +816,11 @@ function syncSelectionVisuals() {
       const id = Number(node.dataset.id);
       node.classList.toggle("is-selected", isSelected(id));
       node.classList.toggle("has-selected-region", Boolean(selectedRegionId && components.find((component) => component.id === id)?.regions?.some((region) => region.id === selectedRegionId)));
+    });
+    artboards.forEach((record) => {
+      const selected = selectedArtboardIds.includes(record.id);
+      record.frame?.classList.toggle("is-artboard-selected", selected);
+      record.label?.setAttribute("aria-pressed", String(selected));
     });
     syncGuideSelectionVisuals();
     renderComponentList();
@@ -761,6 +884,7 @@ function captureState() {
     artboards: artboards.map((record) => ({
       id: record.id,
       name: record.name,
+      isCanvas: record.isCanvas,
       artboard: { ...record.artboard },
       position: { ...record.position },
       components: record.components.map(cloneComponent),
@@ -769,9 +893,12 @@ function captureState() {
       selectedId: record.selectedId || null,
       selectedRegionId: record.selectedRegionId || null,
       selectedGuideId: record.selectedGuideId || null,
-      selectedGuideIds: [...(record.selectedGuideIds || [])]
+      selectedGuideIds: [...(record.selectedGuideIds || [])],
+      expanded: record.expanded !== false
     })),
     activeArtboardId,
+    selectedArtboardId,
+    selectedArtboardIds: [...selectedArtboardIds],
     nextArtboardId,
     boardZoom,
     stageScroll: { left: stage.scrollLeft, top: stage.scrollTop },
@@ -815,6 +942,10 @@ function restoreState(record) {
   });
 
   const restoredActive = artboards.find((item) => item.id === record.snapshot.activeArtboardId) || artboards[0] || null;
+  setArtboardSelection(
+    record.snapshot.selectedArtboardIds || (record.snapshot.selectedArtboardId ? [record.snapshot.selectedArtboardId] : []),
+    record.snapshot.selectedArtboardId
+  );
   setActiveArtboardRefs(restoredActive);
   artboards.forEach((item) => {
     const isActive = item.id === restoredActive?.id;
@@ -827,8 +958,7 @@ function restoreState(record) {
   }
   updateArtboardEmptyState();
   refreshWorkspaceBounds();
-  renderComponentList();
-  syncControlsFromSelection();
+  syncSelectionVisuals();
   const restoredScroll = record.snapshot.stageScroll;
   if (restoredScroll) {
     window.requestAnimationFrame(() => {
@@ -1009,13 +1139,245 @@ function setBoardZoom(nextZoom, originEvent = null) {
   const nextRect = artSurface.getBoundingClientRect();
   stage.scrollLeft += nextRect.left + nextRect.width * focusX - clientX;
   stage.scrollTop += nextRect.top + nextRect.height * focusY - clientY;
+  scheduleRulerRender();
+}
+
+function rulerMajorInterval() {
+  const targetUnits = 80 / Math.max(minBoardZoom, boardZoom);
+  const magnitude = 10 ** Math.floor(Math.log10(Math.max(0.0001, targetUnits)));
+  const normalized = targetUnits / magnitude;
+  const step = normalized <= 1 ? 1 : normalized <= 2 ? 2 : normalized <= 5 ? 5 : 10;
+  return step * magnitude;
+}
+
+function prepareRulerCanvas(canvas, width, height) {
+  const ratio = Math.max(1, window.devicePixelRatio || 1);
+  const pixelWidth = Math.max(1, Math.round(width * ratio));
+  const pixelHeight = Math.max(1, Math.round(height * ratio));
+  if (canvas.width !== pixelWidth) canvas.width = pixelWidth;
+  if (canvas.height !== pixelHeight) canvas.height = pixelHeight;
+  const context = canvas.getContext("2d");
+  context.setTransform(ratio, 0, 0, ratio, 0, 0);
+  context.clearRect(0, 0, width, height);
+  context.fillStyle = "rgba(255, 255, 255, .97)";
+  context.fillRect(0, 0, width, height);
+  context.strokeStyle = "#8c8c8c";
+  context.fillStyle = "#666";
+  context.lineWidth = 1;
+  context.font = '9px Inter, "Segoe UI", Arial, sans-serif';
+  return context;
+}
+
+function isMajorRulerTick(value, major) {
+  return Math.abs(value / major - Math.round(value / major)) < 0.0001;
+}
+
+function rulerSelectionRect() {
+  const selectedNodes = selectedIds.map((id) => componentLayer?.querySelector(`[data-id="${id}"]`)).filter(Boolean);
+  if (selectedNodes.length) {
+    const rects = selectedNodes.map((node) => node.getBoundingClientRect());
+    return {
+      left: Math.min(...rects.map((rect) => rect.left)),
+      right: Math.max(...rects.map((rect) => rect.right)),
+      top: Math.min(...rects.map((rect) => rect.top)),
+      bottom: Math.max(...rects.map((rect) => rect.bottom))
+    };
+  }
+  const record = activeArtboardRecord();
+  return record && !record.isCanvas ? record.surface.getBoundingClientRect() : null;
+}
+
+function drawHorizontalRulerHighlight(context, width, height) {
+  const selection = rulerSelectionRect();
+  if (!selection) return;
+  const stageRect = stage.getBoundingClientRect();
+  const left = Math.max(0, selection.left - stageRect.left - rulerSize);
+  const right = Math.min(width, selection.right - stageRect.left - rulerSize);
+  if (right <= left) return;
+  context.fillStyle = "rgba(13, 153, 255, .14)";
+  context.fillRect(left, 0, right - left, height);
+  context.fillStyle = "#0D99FF";
+  context.fillRect(left, height - 2, right - left, 2);
+}
+
+function drawVerticalRulerHighlight(context, width, height) {
+  const selection = rulerSelectionRect();
+  if (!selection) return;
+  const stageRect = stage.getBoundingClientRect();
+  const top = Math.max(0, selection.top - stageRect.top - rulerSize);
+  const bottom = Math.min(height, selection.bottom - stageRect.top - rulerSize);
+  if (bottom <= top) return;
+  context.fillStyle = "rgba(13, 153, 255, .14)";
+  context.fillRect(0, top, width, bottom - top);
+  context.fillStyle = "#0D99FF";
+  context.fillRect(width - 2, top, 2, bottom - top);
+}
+
+function renderHorizontalRuler() {
+  const width = Math.max(1, stage.clientWidth - rulerSize);
+  const height = rulerSize;
+  const context = prepareRulerCanvas(horizontalRuler, width, height);
+  const major = rulerMajorInterval();
+  const minor = major / 10;
+  const origin = workspaceOriginX - stage.scrollLeft - rulerSize;
+  const worldStart = (0 - origin) / boardZoom;
+  const worldEnd = (width - origin) / boardZoom;
+  const first = Math.floor(worldStart / minor) * minor;
+
+  drawHorizontalRulerHighlight(context, width, height);
+  context.fillStyle = "#666";
+  context.textBaseline = "top";
+  for (let value = first; value <= worldEnd + minor; value += minor) {
+    const x = origin + value * boardZoom;
+    const isMajor = isMajorRulerTick(value, major);
+    context.beginPath();
+    context.moveTo(Math.round(x) + 0.5, isMajor ? 12 : 18);
+    context.lineTo(Math.round(x) + 0.5, rulerSize);
+    context.stroke();
+    if (isMajor) context.fillText(String(Math.round(value)), Math.round(x) + 3, 1);
+  }
+}
+
+function renderVerticalRuler() {
+  const width = rulerSize;
+  const height = Math.max(1, stage.clientHeight - rulerSize);
+  const context = prepareRulerCanvas(verticalRuler, width, height);
+  const major = rulerMajorInterval();
+  const minor = major / 10;
+  const activeOffset = activeArtboardRecord()?.isCanvas ? 0 : 24;
+  const origin = workspaceOriginY + activeOffset - stage.scrollTop - rulerSize;
+  const worldStart = (0 - origin) / boardZoom;
+  const worldEnd = (height - origin) / boardZoom;
+  const first = Math.floor(worldStart / minor) * minor;
+
+  drawVerticalRulerHighlight(context, width, height);
+  context.fillStyle = "#666";
+  for (let value = first; value <= worldEnd + minor; value += minor) {
+    const y = origin + value * boardZoom;
+    const isMajor = isMajorRulerTick(value, major);
+    context.beginPath();
+    context.moveTo(isMajor ? 12 : 18, Math.round(y) + 0.5);
+    context.lineTo(rulerSize, Math.round(y) + 0.5);
+    context.stroke();
+    if (isMajor) {
+      context.save();
+      context.translate(13, Math.round(y) - 3);
+      context.rotate(-Math.PI / 2);
+      context.fillText(String(Math.round(value)), 0, 0);
+      context.restore();
+    }
+  }
+}
+
+function renderRulers() {
+  rulerRenderFrame = 0;
+  if (!rulersVisible) return;
+  renderHorizontalRuler();
+  renderVerticalRuler();
+}
+
+function scheduleRulerRender() {
+  if (!rulersVisible || rulerRenderFrame) return;
+  rulerRenderFrame = window.requestAnimationFrame(renderRulers);
+}
+
+function toggleRulers() {
+  rulersVisible = !rulersVisible;
+  rulerOverlay.classList.toggle("is-hidden", !rulersVisible);
+  scheduleRulerRender();
+}
+
+function updateRulerGuidePreview(event) {
+  if (!rulerGuideDragState?.preview) return;
+  const workspaceRect = artboardWorkspace.getBoundingClientRect();
+  const distance = Math.hypot(
+    event.clientX - rulerGuideDragState.startX,
+    event.clientY - rulerGuideDragState.startY
+  );
+  rulerGuideDragState.moved = distance >= 4;
+  if (rulerGuideDragState.orientation === "vertical") {
+    rulerGuideDragState.preview.style.left = `${event.clientX - workspaceRect.left}px`;
+  } else {
+    rulerGuideDragState.preview.style.top = `${event.clientY - workspaceRect.top}px`;
+  }
+}
+
+function startRulerGuideDrag(event, orientation) {
+  if (event.button !== 0) return;
+  event.preventDefault();
+  event.stopPropagation();
+  cancelInsertTool();
+  const normalizedOrientation = orientation === "vertical" ? "vertical" : "horizontal";
+  const preview = document.createElement("div");
+  preview.className = `insert-guide-preview ruler-guide-preview is-${normalizedOrientation}`;
+  artboardWorkspace.appendChild(preview);
+  rulerGuideDragState = {
+    orientation: normalizedOrientation,
+    startX: event.clientX,
+    startY: event.clientY,
+    moved: false,
+    preview
+  };
+  updateRulerGuidePreview(event);
+  window.addEventListener("pointermove", handleRulerGuideDragMove);
+  window.addEventListener("pointerup", handleRulerGuideDragUp, { once: true });
+}
+
+function handleRulerGuideDragMove(event) {
+  if (!rulerGuideDragState) return;
+  event.preventDefault();
+  updateRulerGuidePreview(event);
+}
+
+function guideDropRecord(event) {
+  const element = document.elementFromPoint(event.clientX, event.clientY);
+  const surface = element?.closest?.(".art-surface");
+  const record = surface
+    ? artboards.find((item) => item.id === Number(surface.dataset.artboardId))
+    : null;
+  return record || ensureCanvasRecord();
+}
+
+function handleRulerGuideDragUp(event) {
+  const state = rulerGuideDragState;
+  if (!state) return;
+  window.removeEventListener("pointermove", handleRulerGuideDragMove);
+  updateRulerGuidePreview(event);
+  state.preview.remove();
+  rulerGuideDragState = null;
+
+  const stageRect = stage.getBoundingClientRect();
+  const insideStage = event.clientX >= stageRect.left
+    && event.clientX <= stageRect.right
+    && event.clientY >= stageRect.top
+    && event.clientY <= stageRect.bottom;
+  const returnedToRuler = state.orientation === "horizontal"
+    ? event.clientY <= stageRect.top + rulerSize
+    : event.clientX <= stageRect.left + rulerSize;
+  if (!state.moved || !insideStage || returnedToRuler) return;
+
+  const record = guideDropRecord(event);
+  activateArtboard(record.id);
+  const surfaceRect = record.surface.getBoundingClientRect();
+  const position = state.orientation === "vertical"
+    ? (event.clientX - surfaceRect.left) / Math.max(1, surfaceRect.width) * record.artboard.width
+    : (event.clientY - surfaceRect.top) / Math.max(1, surfaceRect.height) * record.artboard.height;
+  addGuide(state.orientation, position);
 }
 
 function syncArtboardInputs() {
-  const hasArtboard = Boolean(activeArtboardRecord());
+  const record = activeArtboardRecord();
+  const hasArtboard = Boolean(record && !record.isCanvas);
   [artboardWidthInput, artboardHeightInput, artboardBgInput, artboardTransparentToggle].forEach((control) => {
     control.disabled = !hasArtboard;
   });
+  if (record?.isCanvas) {
+    artboardWidthInput.value = "";
+    artboardHeightInput.value = "";
+    artboardBgInput.value = "#ffffff";
+    artboardTransparentToggle.checked = false;
+    return;
+  }
   artboardWidthInput.value = Math.round(artboard.width);
   artboardHeightInput.value = Math.round(artboard.height);
   artboardBgInput.value = artboard.background;
@@ -1145,18 +1507,14 @@ function defaultStyle() {
     fontSize: Number(fontSizeRange.value) || 48
   };
 }
-function addShape(shape) {
+function shapeComponentConfig(shape, geometry) {
   const style = defaultStyle();
-  const size = defaultShapeSize(shape);
-
-  addComponent({
+  return {
     ...style,
     type: "shape",
     shape,
     name: shapeLabels[shape],
-    x: 35,
-    y: 35,
-    ...size,
+    ...geometry,
     fill: "#ffffff",
     fillTransparent: false,
     strokeTransparent: false,
@@ -1165,23 +1523,248 @@ function addShape(shape) {
     ...defaultCurve,
     effect: "none",
     trigger: triggerSelect.value
-  }, true);
+  };
 }
-function addText() {
-  addComponent({
+
+function textComponentConfig(geometry) {
+  return {
     ...defaultStyle(),
     type: "text",
     name: "Text",
-    x: 24,
-    y: 42,
-    w: 42,
-    h: 12,
+    ...geometry,
     fill: "#191714",
     fillTransparent: false,
     strokeTransparent: false,
     effect: "none",
     trigger: triggerSelect.value
-  }, true);
+  };
+}
+
+function insertToolKey(tool) {
+  if (!tool) return "";
+  if (tool.kind === "shape") return `shape:${tool.shape}`;
+  if (tool.kind === "guide") return `guide:${tool.orientation}`;
+  return tool.kind;
+}
+
+function syncInsertToolState() {
+  const activeKey = insertToolKey(activeInsertTool);
+  insertToolButtons.forEach((button) => {
+    const key = button.dataset.shape
+      ? `shape:${button.dataset.shape}`
+      : button === addTextButton
+      ? "text"
+      : button === addVerticalGuideButton
+      ? "guide:vertical"
+      : "guide:horizontal";
+    const isActive = key === activeKey;
+    button.classList.toggle("is-active", isActive);
+    button.setAttribute("aria-pressed", String(isActive));
+  });
+  document.body.classList.toggle("is-insert-tool", Boolean(activeInsertTool));
+}
+
+function cancelInsertDraw() {
+  window.removeEventListener("pointermove", handleInsertDrawMove);
+  window.removeEventListener("pointerup", handleInsertDrawUp);
+  insertPreviewNode?.remove();
+  insertPreviewNode = null;
+  insertDrawState = null;
+}
+
+function cancelInsertTool() {
+  cancelInsertDraw();
+  activeInsertTool = null;
+  syncInsertToolState();
+}
+
+function activateInsertTool(tool) {
+  const nextKey = insertToolKey(tool);
+  if (nextKey && nextKey === insertToolKey(activeInsertTool)) {
+    cancelInsertTool();
+    return;
+  }
+  cancelBrushDrawMode();
+  cancelInsertDraw();
+  activeInsertTool = { ...tool };
+  syncInsertToolState();
+  stage.focus({ preventScroll: true });
+}
+
+function unboundedPointInSurface(event, rect = artSurface?.getBoundingClientRect()) {
+  if (!rect) return { x: 0, y: 0 };
+  return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+}
+
+function constrainedInsertEnd(state, event) {
+  const raw = unboundedPointInSurface(event, state.surfaceRect);
+  const start = state.start;
+  let dx = raw.x - start.x;
+  let dy = raw.y - start.y;
+  const constrain = event.shiftKey || event.ctrlKey || event.metaKey;
+
+  if (constrain && state.tool.kind === "shape" && state.tool.shape === "line") {
+    const length = Math.hypot(dx, dy);
+    const angle = Math.round(Math.atan2(dy, dx) / (Math.PI / 4)) * Math.PI / 4;
+    dx = Math.cos(angle) * length;
+    dy = Math.sin(angle) * length;
+  } else if (constrain && state.tool.kind === "shape" && ["circle", "rect", "triangle", "star"].includes(state.tool.shape)) {
+    const aspect = visualAspectForShape(state.tool.shape);
+    const directionX = Math.sign(dx) || 1;
+    const directionY = Math.sign(dy) || 1;
+    if (Math.abs(dx) / Math.max(1, Math.abs(dy)) > aspect) dy = directionY * Math.abs(dx) / aspect;
+    else dx = directionX * Math.abs(dy) * aspect;
+  }
+
+  return { x: start.x + dx, y: start.y + dy };
+}
+
+function insertGeometry(state, event) {
+  const end = constrainedInsertEnd(state, event);
+  const left = Math.min(state.start.x, end.x);
+  const top = Math.min(state.start.y, end.y);
+  return {
+    end,
+    left,
+    top,
+    width: Math.abs(end.x - state.start.x),
+    height: Math.abs(end.y - state.start.y)
+  };
+}
+
+function createInsertPreview(state) {
+  const preview = document.createElement("div");
+  if (state.tool.kind === "guide") {
+    preview.className = `insert-guide-preview is-${state.tool.orientation}`;
+    artboardGuideLayer?.appendChild(preview);
+  } else {
+    const shapeClass = state.tool.kind === "shape" ? ` is-${state.tool.shape}` : " is-text";
+    preview.className = `insert-draw-preview${shapeClass}`;
+    componentLayer?.appendChild(preview);
+  }
+  return preview;
+}
+
+function updateInsertPreview(event) {
+  if (!insertDrawState || !insertPreviewNode) return;
+  const geometry = insertGeometry(insertDrawState, event);
+  insertDrawState.geometry = geometry;
+  insertDrawState.moved = geometry.width + geometry.height >= 5;
+
+  if (insertDrawState.tool.kind === "guide") {
+    const layerRect = artboardGuideLayer.getBoundingClientRect();
+    if (insertDrawState.tool.orientation === "vertical") insertPreviewNode.style.left = `${event.clientX - layerRect.left}px`;
+    else insertPreviewNode.style.top = `${event.clientY - layerRect.top}px`;
+    return;
+  }
+
+  const shape = insertDrawState.tool.shape;
+  if (shape === "line") {
+    const dx = geometry.end.x - insertDrawState.start.x;
+    const dy = geometry.end.y - insertDrawState.start.y;
+    insertPreviewNode.style.left = `${insertDrawState.start.x}px`;
+    insertPreviewNode.style.top = `${insertDrawState.start.y}px`;
+    insertPreviewNode.style.width = `${Math.max(1, Math.hypot(dx, dy))}px`;
+    insertPreviewNode.style.height = "1px";
+    insertPreviewNode.style.transformOrigin = "0 0";
+    insertPreviewNode.style.transform = `rotate(${Math.atan2(dy, dx) * 180 / Math.PI}deg)`;
+    return;
+  }
+
+  insertPreviewNode.style.left = `${geometry.left}px`;
+  insertPreviewNode.style.top = `${geometry.top}px`;
+  insertPreviewNode.style.width = `${Math.max(1, geometry.width)}px`;
+  insertPreviewNode.style.height = `${Math.max(1, geometry.height)}px`;
+}
+
+function startInsertDraw(event, artboardId) {
+  if (!activeInsertTool || event.button !== 0 || isSpacePanning) return;
+  const record = activeArtboardId === artboardId ? activeArtboardRecord() : activateArtboard(artboardId);
+  if (!record?.surface) return;
+  event.preventDefault();
+  event.stopPropagation();
+  event.stopImmediatePropagation();
+  clearSmartGuides();
+  const surfaceRect = record.surface.getBoundingClientRect();
+  insertDrawState = {
+    artboardId,
+    tool: { ...activeInsertTool },
+    surfaceRect,
+    start: unboundedPointInSurface(event, surfaceRect),
+    geometry: null,
+    moved: false
+  };
+  insertPreviewNode = createInsertPreview(insertDrawState);
+  updateInsertPreview(event);
+  window.addEventListener("pointermove", handleInsertDrawMove);
+  window.addEventListener("pointerup", handleInsertDrawUp, { once: true });
+}
+
+function startWorkspaceInsertDraw(event) {
+  if (!activeInsertTool || event.button !== 0 || isSpacePanning) return;
+  if (!(event.target instanceof Element)) return;
+  if (event.target.closest(".art-surface, .artboard-guide")) return;
+  if (event.target.closest(".artboard-frame:not(.is-canvas-record)")) return;
+  const record = ensureCanvasRecord();
+  activateArtboard(record.id);
+  startInsertDraw(event, record.id);
+}
+
+function handleInsertDrawMove(event) {
+  if (!insertDrawState) return;
+  event.preventDefault();
+  updateInsertPreview(event);
+}
+
+function componentGeometryFromInsert(state) {
+  const geometry = state.geometry;
+  const surfaceRect = state.surfaceRect;
+  const toX = (value) => value / Math.max(1, surfaceRect.width) * 100;
+  const toY = (value) => value / Math.max(1, surfaceRect.height) * 100;
+
+  if (state.tool.kind === "shape" && state.tool.shape === "line") {
+    const dx = geometry.end.x - state.start.x;
+    const dy = geometry.end.y - state.start.y;
+    const width = Math.max(0.2, Math.hypot(dx, dy) / Math.max(1, surfaceRect.width) * 100);
+    const height = lineHeightForStroke(1);
+    return {
+      x: toX((state.start.x + geometry.end.x) / 2) - width / 2,
+      y: toY((state.start.y + geometry.end.y) / 2) - height / 2,
+      w: width,
+      h: height,
+      rotation: Math.atan2(dy, dx) * 180 / Math.PI
+    };
+  }
+
+  return {
+    x: toX(geometry.left),
+    y: toY(geometry.top),
+    w: Math.max(1, toX(geometry.width)),
+    h: Math.max(1, toY(geometry.height)),
+    rotation: 0
+  };
+}
+
+function handleInsertDrawUp(event) {
+  const state = insertDrawState;
+  if (!state) return;
+  updateInsertPreview(event);
+  const shouldCreate = state.moved;
+  const geometry = shouldCreate ? componentGeometryFromInsert(state) : null;
+  const guidePosition = shouldCreate && state.tool.kind === "guide"
+    ? state.tool.orientation === "vertical"
+      ? normalizedGuidePosition(state.geometry.end.x / Math.max(1, state.surfaceRect.width) * artboard.width, "vertical", activeArtboardRecord())
+      : normalizedGuidePosition(state.geometry.end.y / Math.max(1, state.surfaceRect.height) * artboard.height, "horizontal", activeArtboardRecord())
+    : null;
+  const tool = { ...state.tool };
+  cancelInsertDraw();
+  activeInsertTool = null;
+  syncInsertToolState();
+  if (!shouldCreate) return;
+
+  if (tool.kind === "guide") addGuide(tool.orientation, guidePosition);
+  else if (tool.kind === "text") addComponent(textComponentConfig(geometry), true);
+  else addComponent(shapeComponentConfig(tool.shape, geometry), true);
 }
 function addComponent(config, shouldRender = true) {
   if (shouldRender) saveHistory();
@@ -1240,10 +1823,10 @@ function addComponent(config, shouldRender = true) {
 function clampComponent(component) {
   const minSize = component.type === "shape" && component.shape === "line" ? 0.2 : 1;
   const minHeight = component.type === "shape" && component.shape === "line" ? lineHeightForStroke(component.strokeWidth) : minSize;
-  component.w = Math.max(minSize, Math.min(100, Number(component.w)));
-  component.h = Math.max(minHeight, Math.min(100, Number(component.h)));
-  component.x = Math.max(0, Math.min(100 - component.w, Number(component.x)));
-  component.y = Math.max(0, Math.min(100 - component.h, Number(component.y)));
+  component.w = clampNumber(component.w, minSize, componentCoordinateLimit, minSize);
+  component.h = clampNumber(component.h, minHeight, componentCoordinateLimit, minHeight);
+  component.x = clampNumber(component.x, -componentCoordinateLimit, componentCoordinateLimit, 0);
+  component.y = clampNumber(component.y, -componentCoordinateLimit, componentCoordinateLimit, 0);
   component.rotation = Math.max(-180, Math.min(180, Number(component.rotation)));
 }
 
@@ -1253,14 +1836,15 @@ function render() {
       renderComponents();
       renderGuides();
     }
+    commitActiveArtboardState();
     renderComponentList();
     syncControlsFromSelection();
-    commitActiveArtboardState();
   });
 }
 
 function renderComponents() {
   if (!componentLayer) return;
+  const ownerArtboardId = activeArtboardId;
   componentLayer.innerHTML = "";
 
   components.forEach((component, index) => {
@@ -1269,6 +1853,7 @@ function renderComponents() {
     const hasSelectedRegion = Boolean(selectedRegionId && component.regions?.some((region) => region.id === selectedRegionId));
     node.className = `art-component${component.type === "shape" ? ` is-${component.shape}` : ""}${isSelected(component.id) ? " is-selected" : ""}${hasSelectedRegion ? " has-selected-region" : ""}`;
     node.dataset.id = component.id;
+    node.dataset.artboardId = String(ownerArtboardId);
     node.dataset.name = component.name;
     node.style.left = `${component.x}%`;
     node.style.top = `${component.y}%`;
@@ -1300,7 +1885,7 @@ function renderComponents() {
       node.appendChild(createCurveControls(component));
     }
     node.appendChild(note);
-    bindComponentEvents(node, component);
+    bindComponentEvents(node, component, ownerArtboardId);
     componentLayer.appendChild(node);
   });
 }
@@ -1323,12 +1908,19 @@ function guideLimit(orientation, record = activeArtboardRecord()) {
   return orientation === "vertical" ? settings.width : settings.height;
 }
 
+function normalizedGuidePosition(position, orientation, record = activeArtboardRecord()) {
+  const limit = Math.max(1, guideLimit(orientation, record));
+  return record?.isCanvas
+    ? clampNumber(position, -workspaceCoordinateLimit, workspaceCoordinateLimit, limit / 2)
+    : clampNumber(position, 0, limit, limit / 2);
+}
+
 function syncGuideNode(node, guide, record = activeArtboardRecord()) {
   if (!record) return;
   const limit = Math.max(1, guideLimit(guide.orientation, record));
   const frameLeft = workspaceOriginX + record.position.x * boardZoom;
-  const surfaceTop = workspaceOriginY + record.position.y * boardZoom + 24;
-  guide.position = clampNumber(guide.position, 0, limit, limit / 2);
+  const surfaceTop = workspaceOriginY + record.position.y * boardZoom + (record.isCanvas ? 0 : 24);
+  guide.position = normalizedGuidePosition(guide.position, guide.orientation, record);
   node.className = `artboard-guide is-${guide.orientation}${isGuideSelected(guide.id) ? " is-selected" : ""}`;
   node.dataset.guideId = String(guide.id);
   node.dataset.positionLabel = `${Math.round(guide.position)}px`;
@@ -1358,26 +1950,30 @@ function syncGuideSelectionVisuals() {
 
 function renderGuides() {
   if (!artboardGuideLayer) return;
+  const ownerArtboardId = activeArtboardId;
   artboardGuideLayer.replaceChildren();
   guides.forEach((guide) => {
     const node = document.createElement("button");
     node.type = "button";
     node.setAttribute("aria-label", `${guide.orientation} guide at ${Math.round(guide.position)} pixels`);
     syncGuideNode(node, guide, activeArtboardRecord());
-    node.addEventListener("pointerdown", (event) => startGuideDrag(event, guide.id));
+    node.addEventListener("pointerdown", (event) => {
+      if (ownerArtboardId !== activeArtboardId) activateArtboard(ownerArtboardId);
+      startGuideDrag(event, guide.id);
+    });
     node.addEventListener("click", (event) => event.stopPropagation());
     artboardGuideLayer.appendChild(node);
   });
 }
 
-function addGuide(orientation) {
+function addGuide(orientation, position = null) {
   saveHistory();
   ensureActiveArtboard();
   const normalizedOrientation = orientation === "vertical" ? "vertical" : "horizontal";
   const guide = {
     id: nextGuideId++,
     orientation: normalizedOrientation,
-    position: guideLimit(normalizedOrientation) / 2
+    position: normalizedGuidePosition(position, normalizedOrientation, activeArtboardRecord())
   };
   setSelection([]);
   selectedRegionId = null;
@@ -1415,7 +2011,7 @@ function handleGuideDragMove(event) {
   const ratio = guide.orientation === "vertical"
     ? (event.clientX - rect.left) / Math.max(1, rect.width)
     : (event.clientY - rect.top) / Math.max(1, rect.height);
-  guide.position = clampNumber(ratio * limit, 0, limit, limit / 2);
+  guide.position = normalizedGuidePosition(ratio * limit, guide.orientation, activeArtboardRecord());
   const node = artboardGuideLayer?.querySelector(`[data-guide-id="${guide.id}"]`);
   if (node) syncGuideNode(node, guide, activeArtboardRecord());
   if (event.altKey) showMeasurementGuides(guideDistanceMeasures(guide));
@@ -2276,6 +2872,7 @@ function hasActiveEditorGesture() {
     || regionDragState
     || brushDrawState
     || marqueeState
+    || workspaceMarqueeState
     || stagePanState
     || artboardDragState
     || guideDragState
@@ -2897,12 +3494,13 @@ function createCurveControls(component) {
 
   return layer;
 }
-function bindComponentEvents(node, component) {
+function bindComponentEvents(node, component, ownerArtboardId = activeArtboardId) {
   node.addEventListener("click", (event) => {
     event.stopPropagation();
   });
 
   node.addEventListener("pointerenter", (event) => {
+    if (ownerArtboardId !== activeArtboardId) return;
     if (event.altKey) return;
     if (component.trigger === "hover" && window.matchMedia("(hover: hover)").matches) {
       triggerComponent(component.id);
@@ -2911,6 +3509,7 @@ function bindComponentEvents(node, component) {
 
   node.addEventListener("pointerdown", (event) => {
     if (event.button !== 0) return;
+    if (ownerArtboardId !== activeArtboardId) activateArtboard(ownerArtboardId);
     event.preventDefault();
     event.stopPropagation();
 
@@ -2936,6 +3535,7 @@ function bindComponentEvents(node, component) {
 
   node.addEventListener("wheel", (event) => {
     if (component.trigger !== "wheel") return;
+    if (ownerArtboardId !== activeArtboardId) activateArtboard(ownerArtboardId);
     event.preventDefault();
     event.stopPropagation();
     selectOnly(component.id);
@@ -3707,15 +4307,18 @@ function startDrag(event, id) {
   const rect = artSurface.getBoundingClientRect();
   if (!component || !rect.width || !rect.height) return;
 
+  const historyLengthBeforeDrag = historyStack.length;
   saveHistory();
   const ids = isSelected(id) ? [...selectedIds] : [id];
   dragState = {
     ids,
     clickedId: id,
+    ownerArtboardId: activeArtboardId,
     startX: event.clientX,
     startY: event.clientY,
     width: rect.width,
     height: rect.height,
+    historyEntryAdded: historyStack.length > historyLengthBeforeDrag,
     bases: ids.map((selected) => {
       const item = components.find((componentItem) => componentItem.id === selected);
       return { id: selected, x: item?.x || 0, y: item?.y || 0, w: item?.w || 0, h: item?.h || 0 };
@@ -3726,6 +4329,120 @@ function startDrag(event, id) {
   movedDuringDrag = false;
   window.addEventListener("pointermove", handlePointerMove);
   window.addEventListener("pointerup", handlePointerUp, { once: true });
+}
+
+function artboardAtPoint(clientX, clientY) {
+  return [...artboards].reverse().find((record) => {
+    if (record.isCanvas || !record.surface) return false;
+    const rect = record.surface.getBoundingClientRect();
+    return clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom;
+  }) || null;
+}
+
+function moveComponentsToArtboard(sourceRecord, targetRecord, componentIds, {
+  placement = "screen",
+  primaryId = null,
+  save = false
+} = {}) {
+  if (!sourceRecord || !targetRecord || sourceRecord.id === targetRecord.id) return false;
+  const ids = new Set(componentIds);
+  const moving = sourceRecord.components.filter((component) => ids.has(component.id));
+  if (!moving.length) return false;
+
+  const sourceRect = sourceRecord.componentLayer?.getBoundingClientRect();
+  const targetRect = targetRecord.componentLayer?.getBoundingClientRect();
+  if (!sourceRect?.width || !sourceRect.height || !targetRect?.width || !targetRect.height) return false;
+  if (save) saveHistory();
+
+  moving.forEach((component) => {
+    if (placement === "offset") {
+      const sourceWidth = Math.max(1, sourceRecord.artboard.width);
+      const sourceHeight = Math.max(1, sourceRecord.artboard.height);
+      const targetWidth = Math.max(1, targetRecord.artboard.width);
+      const targetHeight = Math.max(1, targetRecord.artboard.height);
+      const pixelWidth = component.w / 100 * sourceWidth;
+      const pixelHeight = component.h / 100 * sourceHeight;
+      const pixelX = component.x / 100 * sourceWidth;
+      const pixelY = component.y / 100 * sourceHeight;
+      const targetX = clampNumber(pixelX, 0, Math.max(0, targetWidth - pixelWidth), 0);
+      const targetY = clampNumber(pixelY, 0, Math.max(0, targetHeight - pixelHeight), 0);
+      component.x = targetX / targetWidth * 100;
+      component.y = targetY / targetHeight * 100;
+      component.w = pixelWidth / targetWidth * 100;
+      component.h = pixelHeight / targetHeight * 100;
+      return;
+    }
+
+    const screenX = sourceRect.left + component.x / 100 * sourceRect.width;
+    const screenY = sourceRect.top + component.y / 100 * sourceRect.height;
+    const screenWidth = component.w / 100 * sourceRect.width;
+    const screenHeight = component.h / 100 * sourceRect.height;
+    component.x = (screenX - targetRect.left) / targetRect.width * 100;
+    component.y = (screenY - targetRect.top) / targetRect.height * 100;
+    component.w = screenWidth / targetRect.width * 100;
+    component.h = screenHeight / targetRect.height * 100;
+  });
+
+  moving.forEach((component) => {
+    stopComponentActionRun(component.id);
+    clearActiveRegionEffects(component.id);
+    sourceRecord.componentLayer?.querySelector(`[data-id="${component.id}"]`)?.remove();
+  });
+  sourceRecord.components = sourceRecord.components.filter((component) => !ids.has(component.id));
+  sourceRecord.selectedIds = [];
+  sourceRecord.selectedId = null;
+  sourceRecord.selectedRegionId = null;
+
+  if (sourceRecord.id === activeArtboardId) {
+    components = sourceRecord.components;
+    selectedIds = [];
+    selectedId = null;
+    selectedRegionId = null;
+    commitActiveArtboardState();
+  }
+
+  targetRecord.components.push(...moving);
+  targetRecord.selectedIds = moving.map((component) => component.id);
+  targetRecord.selectedId = moving.some((component) => component.id === primaryId)
+    ? primaryId
+    : moving[moving.length - 1].id;
+  targetRecord.selectedRegionId = null;
+  targetRecord.selectedGuideId = null;
+  targetRecord.selectedGuideIds = [];
+  targetRecord.expanded = true;
+  clearArtboardSelection();
+
+  if (targetRecord.id === activeArtboardId) setActiveArtboardRefs(targetRecord);
+  activateArtboard(targetRecord.id);
+  moving.forEach(clampComponent);
+  render();
+  return true;
+}
+
+function reparentDraggedComponents(state) {
+  if (!state || !movedDuringDrag) return false;
+  const sourceRecord = artboards.find((record) => record.id === state.ownerArtboardId);
+  if (!sourceRecord || sourceRecord.id !== activeArtboardId) return false;
+  const ids = new Set(state.ids);
+  const moving = sourceRecord.components.filter((component) => ids.has(component.id));
+  if (!moving.length) return false;
+
+  const movingRects = moving
+    .map((component) => sourceRecord.componentLayer?.querySelector(`[data-id="${component.id}"]`)?.getBoundingClientRect())
+    .filter(Boolean);
+  if (!movingRects.length) return false;
+  const bounds = {
+    left: Math.min(...movingRects.map((rect) => rect.left)),
+    right: Math.max(...movingRects.map((rect) => rect.right)),
+    top: Math.min(...movingRects.map((rect) => rect.top)),
+    bottom: Math.max(...movingRects.map((rect) => rect.bottom))
+  };
+  const targetRecord = artboardAtPoint((bounds.left + bounds.right) / 2, (bounds.top + bounds.bottom) / 2);
+  if (!targetRecord || targetRecord.id === sourceRecord.id) return false;
+  return moveComponentsToArtboard(sourceRecord, targetRecord, state.ids, {
+    placement: "screen",
+    primaryId: state.clickedId
+  });
 }
 
 function handlePointerMove(event) {
@@ -3770,8 +4487,9 @@ function handlePointerUp() {
 
   window.removeEventListener("pointermove", handlePointerMove);
   dragState = null;
+  if (!movedDuringDrag && state?.historyEntryAdded) historyStack.pop();
   clearSmartGuides();
-  render();
+  if (!reparentDraggedComponents(state)) render();
 
   if (shouldTriggerTap) {
     window.requestAnimationFrame(() => triggerComponent(clickedComponent.id));
@@ -3790,6 +4508,76 @@ function pointInSurface(event) {
 
 function rectsIntersect(a, b) {
   return a.left <= b.right && a.right >= b.left && a.top <= b.bottom && a.bottom >= b.top;
+}
+
+function startWorkspaceMarqueeSelection(event) {
+  if (event.button !== 0 || isSpacePanning || activeInsertTool || hasActiveEditorGesture()) return;
+  if (!(event.target instanceof Element)) return;
+  if (event.target.closest(".artboard-frame, .artboard-guide, .art-component")) return;
+
+  event.preventDefault();
+  const workspaceRect = artboardWorkspace.getBoundingClientRect();
+  workspaceMarqueeState = {
+    startClientX: event.clientX,
+    startClientY: event.clientY,
+    startX: event.clientX - workspaceRect.left,
+    startY: event.clientY - workspaceRect.top,
+    baseIds: event.shiftKey ? [...selectedArtboardIds] : [],
+    moved: false
+  };
+  if (!event.shiftKey) {
+    setSelection([]);
+    setGuideSelection([]);
+    clearArtboardSelection();
+  }
+
+  workspaceMarqueeNode = document.createElement("div");
+  workspaceMarqueeNode.className = "selection-marquee is-workspace-marquee";
+  workspaceMarqueeNode.style.left = `${workspaceMarqueeState.startX}px`;
+  workspaceMarqueeNode.style.top = `${workspaceMarqueeState.startY}px`;
+  artboardWorkspace.appendChild(workspaceMarqueeNode);
+  syncSelectionVisuals();
+  window.addEventListener("pointermove", handleWorkspaceMarqueeMove);
+  window.addEventListener("pointerup", handleWorkspaceMarqueeUp, { once: true });
+}
+
+function handleWorkspaceMarqueeMove(event) {
+  if (!workspaceMarqueeState || !workspaceMarqueeNode) return;
+  const workspaceRect = artboardWorkspace.getBoundingClientRect();
+  const currentX = event.clientX - workspaceRect.left;
+  const currentY = event.clientY - workspaceRect.top;
+  const left = Math.min(workspaceMarqueeState.startX, currentX);
+  const top = Math.min(workspaceMarqueeState.startY, currentY);
+  const width = Math.abs(currentX - workspaceMarqueeState.startX);
+  const height = Math.abs(currentY - workspaceMarqueeState.startY);
+  workspaceMarqueeState.moved = width + height > 4;
+  workspaceMarqueeNode.style.left = `${left}px`;
+  workspaceMarqueeNode.style.top = `${top}px`;
+  workspaceMarqueeNode.style.width = `${width}px`;
+  workspaceMarqueeNode.style.height = `${height}px`;
+
+  const selectionRect = {
+    left: Math.min(workspaceMarqueeState.startClientX, event.clientX),
+    right: Math.max(workspaceMarqueeState.startClientX, event.clientX),
+    top: Math.min(workspaceMarqueeState.startClientY, event.clientY),
+    bottom: Math.max(workspaceMarqueeState.startClientY, event.clientY)
+  };
+  const hitIds = artboards
+    .filter((record) => !record.isCanvas && record.surface && rectsIntersect(record.surface.getBoundingClientRect(), selectionRect))
+    .map((record) => record.id);
+  const nextIds = [...workspaceMarqueeState.baseIds, ...hitIds];
+  setArtboardSelection(nextIds, hitIds[hitIds.length - 1] || workspaceMarqueeState.baseIds[workspaceMarqueeState.baseIds.length - 1]);
+  syncSelectionVisuals();
+}
+
+function handleWorkspaceMarqueeUp() {
+  window.removeEventListener("pointermove", handleWorkspaceMarqueeMove);
+  const primaryId = selectedArtboardId;
+  workspaceMarqueeNode?.remove();
+  workspaceMarqueeNode = null;
+  workspaceMarqueeState = null;
+  if (primaryId) activateArtboard(primaryId);
+  syncSelectionVisuals();
 }
 
 function startMarqueeSelection(event) {
@@ -3851,6 +4639,7 @@ function handleMarqueeMove(event) {
     .filter((node) => rectsIntersect(node.getBoundingClientRect(), selectionRect))
     .map((node) => Number(node.dataset.guideId));
 
+  if (marqueeState.moved) clearArtboardSelection();
   setSelection([...marqueeState.baseIds, ...hitIds], { preserveGuides: true });
   setGuideSelection([...marqueeState.baseGuideIds, ...hitGuideIds], hitGuideIds[hitGuideIds.length - 1]);
   syncSelectionVisuals();
@@ -4059,26 +4848,311 @@ function syncComponentNode(node, component) {
   applyEffectVars(node, component);
   applySelectionVars(node, component);
 }
+
+function beginComponentRename(component, item, nameNode) {
+  if (!component || item.querySelector(".component-name-input")) return;
+  const input = document.createElement("input");
+  input.className = "component-name-input";
+  input.type = "text";
+  input.value = component.name;
+  input.setAttribute("aria-label", "Layer name");
+  nameNode.replaceWith(input);
+  let cancelled = false;
+  let finished = false;
+
+  const finish = () => {
+    if (finished) return;
+    finished = true;
+    const nextName = input.value.trim();
+    if (!cancelled && nextName && nextName !== component.name) {
+      saveHistory();
+      component.name = nextName;
+      render();
+      return;
+    }
+    renderComponentList();
+  };
+
+  input.addEventListener("pointerdown", (event) => event.stopPropagation());
+  input.addEventListener("click", (event) => event.stopPropagation());
+  input.addEventListener("keydown", (event) => {
+    event.stopPropagation();
+    if (event.key === "Enter") {
+      event.preventDefault();
+      input.blur();
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      cancelled = true;
+      input.blur();
+    }
+  });
+  input.addEventListener("blur", finish, { once: true });
+  input.focus();
+  input.select();
+}
+
+function beginArtboardRename(record, item, nameNode) {
+  if (!record || record.isCanvas || item.querySelector(".component-name-input")) return;
+  const input = document.createElement("input");
+  input.className = "component-name-input";
+  input.type = "text";
+  input.value = record.name;
+  input.setAttribute("aria-label", "Artboard name");
+  nameNode.replaceWith(input);
+  let cancelled = false;
+  let finished = false;
+
+  const finish = () => {
+    if (finished) return;
+    finished = true;
+    const nextName = input.value.trim();
+    if (!cancelled && nextName && nextName !== record.name) {
+      saveHistory();
+      record.name = nextName;
+      if (record.label) record.label.textContent = nextName;
+      record.surface?.setAttribute("aria-label", nextName);
+      renderComponentList();
+      syncControlsFromSelection();
+      return;
+    }
+    renderComponentList();
+  };
+
+  input.addEventListener("pointerdown", (event) => event.stopPropagation());
+  input.addEventListener("click", (event) => event.stopPropagation());
+  input.addEventListener("keydown", (event) => {
+    event.stopPropagation();
+    if (event.key === "Enter") {
+      event.preventDefault();
+      input.blur();
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      cancelled = true;
+      input.blur();
+    }
+  });
+  input.addEventListener("blur", finish, { once: true });
+  input.focus();
+  input.select();
+}
+
+function clearLayerDropTargets() {
+  componentList.querySelectorAll(".layer-artboard.is-drop-target").forEach((item) => {
+    item.classList.remove("is-drop-target");
+  });
+}
+
+function finishLayerDrag() {
+  clearLayerDropTargets();
+  componentList.querySelectorAll(".layer-component.is-layer-dragging").forEach((item) => {
+    item.classList.remove("is-layer-dragging");
+    item.setAttribute("aria-grabbed", "false");
+  });
+  document.body.classList.remove("is-layer-reparenting");
+  layerDragState = null;
+}
+
+function startLayerDrag(event, record, component, item) {
+  if (!event.dataTransfer || item.querySelector(".component-name-input")) {
+    event.preventDefault();
+    return;
+  }
+  const ids = record.id === activeArtboardId && isSelected(component.id)
+    ? [...selectedIds]
+    : [component.id];
+  layerDragState = {
+    sourceArtboardId: record.id,
+    componentIds: ids,
+    primaryId: component.id
+  };
+  event.dataTransfer.effectAllowed = "move";
+  event.dataTransfer.setData("text/plain", `component:${component.id}`);
+  item.classList.add("is-layer-dragging");
+  item.setAttribute("aria-grabbed", "true");
+  document.body.classList.add("is-layer-reparenting");
+}
+
+function canDropLayerOnArtboard(record) {
+  return Boolean(layerDragState && record && !record.isCanvas && layerDragState.sourceArtboardId !== record.id);
+}
+
+function dropLayerOnArtboard(event, targetRecord) {
+  if (!canDropLayerOnArtboard(targetRecord)) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const state = { ...layerDragState, componentIds: [...layerDragState.componentIds] };
+  finishLayerDrag();
+  const sourceRecord = artboards.find((record) => record.id === state.sourceArtboardId);
+  moveComponentsToArtboard(sourceRecord, targetRecord, state.componentIds, {
+    placement: "offset",
+    primaryId: state.primaryId,
+    save: true
+  });
+}
+
+function createComponentLayerItem(record, component, nested = false) {
+  const item = document.createElement("div");
+  const selected = record.id === activeArtboardId && isSelected(component.id);
+  item.className = `component-item layer-component${nested ? " is-layer-child" : ""}${selected ? " is-selected" : ""}`;
+  item.role = "button";
+  item.tabIndex = 0;
+  item.draggable = true;
+  item.setAttribute("aria-grabbed", "false");
+  item.dataset.componentId = String(component.id);
+  item.dataset.ownerArtboardId = String(record.id);
+  const actionText = component.actions?.length ? ` / ${component.actions.length} actions` : "";
+  const regionText = component.regions?.length ? ` / ${component.regions.length} areas` : "";
+  const main = document.createElement("span");
+  main.className = "component-item-main";
+  const name = document.createElement("span");
+  name.className = "component-item-name";
+  name.textContent = component.name;
+  main.appendChild(name);
+  const meta = document.createElement("small");
+  meta.textContent = `${component.type} / ${effectLabels[component.effect] || "None"}${actionText}${regionText}`;
+  item.append(main, meta);
+
+  const selectLayer = (event, rename = false) => {
+    if (record.id !== activeArtboardId) activateArtboard(record.id);
+    if (event?.shiftKey && !rename) toggleSelection(component.id);
+    else selectOnly(component.id);
+    if (rename) {
+      syncControlsFromSelection();
+      renderComponentList();
+      const currentItem = componentList.querySelector(`[data-component-id="${component.id}"][data-owner-artboard-id="${record.id}"]`);
+      const currentName = currentItem?.querySelector(".component-item-name");
+      if (currentItem && currentName) beginComponentRename(component, currentItem, currentName);
+    } else render();
+  };
+
+  item.addEventListener("click", (event) => {
+    if (event.target.closest(".component-name-input")) return;
+    if (event.detail >= 2) {
+      event.preventDefault();
+      event.stopPropagation();
+      selectLayer(event, true);
+      return;
+    }
+    selectLayer(event);
+  });
+  name.addEventListener("dblclick", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    selectLayer(event, true);
+  });
+  item.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      selectLayer(event);
+    } else if (event.key === "F2") {
+      event.preventDefault();
+      selectLayer(event, true);
+    }
+  });
+  item.addEventListener("dragstart", (event) => startLayerDrag(event, record, component, item));
+  item.addEventListener("dragend", finishLayerDrag);
+  return item;
+}
+
+function createArtboardLayerItem(record) {
+  const item = document.createElement("div");
+  item.className = `component-item layer-artboard${selectedArtboardIds.includes(record.id) ? " is-selected" : ""}${activeArtboardId === record.id ? " is-active-layer" : ""}`;
+  item.role = "button";
+  item.tabIndex = 0;
+  item.dataset.artboardId = String(record.id);
+  item.setAttribute("aria-expanded", String(record.expanded !== false));
+
+  const disclosure = document.createElement("button");
+  disclosure.type = "button";
+  disclosure.className = `layer-disclosure${record.expanded !== false ? " is-expanded" : ""}`;
+  disclosure.setAttribute("aria-label", `${record.expanded !== false ? "Collapse" : "Expand"} ${record.name}`);
+  disclosure.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    record.expanded = record.expanded === false;
+    renderComponentList();
+  });
+
+  const icon = document.createElement("span");
+  icon.className = "layer-kind-icon is-artboard";
+  icon.setAttribute("aria-hidden", "true");
+  const name = document.createElement("span");
+  name.className = "component-item-name";
+  name.textContent = record.name;
+  const meta = document.createElement("small");
+  meta.textContent = String(record.components.length);
+  item.append(disclosure, icon, name, meta);
+
+  const selectLayer = (rename = false, toggle = false) => {
+    selectArtboard(record.id, { toggle });
+    if (rename) {
+      const currentItem = componentList.querySelector(`[data-artboard-id="${record.id}"]`);
+      const currentName = currentItem?.querySelector(".component-item-name");
+      if (currentItem && currentName) beginArtboardRename(record, currentItem, currentName);
+    }
+  };
+  item.addEventListener("click", (event) => {
+    if (event.target.closest(".component-name-input, .layer-disclosure")) return;
+    if (event.detail >= 2) {
+      event.preventDefault();
+      event.stopPropagation();
+      selectLayer(true);
+      return;
+    }
+    selectLayer(false, event.shiftKey);
+  });
+  name.addEventListener("dblclick", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    selectLayer(true);
+  });
+  item.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      selectLayer();
+    } else if (event.key === "F2") {
+      event.preventDefault();
+      selectLayer(true);
+    }
+  });
+  item.addEventListener("dragenter", (event) => {
+    if (!canDropLayerOnArtboard(record)) return;
+    event.preventDefault();
+    item.classList.add("is-drop-target");
+  });
+  item.addEventListener("dragover", (event) => {
+    if (!canDropLayerOnArtboard(record)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    item.classList.add("is-drop-target");
+  });
+  item.addEventListener("dragleave", (event) => {
+    if (event.relatedTarget instanceof Node && item.contains(event.relatedTarget)) return;
+    item.classList.remove("is-drop-target");
+  });
+  item.addEventListener("drop", (event) => dropLayerOnArtboard(event, record));
+  return item;
+}
+
 function renderComponentList() {
-  if (!components.length) {
-    componentList.innerHTML = `<div class="component-item"><span>No components yet</span><small>Upload, draw, or load samples</small></div>`;
+  const frameRecords = artboards.filter((record) => !record.isCanvas);
+  const looseRecord = canvasRecord();
+  const hasLooseComponents = Boolean(looseRecord?.components.length);
+  if (!frameRecords.length && !hasLooseComponents) {
+    componentList.innerHTML = `<div class="component-item layer-empty"><span>No layers yet</span><small>Create an artboard or draw a layer</small></div>`;
     return;
   }
 
   componentList.innerHTML = "";
-  components.forEach((component) => {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = `component-item${isSelected(component.id) ? " is-selected" : ""}`;
-    const actionText = component.actions?.length ? ` / ${component.actions.length} actions` : "";
-    const regionText = component.regions?.length ? ` / ${component.regions.length} areas` : "";
-    button.innerHTML = `<span>${escapeHtml(component.name)}</span><small>${component.type} / ${effectLabels[component.effect] || "None"}${actionText}${regionText}</small>`;
-    button.addEventListener("click", (event) => {
-      if (event.shiftKey) toggleSelection(component.id);
-      else selectOnly(component.id);
-      render();
+  looseRecord?.components.forEach((component) => {
+    componentList.appendChild(createComponentLayerItem(looseRecord, component));
+  });
+  frameRecords.forEach((record) => {
+    componentList.appendChild(createArtboardLayerItem(record));
+    if (record.expanded === false) return;
+    record.components.forEach((component) => {
+      componentList.appendChild(createComponentLayerItem(record, component, true));
     });
-    componentList.appendChild(button);
   });
 }
 
@@ -4462,13 +5536,22 @@ function clearSelectedActions() {
 function syncControlsFromSelection() {
   const selected = selectedComponents();
   const guideSelection = selectedGuides();
+  const artboardSelection = selectedArtboardRecords();
+  scheduleRulerRender();
   const component = guideSelection.length ? null : selectedComponent();
   const guide = selectedGuide();
   const totalSelectionCount = selected.length + guideSelection.length;
+  alignmentButtons.forEach((button) => {
+    button.disabled = !selected.length || Boolean(guideSelection.length);
+  });
   updateInspectorVisibility(component);
 
   if (!component) {
-    selectedSummary.textContent = totalSelectionCount > 1
+    selectedSummary.textContent = artboardSelection.length > 1
+      ? `${artboardSelection.length} artboards selected`
+      : artboardSelection.length === 1
+      ? artboardSelection[0].name
+      : totalSelectionCount > 1
       ? `${totalSelectionCount} selected`
       : guide
       ? `${guide.orientation === "vertical" ? "Vertical" : "Horizontal"} guide / ${Math.round(guide.position)}px`
@@ -5074,6 +6157,54 @@ function removeSelectedComponent() {
   render();
 }
 
+function removeSelectedArtboard() {
+  const records = selectedArtboardRecords();
+  if (!records.length) return false;
+
+  saveHistory();
+  cancelBrushDrawMode();
+  records.forEach((record) => {
+    record.components.forEach((component) => {
+      stopComponentActionRun(component.id);
+      clearActiveRegionEffects(component.id);
+    });
+  });
+
+  const frameRecords = artboards.filter((item) => !item.isCanvas);
+  const ids = new Set(records.map((record) => record.id));
+  const frameIndex = Math.min(...records.map((record) => frameRecords.findIndex((item) => item.id === record.id)));
+  records.forEach((record) => {
+    record.frame?.remove();
+    record.artboardGuideLayer?.remove();
+  });
+  artboards = artboards.filter((item) => !ids.has(item.id));
+  clearArtboardSelection();
+
+  const remainingFrames = artboards.filter((item) => !item.isCanvas);
+  const nextRecord = remainingFrames[Math.min(frameIndex, remainingFrames.length - 1)] || canvasRecord() || null;
+  setActiveArtboardRefs(nextRecord);
+  artboards.forEach((item) => {
+    const isActive = item.id === nextRecord?.id;
+    item.frame?.classList.toggle("is-active", isActive);
+    item.artboardGuideLayer?.classList.toggle("is-active", isActive);
+  });
+
+  updateArtboardEmptyState();
+  if (nextRecord) {
+    syncArtboardInputs();
+    applyArtboardVisual(nextRecord);
+    refreshWorkspaceBounds({ preserveViewport: true });
+    render();
+  } else {
+    refreshWorkspaceBounds({ preserveViewport: true });
+    syncArtboardInputs();
+    renderComponentList();
+    syncControlsFromSelection();
+  }
+  if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+  return true;
+}
+
 function removeCombinedSelection() {
   const componentIds = new Set(selectedIds);
   const guideIds = new Set(selectedGuideIds);
@@ -5151,6 +6282,18 @@ function handleEditorShortcut(event) {
   const key = event.key.toLowerCase();
   const isTextEntry = isTextEntryTarget(event.target);
 
+  if (!isTextEntry && event.key === "Escape" && activeInsertTool) {
+    event.preventDefault();
+    cancelInsertTool();
+    return;
+  }
+
+  if (!isTextEntry && (event.ctrlKey || event.metaKey) && key === "r") {
+    event.preventDefault();
+    toggleRulers();
+    return;
+  }
+
   if (!isTextEntry && event.key === "Alt") {
     event.preventDefault();
     if (!hasActiveEditorGesture()) {
@@ -5200,6 +6343,7 @@ function handleEditorShortcut(event) {
   if (event.key === "Delete" || event.key === "Backspace") {
     if (isTextEntry) return;
     event.preventDefault();
+    if (removeSelectedArtboard()) return;
     if (removeCombinedSelection()) return;
     if (removeSelectedGuide()) return;
     if (selectedRegion()) {
@@ -5232,6 +6376,63 @@ function bringSelectedFront() {
   render();
 }
 
+function alignSelectedComponents(alignment) {
+  const selected = selectedComponents();
+  const ownerRecord = activeArtboardRecord();
+  const ownerSurface = ownerRecord?.surface;
+  const ownerLayer = ownerRecord?.componentLayer;
+  if (!selected.length || selectedGuides().length || !ownerSurface || !ownerLayer) return;
+  const ownerLayerRect = ownerLayer.getBoundingClientRect();
+  if (!ownerLayerRect.width || !ownerLayerRect.height) return;
+  const entries = selected.map((component) => ({
+    component,
+    node: ownerLayer.querySelector(`[data-id="${component.id}"]`)
+  })).filter((entry) => entry.node).map((entry) => ({
+    ...entry,
+    rect: entry.node.getBoundingClientRect()
+  }));
+  if (!entries.length) return;
+
+  let parentSurface = ownerSurface;
+  if (ownerRecord.isCanvas && entries.length === 1) {
+    const rect = entries[0].rect;
+    parentSurface = artboardAtPoint((rect.left + rect.right) / 2, (rect.top + rect.bottom) / 2)?.surface || ownerSurface;
+  }
+  const parentRect = parentSurface.getBoundingClientRect();
+
+  const reference = entries.length === 1
+    ? {
+      left: parentRect.left + parentSurface.clientLeft,
+      right: parentRect.left + parentSurface.clientLeft + parentSurface.clientWidth,
+      top: parentRect.top + parentSurface.clientTop,
+      bottom: parentRect.top + parentSurface.clientTop + parentSurface.clientHeight
+    }
+    : {
+      left: Math.min(...entries.map((entry) => entry.rect.left)),
+      right: Math.max(...entries.map((entry) => entry.rect.right)),
+      top: Math.min(...entries.map((entry) => entry.rect.top)),
+      bottom: Math.max(...entries.map((entry) => entry.rect.bottom))
+    };
+  const referenceCenterX = (reference.left + reference.right) / 2;
+  const referenceCenterY = (reference.top + reference.bottom) / 2;
+  saveHistory();
+
+  entries.forEach(({ component, rect }) => {
+    let dx = 0;
+    let dy = 0;
+    if (alignment === "left") dx = reference.left - rect.left;
+    else if (alignment === "horizontal-center") dx = referenceCenterX - (rect.left + rect.right) / 2;
+    else if (alignment === "right") dx = reference.right - rect.right;
+    else if (alignment === "top") dy = reference.top - rect.top;
+    else if (alignment === "vertical-center") dy = referenceCenterY - (rect.top + rect.bottom) / 2;
+    else if (alignment === "bottom") dy = reference.bottom - rect.bottom;
+    component.x += dx / ownerLayerRect.width * 100;
+    component.y += dy / ownerLayerRect.height * 100;
+    clampComponent(component);
+  });
+  render();
+}
+
 function duplicateSelected() {
   copySelectedComponent();
   pasteCopiedComponent();
@@ -5242,11 +6443,13 @@ function resetDemo() {
   stopActiveSounds();
   if (componentLayer) clearActiveRegionEffects();
   cancelBrushDrawMode();
+  cancelInsertTool();
   clearArtboards();
   nextId = 1;
   nextRegionId = 1;
   nextArtboardId = 1;
   nextGuideId = 1;
+  clearArtboardSelection();
   selectedRegionId = null;
   selectedGuideId = null;
   selectedGuideIds = [];
@@ -5259,15 +6462,25 @@ function resetDemo() {
   brushDrawComponentId = null;
   brushDrawState = null;
   window.removeEventListener("pointermove", handleArtboardDragMove);
+  window.removeEventListener("pointermove", handleWorkspaceMarqueeMove);
   window.removeEventListener("pointermove", handleGuideDragMove);
+  window.removeEventListener("pointermove", handleRulerGuideDragMove);
   artboardDragState = null;
+  workspaceMarqueeNode?.remove();
+  workspaceMarqueeNode = null;
+  workspaceMarqueeState = null;
+  artboardDragDidMove = false;
   guideDragState = null;
+  rulerGuideDragState?.preview?.remove();
+  rulerGuideDragState = null;
   measurementGuidesVisible = false;
   lastCanvasPointer = null;
   document.body.classList.remove("is-artboard-dragging");
   isSpacePanning = false;
   stagePanState = null;
   boardZoom = 1;
+  rulersVisible = false;
+  rulerOverlay.classList.add("is-hidden");
   syncBrushDrawButtonState();
   syncStagePanMode();
   artboard = { ...defaultArtboard };
@@ -5298,11 +6511,15 @@ function escapeHtml(value) {
 componentInput.addEventListener("change", (event) => loadComponentFiles(event.target.files));
 sampleButton.addEventListener("click", loadSamples);
 resetButton.addEventListener("click", resetDemo);
-addArtboardButton.addEventListener("click", () => createArtboard());
-shapeButtons.forEach((button) => button.addEventListener("click", () => addShape(button.dataset.shape)));
-addTextButton.addEventListener("click", addText);
-addHorizontalGuideButton.addEventListener("click", () => addGuide("horizontal"));
-addVerticalGuideButton.addEventListener("click", () => addGuide("vertical"));
+addArtboardButton.addEventListener("click", () => {
+  cancelInsertTool();
+  createArtboard();
+});
+shapeButtons.forEach((button) => button.addEventListener("click", () => activateInsertTool({ kind: "shape", shape: button.dataset.shape })));
+addTextButton.addEventListener("click", () => activateInsertTool({ kind: "text" }));
+addHorizontalGuideButton.addEventListener("click", () => activateInsertTool({ kind: "guide", orientation: "horizontal" }));
+addVerticalGuideButton.addEventListener("click", () => activateInsertTool({ kind: "guide", orientation: "vertical" }));
+alignmentButtons.forEach((button) => button.addEventListener("click", () => alignSelectedComponents(button.dataset.align)));
 bringFrontButton.addEventListener("click", bringSelectedFront);
 duplicateButton.addEventListener("click", duplicateSelected);
 testEffectButton.addEventListener("click", () => {
@@ -5324,6 +6541,12 @@ stage.addEventListener("wheel", handleStageWheel, { passive: false, capture: tru
 stage.addEventListener("pointerdown", startStagePan, { capture: true });
 stage.addEventListener("pointermove", handleMeasurementPointerMove);
 stage.addEventListener("pointerleave", handleMeasurementPointerLeave);
+stage.addEventListener("scroll", scheduleRulerRender, { passive: true });
+artboardWorkspace.addEventListener("pointerdown", startWorkspaceInsertDraw);
+artboardWorkspace.addEventListener("pointerdown", startWorkspaceMarqueeSelection);
+horizontalRuler.addEventListener("pointerdown", (event) => startRulerGuideDrag(event, "horizontal"));
+verticalRuler.addEventListener("pointerdown", (event) => startRulerGuideDrag(event, "vertical"));
+window.addEventListener("resize", scheduleRulerRender);
 [artboardWidthInput, artboardHeightInput, artboardBgInput, artboardTransparentToggle].forEach((control) => {
   control.addEventListener("input", syncArtboardFromControls);
   control.addEventListener("change", syncArtboardFromControls);

@@ -44,15 +44,15 @@
         </div>
         <div class="shape-grid" aria-label="Shape tools">
           <button id="addArtboardButton" class="shape-button artboard-button" type="button">Artboard</button>
-          <button class="shape-button icon-button" type="button" data-shape="line" aria-label="Line" title="Line"><span class="shape-tool-icon icon-line" aria-hidden="true"></span></button>
-          <button class="shape-button icon-button" type="button" data-shape="curve" aria-label="Curve" title="Curve"><span class="shape-tool-icon icon-curve" aria-hidden="true"></span></button>
-          <button class="shape-button icon-button" type="button" data-shape="circle" aria-label="Circle" title="Circle"><span class="shape-tool-icon icon-circle" aria-hidden="true"></span></button>
-          <button class="shape-button icon-button" type="button" data-shape="rect" aria-label="Rectangle" title="Rectangle"><span class="shape-tool-icon icon-rect" aria-hidden="true"></span></button>
-          <button class="shape-button icon-button" type="button" data-shape="triangle" aria-label="Triangle" title="Triangle"><span class="shape-tool-icon icon-triangle" aria-hidden="true"></span></button>
-          <button class="shape-button icon-button" type="button" data-shape="star" aria-label="Star" title="Star"><span class="shape-tool-icon icon-star" aria-hidden="true"></span></button>
-          <button id="addTextButton" class="shape-button icon-button" type="button" aria-label="Text" title="Text"><span class="shape-tool-icon icon-text" aria-hidden="true">T</span></button>
-          <button id="addHorizontalGuideButton" class="shape-button icon-button" type="button" aria-label="Horizontal guide" title="Horizontal guide"><span class="shape-tool-icon icon-guide-horizontal" aria-hidden="true"></span></button>
-          <button id="addVerticalGuideButton" class="shape-button icon-button" type="button" aria-label="Vertical guide" title="Vertical guide"><span class="shape-tool-icon icon-guide-vertical" aria-hidden="true"></span></button>
+          <button class="shape-button icon-button" type="button" data-shape="line" aria-label="Line" aria-pressed="false" title="Line"><span class="shape-tool-icon icon-line" aria-hidden="true"></span></button>
+          <button class="shape-button icon-button" type="button" data-shape="curve" aria-label="Curve" aria-pressed="false" title="Curve"><span class="shape-tool-icon icon-curve" aria-hidden="true"></span></button>
+          <button class="shape-button icon-button" type="button" data-shape="circle" aria-label="Circle" aria-pressed="false" title="Circle"><span class="shape-tool-icon icon-circle" aria-hidden="true"></span></button>
+          <button class="shape-button icon-button" type="button" data-shape="rect" aria-label="Rectangle" aria-pressed="false" title="Rectangle"><span class="shape-tool-icon icon-rect" aria-hidden="true"></span></button>
+          <button class="shape-button icon-button" type="button" data-shape="triangle" aria-label="Triangle" aria-pressed="false" title="Triangle"><span class="shape-tool-icon icon-triangle" aria-hidden="true"></span></button>
+          <button class="shape-button icon-button" type="button" data-shape="star" aria-label="Star" aria-pressed="false" title="Star"><span class="shape-tool-icon icon-star" aria-hidden="true"></span></button>
+          <button id="addTextButton" class="shape-button icon-button" type="button" aria-label="Text" aria-pressed="false" title="Text"><span class="shape-tool-icon icon-text" aria-hidden="true">T</span></button>
+          <button id="addHorizontalGuideButton" class="shape-button icon-button" type="button" aria-label="Horizontal guide" aria-pressed="false" title="Horizontal guide"><span class="shape-tool-icon icon-guide-horizontal" aria-hidden="true"></span></button>
+          <button id="addVerticalGuideButton" class="shape-button icon-button" type="button" aria-label="Vertical guide" aria-pressed="false" title="Vertical guide"><span class="shape-tool-icon icon-guide-vertical" aria-hidden="true"></span></button>
         </div>
       </section>
 
@@ -70,13 +70,20 @@
 
     <section class="canvas-column">
       <div class="hidden-status" aria-hidden="true"><strong id="statusTitle"></strong><span id="statusText"></span></div>
-      <div id="stage" class="stage" tabindex="0" aria-label="Interactive artwork stage">
-        <div id="emptyState" class="empty-state">
-          <span class="empty-symbol"></span>
-          <strong>No artboards</strong>
-          <p>Create an artboard, upload layers, load samples, or insert a shape.</p>
+      <div class="stage-shell">
+        <div id="stage" class="stage" tabindex="0" aria-label="Interactive artwork stage">
+          <div id="emptyState" class="empty-state">
+            <span class="empty-symbol"></span>
+            <strong>No artboards</strong>
+            <p>Create an artboard, upload layers, load samples, or insert a shape.</p>
+          </div>
+          <div id="artboardWorkspace" class="artboard-workspace"></div>
         </div>
-        <div id="artboardWorkspace" class="artboard-workspace"></div>
+        <div id="rulerOverlay" class="ruler-overlay is-hidden" aria-hidden="true">
+          <div class="ruler-corner"></div>
+          <canvas id="horizontalRuler" class="ruler ruler-horizontal"></canvas>
+          <canvas id="verticalRuler" class="ruler ruler-vertical"></canvas>
+        </div>
       </div>
 
       <footer class="inspector-strip">
@@ -111,6 +118,14 @@
       <section class="panel-section">
         <div class="section-title">
           <h2>Design</h2>
+        </div>
+        <div id="alignmentControls" class="alignment-controls" aria-label="Align selection">
+          <button type="button" data-align="left" aria-label="Align left" title="Align left"><span class="align-icon align-left" aria-hidden="true"><i></i><i></i><i></i></span></button>
+          <button type="button" data-align="horizontal-center" aria-label="Align horizontal centers" title="Align horizontal centers"><span class="align-icon align-horizontal-center" aria-hidden="true"><i></i><i></i><i></i></span></button>
+          <button type="button" data-align="right" aria-label="Align right" title="Align right"><span class="align-icon align-right" aria-hidden="true"><i></i><i></i><i></i></span></button>
+          <button type="button" data-align="top" aria-label="Align top" title="Align top"><span class="align-icon align-top" aria-hidden="true"><i></i><i></i><i></i></span></button>
+          <button type="button" data-align="vertical-center" aria-label="Align vertical centers" title="Align vertical centers"><span class="align-icon align-vertical-center" aria-hidden="true"><i></i><i></i><i></i></span></button>
+          <button type="button" data-align="bottom" aria-label="Align bottom" title="Align bottom"><span class="align-icon align-bottom" aria-hidden="true"><i></i><i></i><i></i></span></button>
         </div>
         <div class="compact-grid two-col">
           <label class="field"><span>X</span><input id="xRange" type="range" min="0" max="100" value="0"><output id="xOutput">0</output></label>
