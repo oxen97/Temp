@@ -813,6 +813,7 @@ input[type="range"]::-moz-range-thumb {
   pointer-events: none;
   z-index: 900;
 }
+.artboard-workspace:not(.are-guides-visible) .guide-layer { display: none; }
 .guide-layer:not(.is-active):not(.is-canvas-guide-layer) { display: none; }
 .artboard-guide {
   position: absolute;

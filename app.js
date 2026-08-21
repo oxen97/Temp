@@ -1284,6 +1284,12 @@ function scheduleRulerRender() {
 function toggleRulers() {
   rulersVisible = !rulersVisible;
   rulerOverlay.classList.toggle("is-hidden", !rulersVisible);
+  artboardWorkspace.classList.toggle("are-guides-visible", rulersVisible);
+  if (!rulersVisible && selectedGuideIds.length) {
+    setGuideSelection([]);
+    clearSmartGuides();
+    syncSelectionVisuals();
+  }
   scheduleRulerRender();
 }
 
@@ -3519,8 +3525,10 @@ function bindComponentEvents(node, component, ownerArtboardId = activeArtboardId
     }
 
     if (event.shiftKey) {
-      toggleSelection(component.id);
+      const toggleOnClick = isSelected(component.id);
+      if (!toggleOnClick) toggleSelection(component.id);
       render();
+      startDrag(event, component.id, { shiftSelection: true, toggleOnClick });
       return;
     }
 
@@ -4249,7 +4257,7 @@ function clearSmartGuides() {
   measurementGuidesVisible = false;
 }
 
-function resolveSmartGuides(proposedItems, movingIds, lockedSnaps = {}) {
+function resolveSmartGuides(proposedItems, movingIds, lockedSnaps = {}, snapAxes = { x: true, y: true }) {
   const surface = smartGuideSurface();
   const movingIdSet = new Set(movingIds);
   const movingRects = proposedItems.map((item) => ({ ...item, rect: rectForSmartGuide(item, surface) }));
@@ -4258,14 +4266,18 @@ function resolveSmartGuides(proposedItems, movingIds, lockedSnaps = {}) {
     .filter((component) => !movingIdSet.has(component.id))
     .map((component) => ({ id: component.id, rect: rectForSmartGuide(component, surface) }));
 
-  const snapX = chooseSmartGuideCandidate(
-    findAlignmentSnap("x", group, targets, surface),
-    findEqualSpacingSnap("x", group, targets, smartGuideSpacingSnapPx, lockedSnaps.x)
-  );
-  const snapY = chooseSmartGuideCandidate(
-    findAlignmentSnap("y", group, targets, surface),
-    findEqualSpacingSnap("y", group, targets, smartGuideSpacingSnapPx, lockedSnaps.y)
-  );
+  const snapX = snapAxes.x
+    ? chooseSmartGuideCandidate(
+      findAlignmentSnap("x", group, targets, surface),
+      findEqualSpacingSnap("x", group, targets, smartGuideSpacingSnapPx, lockedSnaps.x)
+    )
+    : null;
+  const snapY = snapAxes.y
+    ? chooseSmartGuideCandidate(
+      findAlignmentSnap("y", group, targets, surface),
+      findEqualSpacingSnap("y", group, targets, smartGuideSpacingSnapPx, lockedSnaps.y)
+    )
+    : null;
 
   const dxPx = snapX?.delta || 0;
   const dyPx = snapY?.delta || 0;
@@ -4282,14 +4294,18 @@ function resolveSmartGuides(proposedItems, movingIds, lockedSnaps = {}) {
     smartGuideLineForCandidate(snapY, snappedGroup, surface)
   ].filter(Boolean);
   const measures = [];
-  const equalX = findEqualSpacingSnap("x", snappedGroup, targets, 1.5);
-  const equalY = findEqualSpacingSnap("y", snappedGroup, targets, 1.5);
+  const equalX = snapAxes.x ? findEqualSpacingSnap("x", snappedGroup, targets, 1.5) : null;
+  const equalY = snapAxes.y ? findEqualSpacingSnap("y", snappedGroup, targets, 1.5) : null;
 
-  if (equalX) addEqualSpacingMeasures(equalX, snappedGroup, surface, measures);
-  else addNearestDistanceMeasures("x", snappedGroup, targets, surface, measures);
+  if (snapAxes.x) {
+    if (equalX) addEqualSpacingMeasures(equalX, snappedGroup, surface, measures);
+    else addNearestDistanceMeasures("x", snappedGroup, targets, surface, measures);
+  }
 
-  if (equalY) addEqualSpacingMeasures(equalY, snappedGroup, surface, measures);
-  else addNearestDistanceMeasures("y", snappedGroup, targets, surface, measures);
+  if (snapAxes.y) {
+    if (equalY) addEqualSpacingMeasures(equalY, snappedGroup, surface, measures);
+    else addNearestDistanceMeasures("y", snappedGroup, targets, surface, measures);
+  }
 
   return {
     items,
@@ -4302,7 +4318,30 @@ function resolveSmartGuides(proposedItems, movingIds, lockedSnaps = {}) {
   };
 }
 
-function startDrag(event, id) {
+function componentDragBases(ids) {
+  return ids.map((selected) => {
+    const item = components.find((componentItem) => componentItem.id === selected);
+    return { id: selected, x: item?.x || 0, y: item?.y || 0, w: item?.w || 0, h: item?.h || 0 };
+  });
+}
+
+function rebaseComponentDrag(state, clientX, clientY) {
+  state.startX = clientX;
+  state.startY = clientY;
+  state.bases = componentDragBases(state.ids);
+  state.constraintAxis = null;
+  state.lockedSnaps = { x: null, y: null };
+}
+
+function switchedConstraintAxis(axis, stepX, stepY) {
+  if (!axis) return null;
+  const parallel = Math.abs(axis === "x" ? stepX : stepY);
+  const perpendicular = Math.abs(axis === "x" ? stepY : stepX);
+  if (perpendicular < 3 || perpendicular <= parallel * 1.4) return null;
+  return axis === "x" ? "y" : "x";
+}
+
+function startDrag(event, id, { shiftSelection = false, toggleOnClick = false } = {}) {
   const component = components.find((item) => item.id === id);
   const rect = artSurface.getBoundingClientRect();
   if (!component || !rect.width || !rect.height) return;
@@ -4318,11 +4357,14 @@ function startDrag(event, id) {
     startY: event.clientY,
     width: rect.width,
     height: rect.height,
+    shiftSelection,
+    toggleOnClick,
+    shiftActive: event.shiftKey,
+    constraintAxis: null,
+    lastX: event.clientX,
+    lastY: event.clientY,
     historyEntryAdded: historyStack.length > historyLengthBeforeDrag,
-    bases: ids.map((selected) => {
-      const item = components.find((componentItem) => componentItem.id === selected);
-      return { id: selected, x: item?.x || 0, y: item?.y || 0, w: item?.w || 0, h: item?.h || 0 };
-    }),
+    bases: componentDragBases(ids),
     lockedSnaps: { x: null, y: null }
   };
   clearSmartGuides();
@@ -4448,8 +4490,42 @@ function reparentDraggedComponents(state) {
 function handlePointerMove(event) {
   if (!dragState) return;
 
-  const dx = ((event.clientX - dragState.startX) / dragState.width) * 100;
-  const dy = ((event.clientY - dragState.startY) / dragState.height) * 100;
+  const stepX = event.clientX - dragState.lastX;
+  const stepY = event.clientY - dragState.lastY;
+  if (event.shiftKey !== dragState.shiftActive) {
+    rebaseComponentDrag(dragState, dragState.lastX, dragState.lastY);
+    dragState.shiftActive = event.shiftKey;
+  }
+
+  let dxPx = event.clientX - dragState.startX;
+  let dyPx = event.clientY - dragState.startY;
+  let constraintAxis = null;
+
+  if (event.shiftKey) {
+    if (!dragState.constraintAxis && Math.max(Math.abs(dxPx), Math.abs(dyPx)) >= 8) {
+      dragState.constraintAxis = Math.abs(dxPx) >= Math.abs(dyPx) ? "x" : "y";
+    } else {
+      const nextAxis = switchedConstraintAxis(dragState.constraintAxis, stepX, stepY);
+      if (nextAxis) {
+        rebaseComponentDrag(dragState, dragState.lastX, dragState.lastY);
+        dragState.constraintAxis = nextAxis;
+        dxPx = event.clientX - dragState.startX;
+        dyPx = event.clientY - dragState.startY;
+      }
+    }
+    constraintAxis = dragState.constraintAxis;
+    if (constraintAxis === "x") dyPx = 0;
+    else if (constraintAxis === "y") dxPx = 0;
+    else {
+      dxPx = 0;
+      dyPx = 0;
+    }
+  } else {
+    dragState.constraintAxis = null;
+  }
+
+  const dx = (dxPx / dragState.width) * 100;
+  const dy = (dyPx / dragState.height) * 100;
   if (Math.abs(dx) + Math.abs(dy) > 0.6) movedDuringDrag = true;
 
   const proposedItems = dragState.bases.map((base) => ({
@@ -4460,7 +4536,10 @@ function handlePointerMove(event) {
     h: base.h
   }));
   const snap = movedDuringDrag
-    ? resolveSmartGuides(proposedItems, dragState.ids, dragState.lockedSnaps)
+    ? resolveSmartGuides(proposedItems, dragState.ids, dragState.lockedSnaps, {
+      x: constraintAxis !== "y",
+      y: constraintAxis !== "x"
+    })
     : { items: proposedItems, guides: [], measures: [] };
   dragState.lockedSnaps = snap.lockedSnaps || { x: null, y: null };
   const nextById = new Map(snap.items.map((item) => [item.id, item]));
@@ -4478,16 +4557,20 @@ function handlePointerMove(event) {
 
   renderSmartGuides(snap.guides, snap.measures);
   syncControlsFromSelection();
+  dragState.lastX = event.clientX;
+  dragState.lastY = event.clientY;
 }
 
 function handlePointerUp() {
   const state = dragState;
   const clickedComponent = state ? components.find((item) => item.id === state.clickedId) : null;
-  const shouldTriggerTap = Boolean(clickedComponent && !movedDuringDrag && (clickedComponent.trigger === "click" || (clickedComponent.trigger === "hover" && !window.matchMedia("(hover: hover)").matches)));
+  const shouldToggleSelection = Boolean(state?.shiftSelection && state.toggleOnClick && !movedDuringDrag);
+  const shouldTriggerTap = Boolean(clickedComponent && !state?.shiftSelection && !movedDuringDrag && (clickedComponent.trigger === "click" || (clickedComponent.trigger === "hover" && !window.matchMedia("(hover: hover)").matches)));
 
   window.removeEventListener("pointermove", handlePointerMove);
   dragState = null;
   if (!movedDuringDrag && state?.historyEntryAdded) historyStack.pop();
+  if (shouldToggleSelection) toggleSelection(state.clickedId);
   clearSmartGuides();
   if (!reparentDraggedComponents(state)) render();
 
