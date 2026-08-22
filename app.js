@@ -1884,7 +1884,7 @@ function renderComponents() {
     note.innerHTML = `<strong>${escapeHtml(component.name)}</strong><span>${triggerLabels[component.trigger]} + ${effectLabels[component.effect] || "None"}</span>`;
 
     node.appendChild(viewport);
-    node.appendChild(createRegionLayer(component));
+    node.appendChild(createRegionLayer(component, ownerArtboardId));
     const selectionBox = createSelectionBox(component);
     node.appendChild(selectionBox);
     if (component.type === "shape" && component.shape === "curve") {
@@ -2938,7 +2938,7 @@ function syncRegionNode(node, component, region) {
   applyBrushRegionPath(node, region);
 }
 
-function createRegionNode(component, region, index) {
+function createRegionNode(component, region, index, ownerArtboardId) {
   const node = document.createElement("div");
   region.name = region.name || `Area ${index + 1}`;
   syncRegionNode(node, component, region);
@@ -2986,13 +2986,20 @@ function createRegionNode(component, region, index) {
 
   node.addEventListener("pointerdown", (event) => {
     if (event.button !== 0) return;
-    event.preventDefault();
-    event.stopPropagation();
-    event.stopImmediatePropagation();
     if (canStartBrushDraw(component.id)) {
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
       startBrushRegionDraw(event, component.id);
       return;
     }
+    if (!isDeepSelectionModifier(event)) {
+      startComponentPointerSelection(event, component.id, ownerArtboardId);
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation();
     selectRegion(component.id, region.id);
     setRegionPointerOrigin(node, event);
     clearActiveRegionEffects(component.id);
@@ -3002,13 +3009,13 @@ function createRegionNode(component, region, index) {
   return node;
 }
 
-function createRegionLayer(component) {
+function createRegionLayer(component, ownerArtboardId) {
   const layer = document.createElement("div");
   layer.className = "component-region-layer";
   (component.regions || []).forEach((region, index) => {
     clampRegion(region);
     layer.appendChild(createRegionRemainder(component, region));
-    layer.appendChild(createRegionNode(component, region, index));
+    layer.appendChild(createRegionNode(component, region, index, ownerArtboardId));
   });
   return layer;
 }
@@ -3500,6 +3507,117 @@ function createCurveControls(component) {
 
   return layer;
 }
+function isDeepSelectionModifier(event) {
+  return Boolean(event.ctrlKey || event.metaKey);
+}
+
+function pointInPolygon(point, polygon) {
+  let inside = false;
+  for (let index = 0, previous = polygon.length - 1; index < polygon.length; previous = index++) {
+    const currentPoint = polygon[index];
+    const previousPoint = polygon[previous];
+    const intersects = (currentPoint.y > point.y) !== (previousPoint.y > point.y)
+      && point.x < (previousPoint.x - currentPoint.x) * (point.y - currentPoint.y) / (previousPoint.y - currentPoint.y) + currentPoint.x;
+    if (intersects) inside = !inside;
+  }
+  return inside;
+}
+
+function pointInClosedComponent(component, rect, clientX, clientY) {
+  if (!rect.width || !rect.height) return false;
+  const point = {
+    x: (clientX - rect.left) / rect.width * 100,
+    y: (clientY - rect.top) / rect.height * 100
+  };
+  if (component.shape === "circle") {
+    const dx = (point.x - 50) / 50;
+    const dy = (point.y - 50) / 50;
+    return dx * dx + dy * dy <= 1.02;
+  }
+  if (component.shape === "triangle") {
+    return pointInPolygon(point, [{ x: 50, y: 0 }, { x: 100, y: 100 }, { x: 0, y: 100 }]);
+  }
+  if (component.shape === "star") {
+    return pointInPolygon(point, [
+      { x: 50, y: 2 }, { x: 61, y: 36 }, { x: 96, y: 36 }, { x: 68, y: 56 }, { x: 79, y: 92 },
+      { x: 50, y: 71 }, { x: 21, y: 92 }, { x: 32, y: 56 }, { x: 4, y: 36 }, { x: 39, y: 36 }
+    ]);
+  }
+  return point.x >= -0.5 && point.x <= 100.5 && point.y >= -0.5 && point.y <= 100.5;
+}
+
+function componentContainmentPoints(rect) {
+  const insetX = Math.min(1, rect.width / 4);
+  const insetY = Math.min(1, rect.height / 4);
+  return [
+    { x: rect.left + insetX, y: rect.top + insetY },
+    { x: rect.right - insetX, y: rect.top + insetY },
+    { x: rect.right - insetX, y: rect.bottom - insetY },
+    { x: rect.left + insetX, y: rect.bottom - insetY },
+    { x: (rect.left + rect.right) / 2, y: (rect.top + rect.bottom) / 2 }
+  ];
+}
+
+function outermostContainingComponentId(componentId) {
+  const targetNode = componentLayer?.querySelector(`.art-component[data-id="${componentId}"]`);
+  const targetRect = targetNode?.getBoundingClientRect();
+  if (!targetRect?.width || !targetRect.height) return componentId;
+  const targetArea = targetRect.width * targetRect.height;
+  const targetPoints = componentContainmentPoints(targetRect);
+  const closedShapes = new Set(["circle", "rect", "triangle", "star"]);
+
+  const containers = components.flatMap((candidate) => {
+    if (candidate.id === componentId || candidate.type !== "shape" || !closedShapes.has(candidate.shape)) return [];
+    const node = componentLayer.querySelector(`.art-component[data-id="${candidate.id}"]`);
+    const rect = node?.getBoundingClientRect();
+    if (!rect?.width || !rect.height) return [];
+    const area = rect.width * rect.height;
+    if (area <= targetArea * 1.02) return [];
+    if (!targetPoints.every((point) => pointInClosedComponent(candidate, rect, point.x, point.y))) return [];
+    return [{ id: candidate.id, area }];
+  });
+
+  containers.sort((a, b) => b.area - a.area);
+  return containers[0]?.id || componentId;
+}
+
+function startComponentPointerSelection(event, componentId, ownerArtboardId = activeArtboardId) {
+  if (event.button !== 0) return;
+  if (ownerArtboardId !== activeArtboardId) activateArtboard(ownerArtboardId);
+  const sourceComponent = components.find((item) => item.id === componentId);
+  if (!sourceComponent) return;
+  event.preventDefault();
+  event.stopPropagation();
+  event.stopImmediatePropagation();
+
+  if (canStartBrushDraw(sourceComponent.id)) {
+    startBrushRegionDraw(event, sourceComponent.id);
+    return;
+  }
+
+  const targetId = isDeepSelectionModifier(event)
+    ? sourceComponent.id
+    : outermostContainingComponentId(sourceComponent.id);
+  const targetComponent = components.find((item) => item.id === targetId) || sourceComponent;
+  selectedRegionId = null;
+
+  if (event.shiftKey) {
+    const toggleOnClick = isSelected(targetComponent.id);
+    if (!toggleOnClick) toggleSelection(targetComponent.id);
+    render();
+    startDrag(event, targetComponent.id, { shiftSelection: true, toggleOnClick });
+    return;
+  }
+
+  if (isSelected(targetComponent.id)) selectedId = targetComponent.id;
+  else selectOnly(targetComponent.id);
+
+  renderComponentList();
+  syncControlsFromSelection();
+  startDrag(event, targetComponent.id);
+  if (targetComponent.trigger === "drag") triggerComponent(targetComponent.id);
+}
+
 function bindComponentEvents(node, component, ownerArtboardId = activeArtboardId) {
   node.addEventListener("click", (event) => {
     event.stopPropagation();
@@ -3514,31 +3632,7 @@ function bindComponentEvents(node, component, ownerArtboardId = activeArtboardId
   });
 
   node.addEventListener("pointerdown", (event) => {
-    if (event.button !== 0) return;
-    if (ownerArtboardId !== activeArtboardId) activateArtboard(ownerArtboardId);
-    event.preventDefault();
-    event.stopPropagation();
-
-    if (canStartBrushDraw(component.id)) {
-      startBrushRegionDraw(event, component.id);
-      return;
-    }
-
-    if (event.shiftKey) {
-      const toggleOnClick = isSelected(component.id);
-      if (!toggleOnClick) toggleSelection(component.id);
-      render();
-      startDrag(event, component.id, { shiftSelection: true, toggleOnClick });
-      return;
-    }
-
-    if (isSelected(component.id)) selectedId = component.id;
-    else selectOnly(component.id);
-
-    renderComponentList();
-    syncControlsFromSelection();
-    startDrag(event, component.id);
-    if (component.trigger === "drag") triggerComponent(component.id);
+    startComponentPointerSelection(event, component.id, ownerArtboardId);
   });
 
   node.addEventListener("wheel", (event) => {
