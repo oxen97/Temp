@@ -1,12 +1,29 @@
-# Interactive Exhibition Demo
+# AMOUS
 
-Static demo for an interactive exhibition editor.
+AMOUS is a browser-based interactive exhibition editor built with Next.js,
+React, and TypeScript.
 
-## Run Locally
+## Live demo
 
-Open `index.html` in a browser.
+[Open AMOUS](https://oxen97.github.io/Temp/)
 
-## GitHub Pages
+## Local development
 
-This project is designed to run from GitHub Pages as static files.
+```powershell
+cd web
+npm ci
+npm run dev
+```
 
+Open `http://localhost:3000/`.
+
+## Verification
+
+```powershell
+cd web
+npm run check
+npm run test:e2e
+```
+
+Pushes to `main` are built as a static export and deployed to GitHub Pages by
+the repository's Pages workflow.
