@@ -84,7 +84,14 @@ test("keeps the artboard unselected when its empty area is clicked", async ({
 
   const artboard = page.getByLabel("Artboard");
   const before = await artboard.boundingBox();
-  if (!before) throw new Error("Artboard bounds are unavailable");
+  const canvasBounds = await page.getByLabel("Exhibition canvas").boundingBox();
+  if (!before || !canvasBounds) {
+    throw new Error("Artboard bounds are unavailable");
+  }
+  expect(before.x).toBeGreaterThanOrEqual(canvasBounds.x - 0.5);
+  expect(before.x + before.width).toBeLessThanOrEqual(
+    canvasBounds.x + canvasBounds.width + 0.5,
+  );
 
   await page.getByRole("button", { name: "Selection", exact: true }).click();
   await page.mouse.click(before.x + 20, before.y + 20);
@@ -206,7 +213,10 @@ test("draws the selected shape, updates layers, and supports undo and redo", asy
   await page.mouse.move(box.x + 280, box.y + 260, { steps: 6 });
   await page.mouse.up();
 
-  await expect(page.getByLabel("Circle 1", { exact: true })).toBeVisible();
+  const circle = page.getByLabel("Circle 1", { exact: true });
+  await expect(circle).toBeVisible();
+  await expect(circle.locator("ellipse")).toHaveAttribute("stroke", "none");
+  await expect(circle.locator("ellipse")).toHaveAttribute("stroke-width", "0");
   await expect(page.getByLabel("Layers").getByText("Circle 1")).toBeVisible();
   await expect(page.getByRole("button", { name: "Undo" })).toBeEnabled();
 
@@ -244,12 +254,27 @@ test("previews the selected shape while dragging", async ({ page }) => {
   const preview = page.locator(".draw-draft-preview");
   await expect(preview).toBeVisible();
   await expect(preview.locator("polygon")).toBeVisible();
+  await expect(preview.locator("polygon")).toHaveAttribute("stroke", "none");
 
   const previewBox = await preview.boundingBox();
+  const outline = preview.locator(".draw-draft-outline");
+  const outlineBox = await outline.boundingBox();
   const polygonBox = await preview.locator("polygon").boundingBox();
-  if (!previewBox || !polygonBox) {
+  if (!previewBox || !outlineBox || !polygonBox) {
     throw new Error("Shape preview bounds are unavailable");
   }
+  expect(outlineBox.x).toBeCloseTo(previewBox.x, 2);
+  expect(outlineBox.y).toBeCloseTo(previewBox.y, 2);
+  expect(outlineBox.width).toBeCloseTo(previewBox.width, 2);
+  expect(outlineBox.height).toBeCloseTo(previewBox.height, 2);
+  const outlineScreenWidth = await outline.locator("rect").evaluate((rect) => {
+    const artboard = rect.closest<HTMLElement>("#editor-artboard");
+    const scale = Number.parseFloat(
+      getComputedStyle(artboard!).getPropertyValue("--artboard-scale"),
+    );
+    return Number(rect.getAttribute("stroke-width")) * scale;
+  });
+  expect(outlineScreenWidth).toBeCloseTo(1, 2);
   expect(polygonBox.width).toBeGreaterThan(previewBox.width - 4);
   expect(polygonBox.height).toBeGreaterThan(previewBox.height - 4);
 
@@ -280,6 +305,34 @@ test("shows live selection dimensions below a drawn shape", async ({
   const rectangle = page.getByLabel("Rectangle 1", { exact: true });
   const rectangleBox = await rectangle.boundingBox();
   if (!rectangleBox) throw new Error("Rectangle bounds are unavailable");
+  const initialNorthWestHandle = await rectangle
+    .locator(".resize-handle.handle-nw")
+    .boundingBox();
+  if (!initialNorthWestHandle) {
+    throw new Error("Rectangle resize handle bounds are unavailable");
+  }
+  expect(
+    initialNorthWestHandle.x + initialNorthWestHandle.width / 2,
+  ).toBeCloseTo(rectangleBox.x - 0.5, 1);
+  expect(
+    initialNorthWestHandle.y + initialNorthWestHandle.height / 2,
+  ).toBeCloseTo(rectangleBox.y - 0.5, 1);
+
+  await page.getByLabel("Stroke style").click();
+  await page.getByRole("option", { name: "Solid" }).click();
+  await page.getByLabel("Stroke width").fill("4");
+  const strokedNorthWestHandle = await rectangle
+    .locator(".resize-handle.handle-nw")
+    .boundingBox();
+  if (!strokedNorthWestHandle) {
+    throw new Error("Stroked rectangle resize handle bounds are unavailable");
+  }
+  expect(
+    strokedNorthWestHandle.x + strokedNorthWestHandle.width / 2,
+  ).toBeCloseTo(rectangleBox.x - 2.5, 1);
+  expect(
+    strokedNorthWestHandle.y + strokedNorthWestHandle.height / 2,
+  ).toBeCloseTo(rectangleBox.y - 2.5, 1);
   const scale = await artboard.evaluate((element) =>
     Number.parseFloat(
       getComputedStyle(element).getPropertyValue("--artboard-scale"),
@@ -605,6 +658,7 @@ test("draws a shape on the canvas outside the artboard", async ({ page }) => {
     (page.viewportSize()?.width ?? 0) <= 960,
     "Canvas drawing is desktop-only",
   );
+  await page.setViewportSize({ width: 1920, height: 1080 });
   await waitForEditor(page);
 
   await page.getByRole("button", { name: "Rectangle", exact: true }).click();
@@ -626,7 +680,69 @@ test("draws a shape on the canvas outside the artboard", async ({ page }) => {
   await page.mouse.move(end.x, end.y, { steps: 4 });
   await page.mouse.up();
 
-  await expect(page.getByLabel("Rectangle 1", { exact: true })).toBeVisible();
+  const rectangle = page.getByLabel("Rectangle 1", { exact: true });
+  await expect(rectangle).toBeVisible();
+  await expect(page.getByLabel("Artboard")).toHaveCSS("overflow", "visible");
+  const rectangleBox = await rectangle.boundingBox();
+  if (!rectangleBox)
+    throw new Error("Outside rectangle bounds are unavailable");
+  expect(rectangleBox.y + rectangleBox.height).toBeLessThan(artboardBox.y);
+  await expect
+    .poll(() =>
+      page.evaluate(
+        ({ x, y }) =>
+          document
+            .elementFromPoint(x, y)
+            ?.closest<HTMLElement>("[data-element-id]")?.dataset.elementId ??
+          null,
+        {
+          x: rectangleBox.x + rectangleBox.width / 2,
+          y: rectangleBox.y + rectangleBox.height / 2,
+        },
+      ),
+    )
+    .not.toBeNull();
+
+  await page.getByRole("button", { name: "Rectangle", exact: true }).click();
+  await page.mouse.move(artboardBox.x + 120, artboardBox.y + 100);
+  await page.mouse.down();
+  await page.mouse.move(artboardBox.x + 240, artboardBox.y + 180, {
+    steps: 4,
+  });
+  await page.mouse.up();
+
+  const movable = page.getByLabel("Rectangle 2", { exact: true });
+  const movableBefore = await movable.boundingBox();
+  if (!movableBefore)
+    throw new Error("Movable rectangle bounds are unavailable");
+  const movableCenter = {
+    x: movableBefore.x + movableBefore.width / 2,
+    y: movableBefore.y + movableBefore.height / 2,
+  };
+  await page.getByRole("button", { name: "Selection", exact: true }).click();
+  await page.mouse.move(movableCenter.x, movableCenter.y);
+  await page.mouse.down();
+  await page.mouse.move(movableCenter.x, artboardBox.y - 50, { steps: 4 });
+  await page.mouse.up();
+
+  const movableAfter = await movable.boundingBox();
+  if (!movableAfter) throw new Error("Moved rectangle bounds are unavailable");
+  expect(movableAfter.y + movableAfter.height).toBeLessThan(artboardBox.y);
+  await expect
+    .poll(() =>
+      page.evaluate(
+        ({ x, y }) =>
+          document
+            .elementFromPoint(x, y)
+            ?.closest<HTMLElement>("[data-element-id]")?.dataset.elementId ??
+          null,
+        {
+          x: movableAfter.x + movableAfter.width / 2,
+          y: movableAfter.y + movableAfter.height / 2,
+        },
+      ),
+    )
+    .not.toBeNull();
 });
 
 test("keeps the shape picker at the Figma dimensions", async ({ page }) => {
@@ -740,6 +856,35 @@ test("draws a pen path from the shape picker", async ({ page }) => {
   await expect(page.locator(".pen-node")).toHaveCount(3);
 });
 
+test("keeps a new pen curve black with a one-pixel stroke", async ({
+  page,
+}) => {
+  test.skip(
+    (page.viewportSize()?.width ?? 0) <= 960,
+    "Pen drawing is desktop-only",
+  );
+  await waitForEditor(page);
+
+  await page.getByRole("button", { name: "Rectangle", exact: true }).click();
+  await page
+    .getByRole("toolbar", { name: "Shape picker" })
+    .getByRole("button", { name: "Pen Tool", exact: true })
+    .click();
+
+  const artboard = page.getByLabel("Artboard");
+  const box = await artboard.boundingBox();
+  if (!box) throw new Error("Artboard bounds are unavailable");
+  await page.mouse.click(box.x + 180, box.y + 160);
+  await page.mouse.click(box.x + 220, box.y + 130);
+  await page.mouse.dblclick(box.x + 270, box.y + 180);
+
+  const curve = page
+    .getByLabel("Pen 1", { exact: true })
+    .locator(".pen-visible-path");
+  await expect(curve).toHaveAttribute("stroke", "#000000");
+  await expect(curve).toHaveAttribute("stroke-width", "1");
+});
+
 test("shows pen helper lines while drawing and after completion", async ({
   page,
 }) => {
@@ -778,6 +923,52 @@ test("shows pen helper lines while drawing and after completion", async ({
   await expect(page.getByLabel("Pen 1", { exact: true })).toBeVisible();
   await expect(page.locator(".pen-node")).toHaveCount(3);
   await expect(page.locator(".pen-handle-line")).toHaveCount(2);
+
+  const expectStablePenControls = async () => {
+    const nodeBounds = await page.locator(".pen-node").evaluateAll((nodes) =>
+      nodes.map((node) => {
+        const bounds = node.getBoundingClientRect();
+        return {
+          border: getComputedStyle(node).borderTopWidth,
+          height: bounds.height,
+          width: bounds.width,
+        };
+      }),
+    );
+    expect(nodeBounds).toHaveLength(3);
+    for (const bounds of nodeBounds) {
+      expect(bounds.width).toBeCloseTo(8, 1);
+      expect(bounds.height).toBeCloseTo(8, 1);
+      expect(bounds.border).toBe("0px");
+    }
+    const handleBounds = await page
+      .locator(".pen-handle")
+      .evaluateAll((handles) =>
+        handles.map((handle) => {
+          const bounds = handle.getBoundingClientRect();
+          return { height: bounds.height, width: bounds.width };
+        }),
+      );
+    expect(handleBounds).toHaveLength(2);
+    for (const bounds of handleBounds) {
+      expect(bounds.width).toBeCloseTo(7, 1);
+      expect(bounds.height).toBeCloseTo(7, 1);
+    }
+  };
+  await expectStablePenControls();
+
+  const canvas = page.getByLabel("Exhibition canvas");
+  for (let step = 0; step < 40; step += 1) {
+    await canvas.dispatchEvent("wheel", {
+      clientX: second.x,
+      clientY: second.y,
+      ctrlKey: true,
+      deltaX: 0,
+      deltaY: -100,
+    });
+  }
+  await expect(page.getByRole("button", { name: "500 %" })).toBeVisible();
+  await expectStablePenControls();
 
   await page.keyboard.press("Delete");
   await expect(page.locator(".pen-node")).toHaveCount(2);
@@ -1124,6 +1315,16 @@ test("snaps equal spacing and shows Alt distance measurements", async ({
     ".distance-measurement:not(.distance-preview-slot)",
   );
   await expect(stableDistanceMeasurements).toHaveCount(4);
+  const resizeHandle = page
+    .getByLabel("Rectangle 1", { exact: true })
+    .locator(".resize-handle.handle-nw");
+  const resizeHandleBox = await resizeHandle.boundingBox();
+  if (!resizeHandleBox) throw new Error("Resize handle bounds are unavailable");
+  await page.mouse.move(
+    resizeHandleBox.x + resizeHandleBox.width / 2,
+    resizeHandleBox.y + resizeHandleBox.height / 2,
+  );
+  await expect(stableDistanceMeasurements).toHaveCount(0);
   await page.mouse.move(first.x + 50, first.y + 30, { steps: 3 });
   await page.mouse.down();
   await expect(stableDistanceMeasurements).toHaveCount(0);
@@ -1132,6 +1333,129 @@ test("snaps equal spacing and shows Alt distance measurements", async ({
   await page.mouse.up();
   await page.keyboard.up("Alt");
   await expect(page.locator(".distance-measurement")).toHaveCount(0);
+});
+
+test("clears Alt distance measurements when the window loses focus", async ({
+  page,
+}) => {
+  test.skip(
+    (page.viewportSize()?.width ?? 0) <= 960,
+    "Distance measurements are desktop-only",
+  );
+  await waitForEditor(page);
+
+  const artboard = page.getByLabel("Artboard");
+  const box = await artboard.boundingBox();
+  if (!box) throw new Error("Artboard bounds are unavailable");
+  const drawRectangle = async (x: number) => {
+    await page.locator('.tool-button[data-tool="rectangle"]').click();
+    await page.mouse.move(box.x + x, box.y + 180);
+    await page.mouse.down();
+    await page.mouse.move(box.x + x + 100, box.y + 240, { steps: 2 });
+    await page.mouse.up();
+  };
+  await drawRectangle(120);
+  await drawRectangle(360);
+
+  const first = await page
+    .getByLabel("Rectangle 1", { exact: true })
+    .boundingBox();
+  const second = await page
+    .getByLabel("Rectangle 2", { exact: true })
+    .boundingBox();
+  if (!first || !second) throw new Error("Rectangle bounds are unavailable");
+
+  await page.getByRole("button", { name: "Selection", exact: true }).click();
+  await page.mouse.click(first.x + first.width / 2, first.y + first.height / 2);
+  await page.keyboard.down("Alt");
+  await page.mouse.move(
+    second.x + second.width / 2,
+    second.y + second.height / 2,
+  );
+  await expect(page.locator(".distance-measurement")).not.toHaveCount(0);
+
+  await page.evaluate(() => window.dispatchEvent(new Event("blur")));
+  await expect(page.locator(".distance-measurement")).toHaveCount(0);
+  await page.keyboard.up("Alt");
+});
+
+test("measures from the combined bounds of a multiple selection with Alt", async ({
+  page,
+}) => {
+  test.skip(
+    (page.viewportSize()?.width ?? 0) <= 960,
+    "Distance measurements are desktop-only",
+  );
+  await waitForEditor(page);
+
+  const artboard = page.getByLabel("Artboard");
+  const box = await artboard.boundingBox();
+  if (!box) throw new Error("Artboard bounds are unavailable");
+  const drawRectangle = async (x: number) => {
+    await page.locator('.tool-button[data-tool="rectangle"]').click();
+    await page.mouse.move(box.x + x, box.y + 180);
+    await page.mouse.down();
+    await page.mouse.move(box.x + x + 100, box.y + 240, { steps: 2 });
+    await page.mouse.up();
+  };
+  await drawRectangle(100);
+  await drawRectangle(300);
+  await drawRectangle(520);
+
+  const first = page.getByLabel("Rectangle 1", { exact: true });
+  const second = page.getByLabel("Rectangle 2", { exact: true });
+  const third = page.getByLabel("Rectangle 3", { exact: true });
+  const [firstBox, secondBox, thirdBox] = await Promise.all([
+    first.boundingBox(),
+    second.boundingBox(),
+    third.boundingBox(),
+  ]);
+  if (!firstBox || !secondBox || !thirdBox) {
+    throw new Error("Rectangle bounds are unavailable");
+  }
+
+  await page.getByRole("button", { name: "Selection", exact: true }).click();
+  await page.mouse.click(
+    firstBox.x + firstBox.width / 2,
+    firstBox.y + firstBox.height / 2,
+  );
+  await page.keyboard.down("Shift");
+  await page.mouse.click(
+    secondBox.x + secondBox.width / 2,
+    secondBox.y + secondBox.height / 2,
+  );
+  await page.keyboard.up("Shift");
+  await expect(page.getByLabel("Multiple selection")).toBeVisible();
+
+  const expectedDistance = await third.evaluate((target) => {
+    const selected = Array.from(
+      document.querySelectorAll<HTMLElement>(".canvas-element.is-selected"),
+    );
+    if (!selected.length) return null;
+    const selectedRight = Math.max(
+      ...selected.map(
+        (element) =>
+          Number.parseFloat(element.style.left) +
+          Number.parseFloat(element.style.width),
+      ),
+    );
+    return Math.round(Number.parseFloat(target.style.left) - selectedRight);
+  });
+
+  await page.keyboard.down("Alt");
+  await page.mouse.move(
+    thirdBox.x + thirdBox.width / 2,
+    thirdBox.y + thirdBox.height / 2,
+  );
+  const measurements = page.locator(
+    ".distance-measurement:not(.distance-preview-slot)",
+  );
+  await expect(measurements).toHaveCount(1);
+  await expect(measurements.locator(".distance-label")).toHaveText(
+    `${expectedDistance} px`,
+  );
+  await page.keyboard.up("Alt");
+  await expect(measurements).toHaveCount(0);
 });
 
 test("canvas zoom uses Ctrl-wheel and Zoom tool mouse buttons", async ({
@@ -1168,6 +1492,283 @@ test("canvas zoom uses Ctrl-wheel and Zoom tool mouse buttons", async ({
   await expect(navigator.locator(".navigator-viewport")).toBeVisible();
   await page.waitForTimeout(3100);
   await expect(navigator).not.toHaveClass(/is-visible/);
+});
+
+test("keeps selection and image crop controls at a stable screen size while zooming", async ({
+  page,
+}) => {
+  test.skip(
+    (page.viewportSize()?.width ?? 0) <= 960,
+    "Selection controls are desktop-only",
+  );
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await waitForEditor(page);
+
+  await page
+    .locator(".asset-upload input")
+    .setInputFiles("public/figma/shape-picker.svg");
+  await page.getByRole("button", { name: "Add uploaded asset 1" }).click({
+    force: true,
+  });
+
+  const artboard = page.getByLabel("Artboard");
+  const canvas = page.getByLabel("Exhibition canvas");
+  const canvasBox = await canvas.boundingBox();
+  if (!canvasBox) throw new Error("Canvas bounds are unavailable");
+  const image = page.getByLabel("Image 1", { exact: true });
+  const corner = image.locator(".resize-handle.handle-se");
+  const cropBar = image.locator(".image-edge-handle-e");
+  const caption = page.getByLabel("Selection dimensions");
+  const expectControlsAnchoredToImage = async (imageBox: {
+    height: number;
+    width: number;
+    x: number;
+    y: number;
+  }) => {
+    const selectionLineCenterOutset = 0;
+    const selectionOutline = image.locator(".selection-outline-svg");
+    const selectionRect = selectionOutline.locator(
+      "rect[data-selection-frame]",
+    );
+    await expect(selectionOutline).toHaveCSS("overflow", "visible");
+    await expect(selectionOutline).toHaveAttribute(
+      "data-selection-stroke-placement",
+      "inside",
+    );
+    await expect(selectionRect).toHaveAttribute("fill", "none");
+    await expect(selectionRect).toHaveAttribute(
+      "vector-effect",
+      "non-scaling-stroke",
+    );
+    const screenStrokeWidth = await selectionRect.evaluate((rect) => {
+      const artboard = rect.closest<HTMLElement>("#editor-artboard");
+      const scale = Number.parseFloat(
+        getComputedStyle(artboard!).getPropertyValue("--artboard-scale"),
+      );
+      return Number(rect.getAttribute("stroke-width")) * scale;
+    });
+    expect(screenStrokeWidth).toBeCloseTo(
+      Math.min(1, imageBox.width / 2, imageBox.height / 2),
+      2,
+    );
+    const outlineBox = await selectionRect.evaluate((rect) => {
+      const svg = (rect as SVGRectElement).ownerSVGElement!;
+      const bounds = svg.getBoundingClientRect();
+      const viewBox = svg.viewBox.baseVal;
+      const scaleX = bounds.width / viewBox.width;
+      const scaleY = bounds.height / viewBox.height;
+      const x = Number(rect.getAttribute("x"));
+      const y = Number(rect.getAttribute("y"));
+      const width = Number(rect.getAttribute("width"));
+      const height = Number(rect.getAttribute("height"));
+      const strokeWidth = Number(rect.getAttribute("stroke-width"));
+      return {
+        bottom:
+          bounds.top + (y + height + strokeWidth / 2 - viewBox.y) * scaleY,
+        heightInvariant: Math.abs(y * 2 + height - viewBox.height),
+        left: bounds.left + (x - strokeWidth / 2 - viewBox.x) * scaleX,
+        right: bounds.left + (x + width + strokeWidth / 2 - viewBox.x) * scaleX,
+        top: bounds.top + (y - strokeWidth / 2 - viewBox.y) * scaleY,
+        widthInvariant: Math.abs(x * 2 + width - viewBox.width),
+        xInsetError: Math.abs(x - strokeWidth / 2),
+        yInsetError: Math.abs(y - strokeWidth / 2),
+      };
+    });
+    expect(outlineBox.widthInvariant).toBeLessThan(0.0001);
+    expect(outlineBox.heightInvariant).toBeLessThan(0.0001);
+    expect(outlineBox.xInsetError).toBeLessThan(0.0001);
+    expect(outlineBox.yInsetError).toBeLessThan(0.0001);
+    expect(
+      Math.abs(outlineBox.left - (imageBox.x - selectionLineCenterOutset)),
+    ).toBeLessThan(0.2);
+    expect(
+      Math.abs(outlineBox.top - (imageBox.y - selectionLineCenterOutset)),
+    ).toBeLessThan(0.2);
+    expect(
+      Math.abs(
+        outlineBox.right -
+          (imageBox.x + imageBox.width + selectionLineCenterOutset),
+      ),
+    ).toBeLessThan(0.2);
+    expect(
+      Math.abs(
+        outlineBox.bottom -
+          (imageBox.y + imageBox.height + selectionLineCenterOutset),
+      ),
+    ).toBeLessThan(0.2);
+    const cornerTargets = {
+      nw: {
+        x: imageBox.x - selectionLineCenterOutset,
+        y: imageBox.y - selectionLineCenterOutset,
+      },
+      ne: {
+        x: imageBox.x + imageBox.width + selectionLineCenterOutset,
+        y: imageBox.y - selectionLineCenterOutset,
+      },
+      se: {
+        x: imageBox.x + imageBox.width + selectionLineCenterOutset,
+        y: imageBox.y + imageBox.height + selectionLineCenterOutset,
+      },
+      sw: {
+        x: imageBox.x - selectionLineCenterOutset,
+        y: imageBox.y + imageBox.height + selectionLineCenterOutset,
+      },
+    };
+    for (const [handle, target] of Object.entries(cornerTargets)) {
+      const visualBox = await selectionOutline
+        .locator(`[data-selection-corner="${handle}"]`)
+        .boundingBox();
+      const box = await image
+        .locator(`.resize-handle.handle-${handle}`)
+        .boundingBox();
+      if (!box || !visualBox)
+        throw new Error(`Image ${handle} handle bounds are unavailable`);
+      expect(visualBox.width).toBeCloseTo(8, 1);
+      expect(visualBox.height).toBeCloseTo(8, 1);
+      expect(visualBox.width).toBeCloseTo(visualBox.height, 2);
+      expect(visualBox.x + visualBox.width / 2).toBeCloseTo(target.x, 1);
+      expect(visualBox.y + visualBox.height / 2).toBeCloseTo(target.y, 1);
+      expect(box.width).toBeCloseTo(9, 1);
+      expect(box.height).toBeCloseTo(9, 1);
+      expect(box.width).toBeCloseTo(box.height, 2);
+      expect(box.x + box.width / 2).toBeCloseTo(target.x, 1);
+      expect(box.y + box.height / 2).toBeCloseTo(target.y, 1);
+    }
+
+    const edgeTargets = {
+      n: {
+        x: imageBox.x + imageBox.width / 2,
+        y: imageBox.y - selectionLineCenterOutset,
+      },
+      e: {
+        x: imageBox.x + imageBox.width + selectionLineCenterOutset,
+        y: imageBox.y + imageBox.height / 2,
+      },
+      s: {
+        x: imageBox.x + imageBox.width / 2,
+        y: imageBox.y + imageBox.height + selectionLineCenterOutset,
+      },
+      w: {
+        x: imageBox.x - selectionLineCenterOutset,
+        y: imageBox.y + imageBox.height / 2,
+      },
+    };
+    for (const [handle, target] of Object.entries(edgeTargets)) {
+      const box = await image
+        .locator(`.image-edge-handle-${handle}`)
+        .boundingBox();
+      if (!box) throw new Error(`Image ${handle} crop handle is unavailable`);
+      const horizontal = handle === "n" || handle === "s";
+      expect(box.width).toBeCloseTo(horizontal ? 18 : 7, 1);
+      expect(box.height).toBeCloseTo(horizontal ? 7 : 18, 1);
+      expect(box.x + box.width / 2).toBeCloseTo(target.x, 1);
+      expect(box.y + box.height / 2).toBeCloseTo(target.y, 1);
+    }
+  };
+  const initialImage = await image.boundingBox();
+  if (!initialImage) throw new Error("Image bounds are unavailable");
+  await page.mouse.move(
+    initialImage.x + initialImage.width / 2,
+    initialImage.y + initialImage.height / 2,
+  );
+  await page.mouse.down();
+  await page.mouse.move(
+    initialImage.x + initialImage.width / 2 - 180.35,
+    initialImage.y + initialImage.height / 2 + 7.65,
+    { steps: 3 },
+  );
+  const movingImage = await image.boundingBox();
+  if (!movingImage) throw new Error("Moving image bounds are unavailable");
+  await expectControlsAnchoredToImage(movingImage);
+  await page.mouse.up();
+
+  const beforeCorner = await corner.boundingBox();
+  const beforeCropBar = await cropBar.boundingBox();
+  const beforeCaption = await caption.boundingBox();
+  const beforeImage = await image.boundingBox();
+  if (!beforeCorner || !beforeCropBar || !beforeCaption || !beforeImage) {
+    throw new Error("Selection control bounds are unavailable");
+  }
+  expect(beforeCorner.width).toBeCloseTo(9, 1);
+  expect(beforeCorner.height).toBeCloseTo(9, 1);
+  expect(beforeCropBar.width).toBeCloseTo(7, 1);
+  expect(beforeCropBar.height).toBeCloseTo(18, 1);
+  await expect(corner).toHaveCSS("border-top-width", "0px");
+  await expect(corner).toHaveCSS("border-radius", "0px");
+  await expect(cropBar).toHaveCSS("border-top-width", "0px");
+  await expectControlsAnchoredToImage(beforeImage);
+
+  await page.getByRole("button", { name: "Zoom", exact: true }).click();
+  const zoomAnchor = {
+    x: beforeImage.x + beforeImage.width / 2,
+    y: beforeImage.y + beforeImage.height / 2,
+  };
+  for (let step = 0; step < 15; step += 1) {
+    await page.mouse.click(zoomAnchor.x, zoomAnchor.y);
+  }
+  await expect(page.getByRole("button", { name: "250 %" })).toBeVisible();
+  const middleImage = await image.boundingBox();
+  if (!middleImage) throw new Error("Mid-zoom image bounds are unavailable");
+  await expectControlsAnchoredToImage(middleImage);
+
+  for (let step = 0; step < 25; step += 1) {
+    await page.mouse.click(zoomAnchor.x, zoomAnchor.y);
+  }
+  await expect(page.getByRole("button", { name: "500 %" })).toBeVisible();
+  await expect(corner).toBeVisible();
+  await expect(cropBar).toBeVisible();
+
+  const afterCorner = await corner.boundingBox();
+  const afterCropBar = await cropBar.boundingBox();
+  const afterCaption = await caption.boundingBox();
+  const afterImage = await image.boundingBox();
+  if (!afterCorner || !afterCropBar || !afterCaption || !afterImage) {
+    throw new Error("Zoomed selection control bounds are unavailable");
+  }
+  expect(afterCorner.width).toBeCloseTo(beforeCorner.width, 1);
+  expect(afterCorner.height).toBeCloseTo(beforeCorner.height, 1);
+  expect(afterCropBar.width).toBeCloseTo(beforeCropBar.width, 1);
+  expect(afterCropBar.height).toBeCloseTo(beforeCropBar.height, 1);
+  expect(afterCaption.height).toBeCloseTo(beforeCaption.height, 1);
+  expect(afterImage.x + afterImage.width / 2).toBeCloseTo(zoomAnchor.x, 0);
+  expect(afterImage.y + afterImage.height / 2).toBeCloseTo(zoomAnchor.y, 0);
+  await expectControlsAnchoredToImage(afterImage);
+
+  const zoomOutAnchor = { x: canvasBox.x + 30, y: canvasBox.y + 30 };
+  for (let expectedZoom = 490; expectedZoom >= 10; expectedZoom -= 10) {
+    await page.mouse.click(zoomOutAnchor.x, zoomOutAnchor.y, {
+      button: "right",
+    });
+    await expect(
+      page.getByRole("button", { name: `${expectedZoom} %` }),
+    ).toBeVisible();
+  }
+  const zoomedOutImage = await image.boundingBox();
+  if (!zoomedOutImage) {
+    throw new Error("Zoomed-out image bounds are unavailable");
+  }
+  await expect(corner).toBeVisible();
+  await expect(cropBar).toBeVisible();
+  await expectControlsAnchoredToImage(zoomedOutImage);
+
+  await page.setViewportSize({ width: 1000, height: 250 });
+  await expect
+    .poll(() =>
+      artboard.evaluate((element) =>
+        Number.parseFloat(
+          getComputedStyle(element).getPropertyValue("--artboard-scale"),
+        ),
+      ),
+    )
+    .toBeLessThan(0.01);
+  await expect
+    .poll(async () => (await corner.boundingBox())?.width ?? 0)
+    .toBeCloseTo(9, 1);
+  const compactZoomedOutImage = await image.boundingBox();
+  if (!compactZoomedOutImage) {
+    throw new Error("Compact zoomed-out image bounds are unavailable");
+  }
+  await expectControlsAnchoredToImage(compactZoomedOutImage);
 });
 
 test("shows scene before design and renders design controls", async ({
@@ -1211,6 +1812,105 @@ test("shows scene before design and renders design controls", async ({
   await expect(page.locator(".design-properties")).toContainText(
     "Corner Radius",
   );
+});
+
+test("matches the Figma sound-panel geometry", async ({ page }) => {
+  test.skip(
+    (page.viewportSize()?.width ?? 0) <= 960,
+    "Properties panel is desktop-only",
+  );
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await waitForEditor(page);
+  await page.getByRole("tab", { name: "SOUND" }).click();
+
+  const panel = page.getByRole("tabpanel", { name: "Sound settings" });
+  const panelBox = await panel.boundingBox();
+  if (!panelBox) throw new Error("Sound panel bounds are unavailable");
+
+  const expectBounds = async (
+    selector: string,
+    expected: { height: number; width: number; x: number; y: number },
+    index = 0,
+  ) => {
+    const box = await panel.locator(selector).nth(index).boundingBox();
+    if (!box)
+      throw new Error(`Sound control bounds are unavailable: ${selector}`);
+    expect(box.x - panelBox.x).toBeCloseTo(expected.x, 0);
+    expect(box.y - panelBox.y).toBeCloseTo(expected.y, 0);
+    expect(box.width).toBeCloseTo(expected.width, 0);
+    expect(box.height).toBeCloseTo(expected.height, 0);
+  };
+
+  await expectBounds(".sound-scope-tabs", {
+    height: 22,
+    width: 308,
+    x: 16,
+    y: 9,
+  });
+  await expectBounds(".sound-upload-card", {
+    height: 48,
+    width: 308,
+    x: 16,
+    y: 70,
+  });
+  await expectBounds(".sound-preview-row", {
+    height: 13,
+    width: 183,
+    x: 121,
+    y: 87,
+  });
+  await expectBounds(".sound-slider", {
+    height: 7,
+    width: 164,
+    x: 83,
+    y: 132,
+  });
+  await expectBounds(".sound-percent-field", {
+    height: 22,
+    width: 47,
+    x: 262,
+    y: 124,
+  });
+  await expectBounds(".sound-stepper-field", {
+    height: 22,
+    width: 72,
+    x: 111,
+    y: 151,
+  });
+  await expectBounds(".sound-playback-select", {
+    height: 22,
+    width: 105,
+    x: 111,
+    y: 232,
+  });
+  await expectBounds(".sound-add-button", {
+    height: 22,
+    width: 72,
+    x: 252,
+    y: 278,
+  });
+  await expectBounds(".sound-interaction-row", {
+    height: 22,
+    width: 308,
+    x: 16,
+    y: 305,
+  });
+  await expectBounds(
+    ".sound-interaction-row",
+    { height: 134, width: 308, x: 16, y: 331 },
+    1,
+  );
+  await expect(panel.locator(".sound-preview-track > *")).toHaveCount(0);
+  await expect(panel.locator(".sound-bgm-collapse")).toHaveAttribute(
+    "src",
+    /Group%20263\.svg$/,
+  );
+  await expect(panel.locator(".sound-stepper-field > span").first()).toHaveCSS(
+    "font-size",
+    "6px",
+  );
+  await expect(panel).toContainText("Hover");
+  await expect(panel).toContainText("Click");
 });
 
 test("applies page type and viewport sizing in the audience preview", async ({
@@ -1487,6 +2187,14 @@ test("toggles canvas rulers and guides with Shift+R", async ({ page }) => {
   await expect(overlay).not.toHaveClass(/is-hidden/);
   await expect(page.getByLabel("Horizontal ruler")).toBeVisible();
   await expect(page.getByLabel("Vertical ruler")).toBeVisible();
+  await expect(page.getByLabel("Horizontal ruler")).toHaveCSS(
+    "cursor",
+    "ns-resize",
+  );
+  await expect(page.getByLabel("Vertical ruler")).toHaveCSS(
+    "cursor",
+    "ew-resize",
+  );
 
   const rulerHasMarks = await page
     .getByLabel("Horizontal ruler")
@@ -1544,6 +2252,70 @@ test("toggles canvas rulers and guides with Shift+R", async ({ page }) => {
   await page.keyboard.press("Shift+r");
   await expect(overlay).toHaveClass(/is-hidden/);
   await expect(page.locator(".editor-guide")).toHaveCount(0);
+});
+
+test("snaps a moving guide to a shape edge and shows its board distance", async ({
+  page,
+}) => {
+  test.skip(
+    (page.viewportSize()?.width ?? 0) <= 960,
+    "Guide snapping is desktop-only",
+  );
+  await waitForEditor(page);
+
+  const artboard = page.getByLabel("Artboard");
+  const board = await artboard.boundingBox();
+  if (!board) throw new Error("Artboard bounds are unavailable");
+
+  await page.locator('.tool-button[data-tool="rectangle"]').click();
+  await page.mouse.move(board.x + 150, board.y + 160);
+  await page.mouse.down();
+  await page.mouse.move(board.x + 300, board.y + 260);
+  await page.mouse.up();
+  await page.getByRole("button", { name: "Selection", exact: true }).click();
+  await page.keyboard.press("Shift+r");
+
+  const horizontalRuler = await page
+    .getByLabel("Horizontal ruler")
+    .boundingBox();
+  const rectangle = page.getByLabel("Rectangle 1", { exact: true });
+  const rectangleBox = await rectangle.boundingBox();
+  if (!horizontalRuler || !rectangleBox) {
+    throw new Error("Guide snapping bounds are unavailable");
+  }
+
+  await page.mouse.move(horizontalRuler.x + 100, horizontalRuler.y + 12);
+  await page.mouse.down();
+  await page.mouse.move(rectangleBox.x + 20, rectangleBox.y + 5);
+  await page.mouse.up();
+
+  const guide = page.locator(".editor-guide");
+  const guideBox = await guide.boundingBox();
+  if (!guideBox) throw new Error("Guide bounds are unavailable");
+  await page.mouse.move(board.x + 100, guideBox.y + guideBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(
+    rectangleBox.x + 20,
+    rectangleBox.y + rectangleBox.height - 5,
+  );
+
+  await expect(page.locator(".distance-measurement")).toHaveCount(2);
+  await expect(page.locator(".distance-label")).toHaveText([
+    /\d+ px/,
+    /\d+ px/,
+  ]);
+  await page.mouse.up();
+
+  const [guidePosition, rectangleBottom] = await Promise.all([
+    guide.evaluate((element) => Number.parseFloat(element.style.top)),
+    rectangle.evaluate(
+      (element) =>
+        Number.parseFloat(element.style.top) +
+        Number.parseFloat(element.style.height),
+    ),
+  ]);
+  expect(guidePosition).toBeCloseTo(rectangleBottom, 5);
+  await expect(page.locator(".distance-measurement")).toHaveCount(0);
 });
 
 test("shows Alt distance from a selected layer to a guide", async ({
@@ -1713,17 +2485,47 @@ test("Space temporarily activates Hand and restores the previous tool", async ({
   const rectangleTool = tools.locator(
     "button.tool-button[aria-label='Rectangle']",
   );
+  const indicatorMarginError = async (toolId: string) =>
+    page.evaluate((id) => {
+      const indicator = document.querySelector<HTMLElement>(
+        ".tool-active-indicator",
+      );
+      const tool = document.querySelector<HTMLElement>(
+        `.tool-button[data-tool="${id}"]`,
+      );
+      if (!indicator || !tool) return 100;
+      const content = Array.from(
+        tool.querySelectorAll<HTMLElement>(
+          ":scope > svg, :scope > img, :scope > span",
+        ),
+      ).map((element) => element.getBoundingClientRect());
+      const indicatorBox = indicator.getBoundingClientRect();
+      const top = Math.min(...content.map((bounds) => bounds.top));
+      const bottom = Math.max(...content.map((bounds) => bounds.bottom));
+      return Math.max(
+        Math.abs(top - indicatorBox.top - 12),
+        Math.abs(indicatorBox.bottom - bottom - 11.5),
+      );
+    }, toolId);
+  const toolHeights = await tools
+    .locator(".tool-button")
+    .evaluateAll((buttons) =>
+      buttons.map((button) => button.getBoundingClientRect().height),
+    );
+  expect(new Set(toolHeights)).toEqual(new Set([55]));
   await rectangleTool.click();
   await expect(rectangleTool).toHaveAttribute("aria-pressed", "true");
+  await expect.poll(() => indicatorMarginError("rectangle")).toBeLessThan(0.2);
 
   await page.keyboard.down("Space");
   await expect(rectangleTool).not.toBeFocused();
-  await expect(
-    page.getByRole("button", { name: "Hand", exact: true }),
-  ).toHaveAttribute("aria-pressed", "true");
+  const handTool = page.getByRole("button", { name: "Hand", exact: true });
+  await expect(handTool).toHaveAttribute("aria-pressed", "true");
+  await expect.poll(() => indicatorMarginError("hand")).toBeLessThan(0.2);
   await page.keyboard.up("Space");
 
   await expect(rectangleTool).toHaveAttribute("aria-pressed", "true");
+  await expect.poll(() => indicatorMarginError("rectangle")).toBeLessThan(0.2);
 
   const artboard = page.getByLabel("Artboard");
   const beforePan = await artboard.boundingBox();
@@ -1770,6 +2572,103 @@ test("uploaded images use an image icon in the layer list", async ({
   const imageBox = await image.boundingBox();
   if (!imageBox) throw new Error("Uploaded image bounds are unavailable");
   expect(imageBox.width / imageBox.height).toBeCloseTo(48 / 219.2, 2);
+});
+
+test("previews uploaded image corner resizing before pointer release", async ({
+  page,
+}) => {
+  test.skip(
+    (page.viewportSize()?.width ?? 0) <= 960,
+    "Image resizing is desktop-only",
+  );
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await waitForEditor(page);
+
+  await page
+    .locator(".asset-upload input")
+    .setInputFiles("public/figma/shape-picker.svg");
+  await page.getByRole("button", { name: "Add uploaded asset 1" }).click({
+    force: true,
+  });
+
+  const image = page.getByLabel("Image 1", { exact: true });
+  await expect(image.locator(".image-shape")).toHaveCSS("box-shadow", /inset/);
+  const imageContent = image.locator(".image-shape-content");
+  const imageSource = image.locator(".image-shape-source");
+  await expect(imageSource).toHaveCSS("background-size", "100% 100%");
+  const cornerHandle = image.locator(".resize-handle.handle-se");
+  const expectImageOutlineAligned = async () => {
+    const alignment = await image.evaluate((node) => {
+      const frame = node.getBoundingClientRect();
+      const svg = node.querySelector<SVGSVGElement>(".selection-outline-svg")!;
+      const rect = svg.querySelector<SVGRectElement>(
+        "rect[data-selection-frame]",
+      )!;
+      const svgBounds = svg.getBoundingClientRect();
+      const viewBox = svg.viewBox.baseVal;
+      const scaleX = svgBounds.width / viewBox.width;
+      const scaleY = svgBounds.height / viewBox.height;
+      const strokeWidth = Number(rect.getAttribute("stroke-width"));
+      const x = Number(rect.getAttribute("x"));
+      const y = Number(rect.getAttribute("y"));
+      const width = Number(rect.getAttribute("width"));
+      const height = Number(rect.getAttribute("height"));
+      return {
+        bottom:
+          svgBounds.top + (y + height + strokeWidth / 2 - viewBox.y) * scaleY,
+        frameBottom: frame.bottom,
+        frameLeft: frame.left,
+        frameRight: frame.right,
+        frameTop: frame.top,
+        left: svgBounds.left + (x - strokeWidth / 2 - viewBox.x) * scaleX,
+        placement: svg.dataset.selectionStrokePlacement,
+        right:
+          svgBounds.left + (x + width + strokeWidth / 2 - viewBox.x) * scaleX,
+        top: svgBounds.top + (y - strokeWidth / 2 - viewBox.y) * scaleY,
+      };
+    });
+    expect(alignment.placement).toBe("inside");
+    expect(alignment.left).toBeCloseTo(alignment.frameLeft, 1);
+    expect(alignment.top).toBeCloseTo(alignment.frameTop, 1);
+    expect(alignment.right).toBeCloseTo(alignment.frameRight, 1);
+    expect(alignment.bottom).toBeCloseTo(alignment.frameBottom, 1);
+  };
+  const [beforeFrame, beforeContent, beforeSource, cornerHandleBox] =
+    await Promise.all([
+      image.boundingBox(),
+      imageContent.boundingBox(),
+      imageSource.boundingBox(),
+      cornerHandle.boundingBox(),
+    ]);
+  if (!beforeFrame || !beforeContent || !beforeSource || !cornerHandleBox) {
+    throw new Error("Image corner resize bounds are unavailable");
+  }
+
+  await page.mouse.move(
+    cornerHandleBox.x + cornerHandleBox.width / 2,
+    cornerHandleBox.y + cornerHandleBox.height / 2,
+  );
+  await page.mouse.down();
+  await page.mouse.move(
+    cornerHandleBox.x + cornerHandleBox.width / 2 - 13.25,
+    cornerHandleBox.y + cornerHandleBox.height / 2 - 22.75,
+  );
+
+  await expect
+    .poll(async () => (await image.boundingBox())?.width ?? 0)
+    .toBeLessThan(beforeFrame.width - 5);
+  const [duringContent, duringSource] = await Promise.all([
+    imageContent.boundingBox(),
+    imageSource.boundingBox(),
+  ]);
+  if (!duringContent || !duringSource) {
+    throw new Error("Live image pixel bounds are unavailable");
+  }
+  expect(duringContent.width).toBeLessThan(beforeContent.width - 5);
+  expect(duringSource.width).toBeLessThan(beforeSource.width - 5);
+  await expectImageOutlineAligned();
+  await page.mouse.up();
+  await expectImageOutlineAligned();
 });
 
 test("crops uploaded images with edge handles", async ({ page }) => {
@@ -1827,7 +2726,7 @@ test("crops uploaded images with edge handles", async ({ page }) => {
     Math.abs(
       rightHandleBox.x + rightHandleBox.width / 2 - (before.x + before.width),
     ),
-  ).toBeCloseTo(2.5, 0);
+  ).toBeCloseTo(0, 0);
   expect(
     Math.abs(
       rightHandleBox.y +
@@ -1921,6 +2820,83 @@ test("crops uploaded images with edge handles", async ({ page }) => {
   );
 });
 
+test("keeps a cropped image visible through Pathfinder boolean operations", async ({
+  page,
+}) => {
+  test.skip(
+    (page.viewportSize()?.width ?? 0) <= 960,
+    "Image Pathfinder is desktop-only",
+  );
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await waitForEditor(page);
+
+  await page
+    .locator(".asset-upload input")
+    .setInputFiles("public/figma/shape-picker.svg");
+  await page.getByRole("button", { name: "Add uploaded asset 1" }).click({
+    force: true,
+  });
+
+  const image = page.getByLabel("Image 1", { exact: true });
+  const cropHandle = image.locator(".image-edge-handle-e");
+  const cropHandleBox = await cropHandle.boundingBox();
+  if (!cropHandleBox) throw new Error("Image crop handle is unavailable");
+  const cropX = cropHandleBox.x + cropHandleBox.width / 2;
+  const cropY = cropHandleBox.y + cropHandleBox.height / 2;
+  await page.mouse.move(cropX, cropY);
+  await page.mouse.down();
+  await page.mouse.move(cropX - 8, cropY, { steps: 3 });
+  await page.mouse.up();
+
+  const imageBox = await image.boundingBox();
+  if (!imageBox) throw new Error("Cropped image bounds are unavailable");
+  await page.getByRole("button", { name: "Rectangle", exact: true }).click();
+  await page.mouse.move(imageBox.x + imageBox.width / 2, imageBox.y + 25);
+  await page.mouse.down();
+  await page.mouse.move(imageBox.x + imageBox.width + 45, imageBox.y + 75, {
+    steps: 3,
+  });
+  await page.mouse.up();
+
+  const layers = page.getByLabel("Layers");
+  await layers.getByRole("option", { name: "Image 1" }).click();
+  await layers
+    .getByRole("option", { name: "Rectangle 1" })
+    .click({ modifiers: ["Shift"] });
+  await page.getByRole("button", { name: "Union selection" }).click();
+
+  const result = page.locator(".canvas-element.is-pathfinder");
+  await expect(result).toBeVisible();
+  await expect(
+    result.locator('[data-pathfinder-image-viewport="true"]'),
+  ).toBeVisible();
+  await expect(result.locator("image")).toBeVisible();
+  const renderedImage = await result.locator("image").boundingBox();
+  expect(renderedImage?.width).toBeGreaterThan(0);
+  expect(renderedImage?.height).toBeGreaterThan(0);
+
+  await page.getByRole("button", { name: "Undo" }).click();
+  await page.getByRole("button", { name: "Exclude selection" }).click();
+  const excluded = page.locator(".canvas-element.is-pathfinder");
+  const excludedViewport = excluded.locator(
+    '[data-pathfinder-image-viewport="true"]',
+  );
+  await expect(excludedViewport).toBeVisible();
+  await expect(excluded.locator("image")).toBeVisible();
+  const [viewportWidth, sourceWidth] = await Promise.all([
+    excludedViewport.evaluate((element) =>
+      Number.parseFloat(element.getAttribute("width") ?? "0"),
+    ),
+    excluded
+      .locator("mask rect")
+      .last()
+      .evaluate((element) =>
+        Number.parseFloat(element.getAttribute("width") ?? "0"),
+      ),
+  ]);
+  expect(sourceWidth - viewportWidth).toBeCloseTo(0.2, 3);
+});
+
 test("draws a line along the drag direction and shows it in the scene preview", async ({
   page,
 }) => {
@@ -1949,23 +2925,108 @@ test("draws a line along the drag direction and shows it in the scene preview", 
   await expect(line).toBeVisible();
   await expect(line).toHaveClass(/element-line/);
   await expect(line.locator("line")).toHaveCSS("stroke", "rgb(171, 81, 240)");
-  expect(
-    await line.evaluate(
-      (element) => getComputedStyle(element, "::after").display,
-    ),
-  ).toBe("none");
+  await expect(line.locator(".selection-outline-svg")).toHaveCount(0);
   await expect(page.getByLabel("Selection dimensions")).toHaveText(
     /W \d+ x H 1/,
   );
   await expect(line).not.toHaveAttribute("style", /rotate\(0deg\)/);
   await expect(line.locator("line")).toHaveAttribute("y1", "12");
   await expect(line.locator("line")).toHaveAttribute("y2", "12");
+  await expect(line.locator("line")).toHaveAttribute("x1", "0");
+  await expect(line.locator("line")).toHaveAttribute("x2", "100");
+  await expect(line.locator("line")).toHaveAttribute("stroke", "#000000");
   await expect(line.locator("line")).toHaveAttribute("stroke-width", "1");
   await expect(
     page.locator(".scene-preview-element.preview-line"),
   ).toBeVisible();
 
   const endHandle = page.getByRole("button", { name: "Adjust Line 1 end" });
+  const startHandle = page.getByRole("button", { name: "Adjust Line 1 start" });
+  const expectLineEndpointsAligned = async () => {
+    for (const handle of [startHandle, endHandle]) {
+      const visualSize = await handle.evaluate((element) => {
+        const style = getComputedStyle(element);
+        const transform = new DOMMatrix(style.transform);
+        const artboard = element.closest<HTMLElement>("#editor-artboard");
+        const artboardScale = Number.parseFloat(
+          getComputedStyle(artboard!).getPropertyValue("--artboard-scale"),
+        );
+        const controlScale = Math.hypot(transform.a, transform.b);
+        return {
+          height:
+            Number.parseFloat(style.height) * controlScale * artboardScale,
+          width: Number.parseFloat(style.width) * controlScale * artboardScale,
+        };
+      });
+      expect(visualSize.width).toBeCloseTo(9, 1);
+      expect(visualSize.height).toBeCloseTo(9, 1);
+      await expect(handle).toHaveCSS("border-top-width", "0px");
+    }
+    const endpointAlignment = await line.evaluate((element) => {
+      const segment = element.querySelector("line");
+      const start = element.querySelector<HTMLElement>(".endpoint-start");
+      const end = element.querySelector<HTMLElement>(".endpoint-end");
+      const matrix = segment?.getScreenCTM();
+      if (!segment || !start || !end || !matrix) return null;
+      const startTarget = new DOMPoint(
+        Number(segment.getAttribute("x1")),
+        Number(segment.getAttribute("y1")),
+      ).matrixTransform(matrix);
+      const endTarget = new DOMPoint(
+        Number(segment.getAttribute("x2")),
+        Number(segment.getAttribute("y2")),
+      ).matrixTransform(matrix);
+      const startBounds = start.getBoundingClientRect();
+      const endBounds = end.getBoundingClientRect();
+      return {
+        end: {
+          x: endBounds.x + endBounds.width / 2,
+          y: endBounds.y + endBounds.height / 2,
+        },
+        endTarget: { x: endTarget.x, y: endTarget.y },
+        start: {
+          x: startBounds.x + startBounds.width / 2,
+          y: startBounds.y + startBounds.height / 2,
+        },
+        startTarget: { x: startTarget.x, y: startTarget.y },
+      };
+    });
+    if (!endpointAlignment) {
+      throw new Error("Line endpoint alignment is unavailable");
+    }
+    expect(endpointAlignment.start.x).toBeCloseTo(
+      endpointAlignment.startTarget.x,
+      0,
+    );
+    expect(endpointAlignment.start.y).toBeCloseTo(
+      endpointAlignment.startTarget.y,
+      0,
+    );
+    expect(endpointAlignment.end.x).toBeCloseTo(
+      endpointAlignment.endTarget.x,
+      0,
+    );
+    expect(endpointAlignment.end.y).toBeCloseTo(
+      endpointAlignment.endTarget.y,
+      0,
+    );
+  };
+  await expectLineEndpointsAligned();
+
+  const lineBox = await line.boundingBox();
+  if (!lineBox) throw new Error("Line bounds are unavailable");
+  const canvas = page.getByLabel("Exhibition canvas");
+  for (let step = 0; step < 40; step += 1) {
+    await canvas.dispatchEvent("wheel", {
+      clientX: lineBox.x + lineBox.width / 2,
+      clientY: lineBox.y + lineBox.height / 2,
+      ctrlKey: true,
+      deltaX: 0,
+      deltaY: -100,
+    });
+  }
+  await expect(page.getByRole("button", { name: "500 %" })).toBeVisible();
+  await expectLineEndpointsAligned();
   await expect(endHandle).toBeVisible();
   const initialStyle = await line.getAttribute("style");
   const handleBox = await endHandle.boundingBox();

@@ -17,14 +17,24 @@ export const metadata: Metadata = {
   description: "Interactive exhibition editor and viewer",
 };
 
+const shapePickerAsset = assetPath("/figma/shape-picker.svg");
 const assetStyles = {
   "--figma-pen": `url("${assetPath("/figma/pen.svg")}")`,
-  "--figma-shape-picker": `url("${assetPath("/figma/shape-picker.svg")}")`,
+  "--figma-shape-picker": `url("${shapePickerAsset}")`,
 } as CSSProperties;
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html lang="ko">
+      <head>
+        <link
+          as="image"
+          fetchPriority="high"
+          href={shapePickerAsset}
+          rel="preload"
+          type="image/svg+xml"
+        />
+      </head>
       <body className={designInter.variable} style={assetStyles}>
         {children}
       </body>

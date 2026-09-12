@@ -69,6 +69,8 @@ type ToolDefinition = {
   };
 };
 
+type PropertyTab = "design" | "scenes" | "sound";
+
 const tools: ToolDefinition[] = [
   { id: "selection", label: "Selection", icon: MousePointer2 },
   {
@@ -98,6 +100,15 @@ const tools: ToolDefinition[] = [
     asset: { height: 24, src: assetPath("/figma/settings.svg"), width: 24 },
   },
 ];
+
+const toolIndicatorMetrics = [
+  { height: 68, offset: 0 },
+  { height: 65, offset: 67.5 },
+  { height: 65, offset: 132 },
+  { height: 61.5, offset: 196.5 },
+  { height: 59.5, offset: 257.5 },
+  { height: 68.5, offset: 316.4 },
+] as const;
 
 const designAssetDimensions: Record<string, { height: number; width: number }> =
   {
@@ -247,6 +258,8 @@ type DistanceMeasurement = {
   axis: "horizontal" | "vertical";
   cross: number;
   from: number;
+  hideMaxArrow?: boolean;
+  hideMinArrow?: boolean;
   to: number;
   value: number;
 };
@@ -468,10 +481,117 @@ function collectResizePreviewTargets(elementId: string): ResizePreviewTargets {
   };
 }
 
+type SelectionStrokePlacement = "center" | "inside";
+
+function selectionOutlineGeometry(
+  width: number,
+  height: number,
+  lineWidth: number,
+  centerOutset: number,
+  strokePlacement: SelectionStrokePlacement,
+) {
+  const safeWidth = Math.max(0.001, width);
+  const safeHeight = Math.max(0.001, height);
+  const effectiveLineWidth =
+    strokePlacement === "inside"
+      ? Math.min(lineWidth, safeWidth / 2, safeHeight / 2)
+      : lineWidth;
+  const inset =
+    strokePlacement === "inside" ? effectiveLineWidth / 2 : -centerOutset;
+
+  return {
+    height: safeHeight - inset * 2,
+    lineWidth: effectiveLineWidth,
+    width: safeWidth - inset * 2,
+    x: inset,
+    y: inset,
+  };
+}
+
+function previewSelectionOutline(
+  target: HTMLElement,
+  width: number,
+  height: number,
+) {
+  const selectionOutline = target.querySelector<SVGSVGElement>(
+    ".selection-outline-svg",
+  );
+  const selectionRect = selectionOutline?.querySelector<SVGRectElement>(
+    "rect[data-selection-frame]",
+  );
+  if (!selectionOutline || !selectionRect) return;
+
+  const centerOutset = Number.parseFloat(
+    selectionOutline.dataset.selectionCenterOutset ?? "0",
+  );
+  const lineWidth = Number.parseFloat(
+    selectionOutline.dataset.selectionBaseLineWidth ?? "0",
+  );
+  const strokePlacement =
+    selectionOutline.dataset.selectionStrokePlacement === "inside"
+      ? "inside"
+      : "center";
+  const geometry = selectionOutlineGeometry(
+    width,
+    height,
+    lineWidth,
+    centerOutset,
+    strokePlacement,
+  );
+  selectionOutline.setAttribute(
+    "viewBox",
+    `0 0 ${Math.max(0.001, width)} ${Math.max(0.001, height)}`,
+  );
+  selectionRect.setAttribute("x", `${geometry.x}`);
+  selectionRect.setAttribute("y", `${geometry.y}`);
+  selectionRect.setAttribute("width", `${geometry.width}`);
+  selectionRect.setAttribute("height", `${geometry.height}`);
+  selectionRect.setAttribute("stroke-width", `${geometry.lineWidth}`);
+
+  selectionOutline
+    .querySelectorAll<SVGRectElement>("[data-selection-corner]")
+    .forEach((handle) => {
+      const handleSize = Number.parseFloat(
+        handle.getAttribute("data-handle-size") ?? "0",
+      );
+      const corner = handle.getAttribute("data-selection-corner");
+      const centerX = corner?.includes("e")
+        ? width + centerOutset
+        : -centerOutset;
+      const centerY = corner?.includes("s")
+        ? height + centerOutset
+        : -centerOutset;
+      handle.setAttribute("x", `${centerX - handleSize / 2}`);
+      handle.setAttribute("y", `${centerY - handleSize / 2}`);
+    });
+}
+
+function previewImageGraphic(target: HTMLElement, geometry: CanvasElement) {
+  if (geometry.type !== "image") return;
+  const crop = imageCropForElement(geometry);
+  const imageContent = target.querySelector<HTMLElement>(
+    ".image-shape-content",
+  );
+  const imageSource = target.querySelector<HTMLElement>(".image-shape-source");
+  if (imageContent) {
+    imageContent.style.height = `${crop.baseHeight * crop.scaleY}px`;
+    imageContent.style.left = `${-crop.left * crop.scaleX}px`;
+    imageContent.style.top = `${-crop.top * crop.scaleY}px`;
+    imageContent.style.width = `${crop.baseWidth * crop.scaleX}px`;
+  }
+  if (imageSource) {
+    imageSource.style.height = `${crop.baseHeight}px`;
+    imageSource.style.transform = `scale(${crop.scaleX}, ${crop.scaleY})`;
+    imageSource.style.width = `${crop.baseWidth}px`;
+  }
+}
+
 function previewElementResize(
   targets: ResizePreviewTargets,
-  geometry: Pick<CanvasElement, "height" | "width" | "x" | "y">,
+  geometry: CanvasElement,
   artboardHeight: number,
+  captionGap: number,
+  captionHeight: number,
 ) {
   const { element, dimensions } = targets;
   if (element) {
@@ -480,13 +600,17 @@ function previewElementResize(
     element.style.left = `${geometry.x}px`;
     element.style.top = `${geometry.y}px`;
     element.style.width = `${geometry.width}px`;
+
+    previewSelectionOutline(element, geometry.width, geometry.height);
+    previewImageGraphic(element, geometry);
   }
 
   if (!dimensions) return;
-  const placeBelow = geometry.y + geometry.height + 28 <= artboardHeight;
+  const placeBelow =
+    geometry.y + geometry.height + captionGap + captionHeight <= artboardHeight;
   dimensions.classList.toggle("is-above", !placeBelow);
   dimensions.style.left = `${geometry.x + geometry.width / 2}px`;
-  dimensions.style.top = `${placeBelow ? geometry.y + geometry.height + 8 : geometry.y - 8}px`;
+  dimensions.style.top = `${placeBelow ? geometry.y + geometry.height + captionGap : geometry.y - captionGap}px`;
   dimensions.textContent = `W ${Math.round(geometry.width)} x H ${Math.round(geometry.height)}`;
 }
 
@@ -635,6 +759,8 @@ function previewMultiElementResize(
   elements: CanvasElement[],
   bounds: ElementRect,
   artboardHeight: number,
+  captionGap: number,
+  captionHeight: number,
 ) {
   const geometries = new Map(elements.map((element) => [element.id, element]));
   targets.elements.forEach((node) => {
@@ -645,26 +771,32 @@ function previewMultiElementResize(
     node.style.left = `${element.x}px`;
     node.style.top = `${element.y}px`;
     node.style.width = `${element.width}px`;
+
+    previewSelectionOutline(node, element.width, element.height);
+    previewImageGraphic(node, element);
   });
 
   if (targets.outline) {
-    targets.outline.style.height = `${bounds.height + 6}px`;
-    targets.outline.style.left = `${bounds.x - 3}px`;
-    targets.outline.style.top = `${bounds.y - 3}px`;
-    targets.outline.style.width = `${bounds.width + 6}px`;
+    targets.outline.style.height = `${bounds.height}px`;
+    targets.outline.style.left = `${bounds.x}px`;
+    targets.outline.style.top = `${bounds.y}px`;
+    targets.outline.style.width = `${bounds.width}px`;
+    previewSelectionOutline(targets.outline, bounds.width, bounds.height);
   }
 
   const dimensions = targets.dimensions;
   if (!dimensions) return;
-  const placeBelow = bounds.y + bounds.height + 28 <= artboardHeight;
+  const placeBelow =
+    bounds.y + bounds.height + captionGap + captionHeight <= artboardHeight;
   dimensions.classList.toggle("is-above", !placeBelow);
   dimensions.style.left = `${bounds.x + bounds.width / 2}px`;
-  dimensions.style.top = `${placeBelow ? bounds.y + bounds.height + 8 : bounds.y - 8}px`;
+  dimensions.style.top = `${placeBelow ? bounds.y + bounds.height + captionGap : bounds.y - captionGap}px`;
   dimensions.textContent = `W ${Math.round(bounds.width)} x H ${Math.round(bounds.height)}`;
 }
 
 function previewArtboardPan(currentPan: Point) {
   const artboardNode = document.getElementById("editor-artboard");
+  artboardNode?.classList.add("is-pan-preview");
   artboardNode?.style.setProperty("--artboard-x", `${currentPan.x}px`);
   artboardNode?.style.setProperty("--artboard-y", `${currentPan.y}px`);
 }
@@ -704,6 +836,13 @@ function previewDrawDraft(draft: DrawDraft) {
   preview.style.left = `${bounds.x}px`;
   preview.style.top = `${bounds.y}px`;
   preview.style.width = `${Math.max(1, bounds.width)}px`;
+  const outline = preview.querySelector<SVGSVGElement>(".draw-draft-outline");
+  const outlineRect = outline?.querySelector<SVGRectElement>("rect");
+  const safeWidth = Math.max(1, bounds.width);
+  const safeHeight = Math.max(1, bounds.height);
+  outline?.setAttribute("viewBox", `0 0 ${safeWidth} ${safeHeight}`);
+  outlineRect?.setAttribute("width", `${safeWidth}`);
+  outlineRect?.setAttribute("height", `${safeHeight}`);
 }
 
 function previewMarquee(start: Point, current: Point) {
@@ -751,7 +890,15 @@ function previewDistanceMeasurements(
     const measurement = measurements[index];
     node.hidden = !measurement;
     node.className = measurement
-      ? `distance-preview-slot distance-measurement ${measurement.axis === "horizontal" ? "is-horizontal" : "is-vertical"}`
+      ? [
+          "distance-preview-slot",
+          "distance-measurement",
+          measurement.axis === "horizontal" ? "is-horizontal" : "is-vertical",
+          measurement.hideMinArrow ? "hide-min-arrow" : "",
+          measurement.hideMaxArrow ? "hide-max-arrow" : "",
+        ]
+          .filter(Boolean)
+          .join(" ")
       : "distance-preview-slot";
     const label = node.querySelector<HTMLElement>(".distance-preview-label");
     if (label) {
@@ -900,6 +1047,29 @@ function scaleImageCrop(
   };
 }
 
+function cubicExtremaAmounts(
+  start: number,
+  controlOne: number,
+  controlTwo: number,
+  end: number,
+) {
+  const a = -start + 3 * controlOne - 3 * controlTwo + end;
+  const b = 2 * (start - 2 * controlOne + controlTwo);
+  const c = controlOne - start;
+  if (Math.abs(a) < 1e-9) {
+    if (Math.abs(b) < 1e-9) return [];
+    const amount = -c / b;
+    return amount > 0 && amount < 1 ? [amount] : [];
+  }
+
+  const discriminant = b * b - 4 * a * c;
+  if (discriminant < -1e-9) return [];
+  const root = Math.sqrt(Math.max(0, discriminant));
+  return [(-b + root) / (2 * a), (-b - root) / (2 * a)].filter(
+    (amount) => amount > 0 && amount < 1,
+  );
+}
+
 function vectorVisualGeometryPoints(paths: VectorPath[]) {
   return paths.flatMap((path) => {
     if (!path.points.length) return [];
@@ -918,10 +1088,13 @@ function vectorVisualGeometryPoints(paths: VectorPath[]) {
       const controlOne = from.handleOut ?? from;
       const controlTwo = to.handleIn ?? to;
       if (!from.handleOut && !to.handleIn) continue;
-
-      for (let sample = 1; sample <= 32; sample += 1) {
-        points.push(cubicPoint(from, controlOne, controlTwo, to, sample / 32));
-      }
+      const extrema = [
+        ...cubicExtremaAmounts(from.x, controlOne.x, controlTwo.x, to.x),
+        ...cubicExtremaAmounts(from.y, controlOne.y, controlTwo.y, to.y),
+      ];
+      extrema.forEach((amount) => {
+        points.push(cubicPoint(from, controlOne, controlTwo, to, amount));
+      });
     }
 
     return points;
@@ -1551,8 +1724,8 @@ function ArtboardBackground({
   );
 }
 
-function strokeDasharrayForElement(element: CanvasElement, renderScale = 1) {
-  const width = Math.max(renderScale, element.strokeWidth * renderScale);
+function strokeDasharrayForElement(element: CanvasElement) {
+  const width = Math.max(1, element.strokeWidth);
   if (element.strokeStyle === "dashed") return `${width * 4} ${width * 3}`;
   if (element.strokeStyle === "dotted") return `${width} ${width * 2}`;
   return undefined;
@@ -1563,7 +1736,7 @@ function regularPolygonPoints(count: number, innerRatio?: number) {
   const total = innerRatio ? count * 2 : count;
   for (let index = 0; index < total; index += 1) {
     const angle = -Math.PI / 2 + (index * Math.PI * 2) / total;
-    const radius = innerRatio && index % 2 ? 50 * innerRatio : 49;
+    const radius = innerRatio && index % 2 ? 50 * innerRatio : 50;
     points.push({
       x: 50 + Math.cos(angle) * radius,
       y: 50 + Math.sin(angle) * radius,
@@ -1576,9 +1749,9 @@ function polygonPointsForElement(element: CanvasElement) {
   if (element.type === "triangle") {
     return (element.polygonPoints ?? 3) === 3
       ? [
-          { x: 50, y: 1 },
-          { x: 99, y: 99 },
-          { x: 1, y: 99 },
+          { x: 50, y: 0 },
+          { x: 100, y: 100 },
+          { x: 0, y: 100 },
         ]
       : regularPolygonPoints(clamp(element.polygonPoints ?? 3, 3, 12));
   }
@@ -2192,7 +2365,7 @@ function drawRuler(
   ranges: RulerRange[],
 ) {
   const major = rulerMajorInterval(scale);
-  const minor = major / 10;
+  const minor = major;
   const span = orientation === "horizontal" ? width : height;
   const worldStart = (0 - origin) / scale;
   const worldEnd = (span - origin) / scale;
@@ -2501,12 +2674,14 @@ function pushDistance(
   from: number,
   to: number,
   cross: number,
+  arrowVisibility?: Pick<DistanceMeasurement, "hideMaxArrow" | "hideMinArrow">,
 ) {
   if (Math.abs(to - from) < 1) return;
   measurements.push({
     axis,
     cross,
     from,
+    ...arrowVisibility,
     to,
     value: Math.round(Math.abs(to - from)),
   });
@@ -2556,21 +2731,37 @@ function buildDistanceMeasurements(
     }
 
     if (horizontal) {
+      const minimum = Math.min(horizontal.from, horizontal.to);
+      const maximum = Math.max(horizontal.from, horizontal.to);
       pushDistance(
         measurements,
         "horizontal",
         horizontal.from,
         horizontal.to,
         horizontal.cross,
+        vertical
+          ? {
+              hideMaxArrow: Math.abs(vertical.cross - maximum) < 0.001,
+              hideMinArrow: Math.abs(vertical.cross - minimum) < 0.001,
+            }
+          : undefined,
       );
     }
     if (vertical) {
+      const minimum = Math.min(vertical.from, vertical.to);
+      const maximum = Math.max(vertical.from, vertical.to);
       pushDistance(
         measurements,
         "vertical",
         vertical.from,
         vertical.to,
         vertical.cross,
+        horizontal
+          ? {
+              hideMaxArrow: Math.abs(horizontal.cross - maximum) < 0.001,
+              hideMinArrow: Math.abs(horizontal.cross - minimum) < 0.001,
+            }
+          : undefined,
       );
     }
   } else {
@@ -2626,6 +2817,8 @@ function areDistanceMeasurementsEqual(
         measurement.axis === other.axis &&
         measurement.cross === other.cross &&
         measurement.from === other.from &&
+        measurement.hideMaxArrow === other.hideMaxArrow &&
+        measurement.hideMinArrow === other.hideMinArrow &&
         measurement.to === other.to &&
         measurement.value === other.value
       );
@@ -3471,32 +3664,14 @@ function ScenePanel({
   };
 
   const updatePageWidth = (width: number) => {
-    const nextWidth = clamp(width, 320, 2400);
-    const ratio = {
-      "1:1": 1,
-      "3:2": 3 / 2,
-      "4:3": 4 / 3,
-      "9:16": 9 / 16,
-      "16:9": 16 / 9,
-    }[pageAspectRatio];
     onUpdateArtboard({
-      width: nextWidth,
-      height: Math.round(nextWidth / ratio),
+      width: Number.isFinite(width) ? Math.max(0, width) : 0,
     });
   };
 
   const updatePageHeight = (height: number) => {
-    const nextHeight = clamp(height, 240, 4096);
-    const ratio = {
-      "1:1": 1,
-      "3:2": 3 / 2,
-      "4:3": 4 / 3,
-      "9:16": 9 / 16,
-      "16:9": 16 / 9,
-    }[pageAspectRatio];
     onUpdateArtboard({
-      height: nextHeight,
-      width: Math.round(nextHeight * ratio),
+      height: Number.isFinite(height) ? Math.max(0, height) : 0,
     });
   };
 
@@ -3624,8 +3799,7 @@ function ScenePanel({
         <span>W</span>
         <input
           aria-label="Page Width"
-          max={2400}
-          min={320}
+          min={0}
           onChange={(event) => updatePageWidth(Number(event.target.value))}
           type="number"
           value={artboard.width}
@@ -3636,8 +3810,7 @@ function ScenePanel({
         <span>H</span>
         <input
           aria-label="Page Height"
-          max={4096}
-          min={240}
+          min={0}
           onChange={(event) => updatePageHeight(Number(event.target.value))}
           type="number"
           value={artboard.height}
@@ -4036,6 +4209,185 @@ function ScenePanel({
           ) : null}
         </>
       ) : null}
+    </section>
+  );
+}
+
+function SoundMoreButton({ label }: { label: string }) {
+  return (
+    <button aria-label={label} className="sound-more-button" type="button">
+      <Image
+        alt=""
+        aria-hidden="true"
+        height={8}
+        src={assetPath("/figma/sound/Group%20272.svg")}
+        width={2}
+      />
+    </button>
+  );
+}
+
+function SoundPlayButton({ label }: { label: string }) {
+  return (
+    <button aria-label={label} className="sound-play-button" type="button">
+      <Image
+        alt=""
+        aria-hidden="true"
+        height={13}
+        src={assetPath("/figma/sound/Group%20273.svg")}
+        width={13}
+      />
+    </button>
+  );
+}
+
+function SoundStepperField({
+  ariaLabel,
+  value,
+}: {
+  ariaLabel: string;
+  value: string;
+}) {
+  return (
+    <label className="sound-stepper-field">
+      <input aria-label={ariaLabel} readOnly value={value} />
+      <span>s</span>
+      <Image
+        alt=""
+        aria-hidden="true"
+        height={11}
+        src={assetPath("/figma/sound/Group%20270.svg")}
+        width={6}
+      />
+    </label>
+  );
+}
+
+function SoundPanel() {
+  return (
+    <section
+      aria-label="Sound settings"
+      className="sound-properties"
+      role="tabpanel"
+    >
+      <div aria-label="Sound scope" className="sound-scope-tabs" role="group">
+        <button aria-pressed="true" className="is-active" type="button">
+          Selected Object
+        </button>
+        <button aria-pressed="false" type="button">
+          All Sounds
+        </button>
+      </div>
+
+      <section className="sound-bgm-section">
+        <div className="sound-section-heading">
+          <h2>Background Music (BGM)</h2>
+          <Image
+            alt=""
+            aria-hidden="true"
+            className="sound-bgm-collapse"
+            height={9}
+            src={assetPath("/figma/sound/Group%20263.svg")}
+            width={9}
+          />
+        </div>
+
+        <div className="sound-upload-card">
+          <div aria-hidden="true" className="sound-file-thumbnail" />
+          <div className="sound-upload-copy">
+            <strong>파일명</strong>
+            <span>00:00 / 0.0MB</span>
+          </div>
+          <div className="sound-preview-row">
+            <SoundPlayButton label="Preview background music" />
+            <span aria-hidden="true" className="sound-preview-track" />
+          </div>
+          <span className="sound-preview-time">00:00 / 00:00</span>
+          <SoundMoreButton label="More background music options" />
+        </div>
+
+        <div className="sound-control-row sound-volume-row">
+          <span className="sound-control-label">Volume</span>
+          <span aria-hidden="true" className="sound-slider is-full">
+            <span />
+          </span>
+          <label className="sound-percent-field">
+            <input aria-label="Sound volume" readOnly value="100" />
+            <span>%</span>
+          </label>
+        </div>
+
+        <div className="sound-control-row">
+          <span className="sound-control-label">Fade In</span>
+          <SoundStepperField ariaLabel="Fade in duration" value="0.0" />
+        </div>
+
+        <div className="sound-control-row">
+          <span className="sound-control-label">Fade Out</span>
+          <SoundStepperField ariaLabel="Fade out duration" value="0.0" />
+        </div>
+
+        <div className="sound-control-row">
+          <span className="sound-control-label">Loop</span>
+          <button
+            aria-label="Loop"
+            aria-pressed="true"
+            className="sound-toggle is-active"
+            type="button"
+          >
+            <span />
+          </button>
+        </div>
+
+        <div className="sound-control-row">
+          <span className="sound-control-label">Start Playback</span>
+          <button className="sound-playback-select" type="button">
+            <span>On Page Enter</span>
+            <span aria-hidden="true">▼</span>
+          </button>
+        </div>
+      </section>
+
+      <section className="sound-interaction-section">
+        <div className="sound-section-heading">
+          <h2>Interaction Sounds</h2>
+          <button className="sound-add-button" type="button">
+            +&nbsp;&nbsp;Add Sound
+          </button>
+        </div>
+
+        <div className="sound-interaction-row">
+          <div className="sound-interaction-row-header">
+            <button className="sound-interaction-trigger" type="button">
+              Hover
+              <span aria-hidden="true">▼</span>
+            </button>
+            <SoundPlayButton label="Preview hover sound" />
+            <span className="sound-interaction-name">효과음 이름.wav</span>
+            <span className="sound-interaction-volume">100 %</span>
+            <span aria-hidden="true" className="sound-mini-slider is-full">
+              <span />
+            </span>
+            <SoundMoreButton label="More hover sound options" />
+          </div>
+        </div>
+
+        <div className="sound-interaction-row is-expanded">
+          <div className="sound-interaction-row-header">
+            <button className="sound-interaction-trigger" type="button">
+              Click
+              <span aria-hidden="true">▼</span>
+            </button>
+            <SoundPlayButton label="Preview click sound" />
+            <span className="sound-interaction-name">효과음 이름.wav</span>
+            <span className="sound-interaction-volume">50 %</span>
+            <span aria-hidden="true" className="sound-mini-slider is-half">
+              <span />
+            </span>
+            <SoundMoreButton label="More click sound options" />
+          </div>
+        </div>
+      </section>
     </section>
   );
 }
@@ -4632,6 +4984,11 @@ function DesignPanel({
                 }
                 options={[
                   {
+                    label: "None",
+                    strokePreview: "none",
+                    value: "none",
+                  },
+                  {
                     label: "Solid",
                     strokePreview: "solid",
                     value: "solid",
@@ -5040,6 +5397,84 @@ function DesignPanel({
   );
 }
 
+function SelectionOutlineSvg({
+  centerOutset,
+  controlScale,
+  height,
+  lineWidth,
+  showCornerHandles = false,
+  strokePlacement = "center",
+  width,
+}: {
+  centerOutset: number;
+  controlScale: number;
+  height: number;
+  lineWidth: number;
+  showCornerHandles?: boolean;
+  strokePlacement?: SelectionStrokePlacement;
+  width: number;
+}) {
+  const safeHeight = Math.max(0.001, height);
+  const safeWidth = Math.max(0.001, width);
+  const outlineGeometry = selectionOutlineGeometry(
+    width,
+    height,
+    lineWidth,
+    centerOutset,
+    strokePlacement,
+  );
+  const handleSize = 8 * controlScale;
+  const corners = [
+    { corner: "nw", x: -centerOutset, y: -centerOutset },
+    { corner: "ne", x: width + centerOutset, y: -centerOutset },
+    {
+      corner: "se",
+      x: width + centerOutset,
+      y: height + centerOutset,
+    },
+    { corner: "sw", x: -centerOutset, y: height + centerOutset },
+  ] as const;
+  return (
+    <svg
+      aria-hidden="true"
+      className="selection-outline-svg"
+      data-selection-base-line-width={lineWidth}
+      data-selection-center-outset={centerOutset}
+      data-selection-stroke-placement={strokePlacement}
+      preserveAspectRatio="none"
+      shapeRendering="geometricPrecision"
+      viewBox={`0 0 ${safeWidth} ${safeHeight}`}
+    >
+      <rect
+        data-selection-frame="true"
+        fill="none"
+        height={outlineGeometry.height}
+        stroke="var(--accent)"
+        strokeWidth={outlineGeometry.lineWidth}
+        vectorEffect="non-scaling-stroke"
+        width={outlineGeometry.width}
+        x={outlineGeometry.x}
+        y={outlineGeometry.y}
+      />
+      {showCornerHandles
+        ? corners.map(({ corner, x, y }) => (
+            <rect
+              data-handle-size={handleSize}
+              data-selection-corner={corner}
+              fill="var(--accent)"
+              height={handleSize}
+              key={corner}
+              shapeRendering="crispEdges"
+              width={handleSize}
+              x={x - handleSize / 2}
+              y={y - handleSize / 2}
+            />
+          ))
+        : null}
+    </svg>
+  );
+}
+
 function PenEditControls({
   element,
   onHandlePointerDown,
@@ -5153,15 +5588,16 @@ function PenEditControls({
 function ShapeGraphic({
   element,
   imageScale = 1,
-  renderScale = 1,
 }: {
   element: CanvasElement;
   imageScale?: number;
-  renderScale?: number;
 }) {
   const fill = colorWithOpacity(element.fill, element.fillOpacity);
-  const stroke = colorWithOpacity(element.stroke, element.strokeOpacity);
-  const visibleStrokeWidth = element.strokeWidth * renderScale;
+  const strokeVisible = element.strokeStyle !== "none";
+  const stroke = strokeVisible
+    ? colorWithOpacity(element.stroke, element.strokeOpacity)
+    : "none";
+  const visibleStrokeWidth = strokeVisible ? element.strokeWidth : 0;
   const innerTransform: CSSProperties = {
     transform: visualFlipTransform(element),
     transformOrigin: "center",
@@ -5169,7 +5605,7 @@ function ShapeGraphic({
   const common = {
     fill,
     stroke,
-    strokeDasharray: strokeDasharrayForElement(element, renderScale),
+    strokeDasharray: strokeDasharrayForElement(element),
     strokeLinecap: "round" as const,
     strokeLinejoin: "round" as const,
     strokeWidth: visibleStrokeWidth,
@@ -5177,7 +5613,7 @@ function ShapeGraphic({
   };
 
   if (element.pathfinder?.paths.length) {
-    const { imageFill, paths, polygons } = element.pathfinder;
+    const { imageFill, operation, paths, polygons } = element.pathfinder;
     const polygonPaths = polygons?.length
       ? polygons.map((polygon) =>
           polygon
@@ -5196,6 +5632,39 @@ function ShapeGraphic({
           y: imageFill.height / 2,
         }
       : { x: 0, y: 0 };
+    const cropEdgeInset = imageFill && operation === "exclude" ? 0.2 : 0;
+    const imageViewport = imageFill
+      ? {
+          bottom:
+            (imageFill.flipY ? imageFill.crop.top : imageFill.crop.bottom) > 0
+              ? cropEdgeInset
+              : 0,
+          left:
+            (imageFill.flipX ? imageFill.crop.right : imageFill.crop.left) > 0
+              ? cropEdgeInset
+              : 0,
+          right:
+            (imageFill.flipX ? imageFill.crop.left : imageFill.crop.right) > 0
+              ? cropEdgeInset
+              : 0,
+          top:
+            (imageFill.flipY ? imageFill.crop.bottom : imageFill.crop.top) > 0
+              ? cropEdgeInset
+              : 0,
+        }
+      : { bottom: 0, left: 0, right: 0, top: 0 };
+    const imageViewportWidth = imageFill
+      ? Math.max(
+          0.001,
+          imageFill.width - imageViewport.left - imageViewport.right,
+        )
+      : 1;
+    const imageViewportHeight = imageFill
+      ? Math.max(
+          0.001,
+          imageFill.height - imageViewport.top - imageViewport.bottom,
+        )
+      : 1;
     const safeElementId = element.id.replace(/[^a-zA-Z0-9_-]/g, "-");
     const clipId = `pathfinder-clip-${safeElementId}`;
     const baseMaskId = `pathfinder-base-mask-${safeElementId}`;
@@ -5204,6 +5673,7 @@ function ShapeGraphic({
         aria-hidden="true"
         className="vector-shape"
         preserveAspectRatio="none"
+        shapeRendering="geometricPrecision"
         style={innerTransform}
         viewBox={`0 0 ${Math.max(1, element.width)} ${Math.max(1, element.height)}`}
       >
@@ -5275,18 +5745,31 @@ function ShapeGraphic({
                 <g
                   transform={`rotate(${imageFill.rotation} ${imageOrigin.x} ${imageOrigin.y})`}
                 >
-                  <g
-                    transform={`translate(${imageFill.width / 2} ${imageFill.height / 2}) scale(${imageFill.flipX ? -1 : 1} ${imageFill.flipY ? -1 : 1}) translate(${-imageFill.width / 2} ${-imageFill.height / 2})`}
+                  <svg
+                    data-pathfinder-image-viewport="true"
+                    height={imageViewportHeight}
+                    overflow="hidden"
+                    preserveAspectRatio="none"
+                    viewBox={`${imageViewport.left} ${imageViewport.top} ${imageViewportWidth} ${imageViewportHeight}`}
+                    width={imageViewportWidth}
+                    x={imageViewport.left}
+                    y={imageViewport.top}
                   >
-                    <image
-                      height={imageFill.crop.baseHeight * imageFill.crop.scaleY}
-                      href={imageFill.src}
-                      preserveAspectRatio="none"
-                      width={imageFill.crop.baseWidth * imageFill.crop.scaleX}
-                      x={-imageFill.crop.left * imageFill.crop.scaleX}
-                      y={-imageFill.crop.top * imageFill.crop.scaleY}
-                    />
-                  </g>
+                    <g
+                      transform={`translate(${imageFill.width / 2} ${imageFill.height / 2}) scale(${imageFill.flipX ? -1 : 1} ${imageFill.flipY ? -1 : 1}) translate(${-imageFill.width / 2} ${-imageFill.height / 2})`}
+                    >
+                      <image
+                        height={
+                          imageFill.crop.baseHeight * imageFill.crop.scaleY
+                        }
+                        href={imageFill.src}
+                        preserveAspectRatio="none"
+                        width={imageFill.crop.baseWidth * imageFill.crop.scaleX}
+                        x={-imageFill.crop.left * imageFill.crop.scaleX}
+                        y={-imageFill.crop.top * imageFill.crop.scaleY}
+                      />
+                    </g>
+                  </svg>
                 </g>
               </g>
             </g>
@@ -5324,6 +5807,7 @@ function ShapeGraphic({
         aria-hidden="true"
         className="vector-shape"
         preserveAspectRatio="none"
+        shapeRendering="geometricPrecision"
         style={innerTransform}
         viewBox="0 0 100 100"
       >
@@ -5344,6 +5828,7 @@ function ShapeGraphic({
         aria-hidden="true"
         className="vector-shape"
         preserveAspectRatio="none"
+        shapeRendering="geometricPrecision"
         style={innerTransform}
         viewBox="0 0 100 100"
       >
@@ -5372,6 +5857,7 @@ function ShapeGraphic({
         aria-hidden="true"
         className="vector-shape"
         preserveAspectRatio="none"
+        shapeRendering="geometricPrecision"
         style={innerTransform}
         viewBox={`0 0 ${Math.max(1, element.width)} ${Math.max(1, element.height)}`}
       >
@@ -5395,8 +5881,8 @@ function ShapeGraphic({
             className="pen-visible-path"
             d={pathData(path.points, path.closed)}
             key={`visible-${index}`}
-            stroke={element.stroke}
-            strokeDasharray={strokeDasharrayForElement(element, renderScale)}
+            stroke={stroke}
+            strokeDasharray={strokeDasharrayForElement(element)}
             strokeOpacity={(element.strokeOpacity ?? 100) / 100}
             strokeLinecap="round"
             strokeLinejoin="round"
@@ -5415,17 +5901,18 @@ function ShapeGraphic({
         aria-hidden="true"
         className="vector-shape line-shape"
         preserveAspectRatio="none"
+        shapeRendering="geometricPrecision"
         style={innerTransform}
         viewBox="0 0 100 24"
       >
         <line
           stroke={stroke}
-          strokeDasharray={strokeDasharrayForElement(element, renderScale)}
+          strokeDasharray={strokeDasharrayForElement(element)}
           strokeLinecap="round"
           strokeWidth={visibleStrokeWidth}
           vectorEffect="non-scaling-stroke"
-          x1="1"
-          x2="99"
+          x1="0"
+          x2="100"
           y1="12"
           y2="12"
         />
@@ -5444,8 +5931,11 @@ function ShapeGraphic({
           borderRadius: (element.cornerRadii ?? [element.cornerRadius])
             .map((radius) => `${radius}px`)
             .join(" "),
-          borderStyle: element.strokeStyle ?? "solid",
-          borderWidth: element.strokeWidth,
+          borderStyle:
+            element.strokeStyle === "none"
+              ? "none"
+              : (element.strokeStyle ?? "solid"),
+          borderWidth: strokeVisible ? element.strokeWidth : 0,
         }}
       >
         <span
@@ -5515,14 +6005,46 @@ function ShapeGraphic({
   );
 }
 
+function DrawDraftOutline({
+  height,
+  lineWidth,
+  width,
+}: {
+  height: number;
+  lineWidth: number;
+  width: number;
+}) {
+  return (
+    <svg
+      aria-hidden="true"
+      className="draw-draft-outline"
+      preserveAspectRatio="none"
+      shapeRendering="geometricPrecision"
+      viewBox={`0 0 ${Math.max(1, width)} ${Math.max(1, height)}`}
+    >
+      <rect
+        fill="none"
+        height={Math.max(1, height)}
+        stroke="var(--accent)"
+        strokeDasharray={`${3 * lineWidth} ${3 * lineWidth}`}
+        strokeWidth={lineWidth}
+        vectorEffect="non-scaling-stroke"
+        width={Math.max(1, width)}
+        x="0"
+        y="0"
+      />
+    </svg>
+  );
+}
+
 function DrawDraftPreview({
   bounds,
   draft,
-  renderScale,
+  outlineWidth,
 }: {
   bounds: ElementRect;
   draft: DrawDraft;
-  renderScale: number;
+  outlineWidth: number;
 }) {
   const previewElement: CanvasElement = {
     id: "draw-draft",
@@ -5537,6 +6059,7 @@ function DrawDraftPreview({
     fill: "#ffffff",
     stroke: "#000000",
     strokeWidth: 1,
+    strokeStyle: draft.type === "line" ? "solid" : "none",
     cornerRadius: 0,
     visible: true,
     locked: false,
@@ -5556,8 +6079,13 @@ function DrawDraftPreview({
       {draft.type === "text" ? (
         <div className="text-shape draft-text-preview">Text</div>
       ) : (
-        <ShapeGraphic element={previewElement} renderScale={renderScale} />
+        <ShapeGraphic element={previewElement} />
       )}
+      <DrawDraftOutline
+        height={Math.max(1, bounds.height)}
+        lineWidth={outlineWidth}
+        width={Math.max(1, bounds.width)}
+      />
     </div>
   );
 }
@@ -5738,8 +6266,6 @@ function ViewerPreview({
     pageType === "scroll"
       ? Math.max(0, (viewport.height - layout.height) / 2)
       : (viewport.height - layout.height) / 2;
-  const renderScale = Math.max(0.01, Math.min(layout.scaleX, layout.scaleY));
-
   return (
     <section
       aria-label="Viewer preview"
@@ -5812,10 +6338,7 @@ function ViewerPreview({
                         {element.text}
                       </div>
                     ) : (
-                      <ShapeGraphic
-                        element={element}
-                        renderScale={renderScale}
-                      />
+                      <ShapeGraphic element={element} />
                     )}
                   </div>
                 ))}
@@ -6095,6 +6618,7 @@ export function EditorShell() {
   const selectionToolActive =
     activeTool === "selection" || activeTool === "settings";
   const [assetTab, setAssetTab] = useState<"image" | "video">("image");
+  const [propertyTab, setPropertyTab] = useState<PropertyTab>("design");
   const [uploadedAssets, setUploadedAssets] = useState<string[]>([]);
   const [lockRatio, setLockRatio] = useState(true);
   const [pan, setPan] = useState<Point>({ x: 0, y: 0 });
@@ -6178,6 +6702,11 @@ export function EditorShell() {
   const textEditorRefs = useRef(new Map<string, HTMLDivElement>());
 
   const totalScale = fitScale * (zoom / 100);
+  const selectionUiScale = 100 / Math.max(5, zoom);
+  const selectionControlScale = 1 / Math.max(Number.EPSILON, totalScale);
+  const selectionOutlineWidth = selectionControlScale;
+  const selectionCaptionGap = 8 * selectionUiScale;
+  const selectionCaptionHeight = 20 * selectionUiScale;
 
   useEffect(() => {
     if (previousZoomRef.current === zoom) return;
@@ -6243,6 +6772,7 @@ export function EditorShell() {
     () => elements.filter((element) => selectedElementIds.includes(element.id)),
     [elements, selectedElementIds],
   );
+  const visiblePropertyTab = propertyTab;
   const guides = useMemo(
     () => guidesByPage[activePageId] ?? [],
     [activePageId, guidesByPage],
@@ -6266,11 +6796,18 @@ export function EditorShell() {
   );
   const updateAltDistanceMeasurements = useCallback(
     (clientX: number, clientY: number) => {
+      const pointerTarget = document.elementFromPoint(clientX, clientY);
+      if (pointerTarget?.closest(".resize-handle, .line-endpoint")) {
+        setStableDistanceMeasurements([]);
+        return;
+      }
+
       const selectedGuide =
         selectedElements.length === 0 && selectedGuideIds.length === 1
           ? guides.find((guide) => guide.id === selectedGuideIds[0])
           : undefined;
-      if (selectedElements.length !== 1 && !selectedGuide) {
+      const selectedBounds = boundsFromElements(selectedElements);
+      if (!selectedBounds && !selectedGuide) {
         setStableDistanceMeasurements([]);
         return;
       }
@@ -6297,9 +6834,13 @@ export function EditorShell() {
         return;
       }
 
-      const subject = rectFromElement(selectedElements[0]);
+      if (!selectedBounds) return;
+      const selectedIds = new Set(
+        selectedElements.map((element) => element.id),
+      );
+      const subject = selectedBounds;
       const target = elements.find(
-        (element) => element.id === targetId && element.id !== subject.id,
+        (element) => element.id === targetId && !selectedIds.has(element.id),
       );
       setStableDistanceMeasurements(
         targetGuide
@@ -6330,7 +6871,7 @@ export function EditorShell() {
       setFitScale(
         Math.min(
           1,
-          Math.max(0.08, (bounds.width - 16) / artboard.width),
+          Math.max(0.08, (bounds.width - 36) / artboard.width),
           Math.max(0.08, (bounds.height - 96) / artboard.height),
         ),
       );
@@ -6998,15 +7539,31 @@ export function EditorShell() {
       if (event.code === "Space") setSpacePressed(false);
       if (event.key === "Alt") {
         altPressedRef.current = false;
+        previewDistanceMeasurements(distanceMeasurementRefs.current, []);
         setStableDistanceMeasurements([]);
+      }
+    };
+    const clearTransientModifierState = () => {
+      altPressedRef.current = false;
+      setSpacePressed(false);
+      previewDistanceMeasurements(distanceMeasurementRefs.current, []);
+      setStableDistanceMeasurements([]);
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "hidden") {
+        clearTransientModifierState();
       }
     };
 
     window.addEventListener("keydown", handleKeyDown);
     window.addEventListener("keyup", handleKeyUp);
+    window.addEventListener("blur", clearTransientModifierState);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("keyup", handleKeyUp);
+      window.removeEventListener("blur", clearTransientModifierState);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
   }, [
     artboardSelected,
@@ -7053,6 +7610,45 @@ export function EditorShell() {
     );
   };
 
+  const zoomAtClientPoint = (
+    requestedZoom: number,
+    clientX: number,
+    clientY: number,
+  ) => {
+    const nextZoom = clamp(requestedZoom, 5, 500);
+    if (nextZoom === zoom) return;
+    const artboardNode = document.getElementById("editor-artboard");
+    if (!artboardNode) {
+      setZoom(nextZoom);
+      return;
+    }
+    const bounds = artboardNode.getBoundingClientRect();
+    const currentCenter = {
+      x: bounds.left + bounds.width / 2,
+      y: bounds.top + bounds.height / 2,
+    };
+    const nextScale = fitScale * (nextZoom / 100);
+    const scaleRatio = nextScale / Math.max(0.01, totalScale);
+    setPan((current) => ({
+      x: current.x + (clientX - currentCenter.x) * (1 - scaleRatio),
+      y: current.y + (clientY - currentCenter.y) * (1 - scaleRatio),
+    }));
+    setZoom(nextZoom);
+  };
+
+  const zoomAtCanvasCenter = (requestedZoom: number) => {
+    const bounds = canvasRef.current?.getBoundingClientRect();
+    if (!bounds) {
+      setZoom(requestedZoom);
+      return;
+    }
+    zoomAtClientPoint(
+      requestedZoom,
+      bounds.left + bounds.width / 2,
+      bounds.top + bounds.height / 2,
+    );
+  };
+
   const getCanvasGuidePosition = (
     orientation: EditorGuide["orientation"],
     clientX: number,
@@ -7079,6 +7675,57 @@ export function EditorShell() {
       : (clientX - bounds.left) / totalScale;
   };
 
+  const snapGuidePosition = (
+    orientation: EditorGuide["orientation"],
+    position: number,
+  ) => {
+    const elementEdges = elements
+      .filter((element) => element.visible)
+      .flatMap((element) =>
+        orientation === "horizontal"
+          ? [element.y, element.y + element.height]
+          : [element.x, element.x + element.width],
+      );
+    const candidates = [
+      0,
+      orientation === "horizontal" ? artboard.height : artboard.width,
+      ...elementEdges,
+    ];
+    const threshold = 8 / Math.max(totalScale, 0.01);
+    const nearest = candidates.reduce((current, candidate) =>
+      Math.abs(candidate - position) < Math.abs(current - position)
+        ? candidate
+        : current,
+    );
+    return Math.abs(nearest - position) <= threshold ? nearest : position;
+  };
+
+  const getCanvasPositionForWorldGuide = (
+    orientation: EditorGuide["orientation"],
+    position: number,
+  ) => {
+    const canvas = canvasRef.current;
+    const artboardNode = document.getElementById("editor-artboard");
+    if (!canvas || !artboardNode) return 0;
+    const canvasBounds = canvas.getBoundingClientRect();
+    const artboardBounds = artboardNode.getBoundingClientRect();
+    return orientation === "horizontal"
+      ? artboardBounds.top - canvasBounds.top + position * totalScale
+      : artboardBounds.left - canvasBounds.left + position * totalScale;
+  };
+
+  const previewGuideBoardDistance = (
+    orientation: EditorGuide["orientation"],
+    position: number,
+  ) => {
+    setStableDistanceMeasurements(
+      buildDistanceMeasurementsFromGuide(
+        { id: "guide-drag-preview", orientation, position },
+        artboard,
+      ),
+    );
+  };
+
   const handleRulerPointerDown = (
     event: ReactPointerEvent<HTMLCanvasElement>,
     orientation: EditorGuide["orientation"],
@@ -7091,6 +7738,9 @@ export function EditorShell() {
       pointerId: event.pointerId,
       source: "ruler",
     };
+    setSelectedGuideIds([]);
+    previewDistanceMeasurements(distanceMeasurementRefs.current, []);
+    setStableDistanceMeasurements([]);
     setGuidePreview({
       orientation,
       position: getCanvasGuidePosition(
@@ -7107,15 +7757,8 @@ export function EditorShell() {
   ) => {
     event.preventDefault();
     event.stopPropagation();
-    const selected = selectedGuideIds.includes(guide.id);
     setSelectedElementIds([]);
-    setSelectedGuideIds(
-      event.shiftKey
-        ? selected
-          ? selectedGuideIds.filter((id) => id !== guide.id)
-          : [...selectedGuideIds, guide.id]
-        : [guide.id],
-    );
+    setSelectedGuideIds([guide.id]);
     event.currentTarget.setPointerCapture(event.pointerId);
     guideDragRef.current = {
       guideId: guide.id,
@@ -7123,6 +7766,7 @@ export function EditorShell() {
       pointerId: event.pointerId,
       source: "guide",
     };
+    previewGuideBoardDistance(guide.orientation, guide.position);
   };
 
   const handleGuidePointerMove = (event: ReactPointerEvent<HTMLElement>) => {
@@ -7130,28 +7774,25 @@ export function EditorShell() {
     if (!drag || drag.pointerId !== event.pointerId) return;
     event.preventDefault();
     event.stopPropagation();
+    const position = snapGuidePosition(
+      drag.orientation,
+      getWorldGuidePosition(drag.orientation, event.clientX, event.clientY),
+    );
     if (drag.source === "ruler") {
       setGuidePreview({
         orientation: drag.orientation,
-        position: getCanvasGuidePosition(
-          drag.orientation,
-          event.clientX,
-          event.clientY,
-        ),
+        position: getCanvasPositionForWorldGuide(drag.orientation, position),
       });
+      previewGuideBoardDistance(drag.orientation, position);
       return;
     }
 
-    const position = getWorldGuidePosition(
-      drag.orientation,
-      event.clientX,
-      event.clientY,
-    );
     updateGuides((current) =>
       current.map((guide) =>
         guide.id === drag.guideId ? { ...guide, position } : guide,
       ),
     );
+    previewGuideBoardDistance(drag.orientation, position);
   };
 
   const handleGuidePointerUp = (event: ReactPointerEvent<HTMLElement>) => {
@@ -7181,10 +7822,13 @@ export function EditorShell() {
           {
             id: guideId,
             orientation: drag.orientation,
-            position: getWorldGuidePosition(
+            position: snapGuidePosition(
               drag.orientation,
-              event.clientX,
-              event.clientY,
+              getWorldGuidePosition(
+                drag.orientation,
+                event.clientX,
+                event.clientY,
+              ),
             ),
           },
         ]);
@@ -7201,6 +7845,8 @@ export function EditorShell() {
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
+    previewDistanceMeasurements(distanceMeasurementRefs.current, []);
+    setStableDistanceMeasurements([]);
     guideDragRef.current = null;
   };
 
@@ -7318,6 +7964,7 @@ export function EditorShell() {
       fill: type === "text" ? "#000000" : "#ffffff",
       stroke: type === "text" ? "transparent" : "#000000",
       strokeWidth: type === "text" ? 0 : 1,
+      strokeStyle: type === "line" ? "solid" : "none",
       cornerRadius: 0,
       visible: true,
       locked: false,
@@ -7419,6 +8066,7 @@ export function EditorShell() {
       fill: "transparent",
       stroke: "#000000",
       strokeWidth: 1,
+      strokeStyle: "solid",
       cornerRadius: 0,
       visible: true,
       locked: false,
@@ -7458,7 +8106,11 @@ export function EditorShell() {
       return;
     }
     if (activeTool === "zoom") {
-      setZoom(zoom + (event.button === 2 ? -10 : 10));
+      zoomAtClientPoint(
+        zoom + (event.button === 2 ? -10 : 10),
+        event.clientX,
+        event.clientY,
+      );
       return;
     }
     if (activeTool === "rectangle" || activeTool === "text") {
@@ -8098,8 +8750,10 @@ export function EditorShell() {
       );
       previewElementResize(
         gesture.previewTargets,
-        resizedBounds,
+        resizeUpdates,
         artboard.height,
+        selectionCaptionGap,
+        selectionCaptionHeight,
       );
       gestureRef.current = { ...gesture, appliedUpdates: resizeUpdates };
       return;
@@ -8125,6 +8779,8 @@ export function EditorShell() {
         resizedElements,
         resizedBounds,
         artboard.height,
+        selectionCaptionGap,
+        selectionCaptionHeight,
       );
       gestureRef.current = {
         ...gesture,
@@ -8574,6 +9230,9 @@ export function EditorShell() {
     setStableDistanceMeasurements([]);
     gestureRef.current = null;
     rawDragActiveRef.current = false;
+    document
+      .getElementById("editor-artboard")
+      ?.classList.remove("is-pan-preview");
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
@@ -8593,7 +9252,11 @@ export function EditorShell() {
   const handleWheel = (event: ReactWheelEvent<HTMLElement>) => {
     event.preventDefault();
     if (event.ctrlKey || event.metaKey) {
-      setZoom(zoom + (event.deltaY < 0 ? 10 : -10));
+      zoomAtClientPoint(
+        zoom + (event.deltaY < 0 ? 10 : -10),
+        event.clientX,
+        event.clientY,
+      );
       return;
     }
     setPan((current) => ({
@@ -8629,6 +9292,7 @@ export function EditorShell() {
         fill: "#ffffff",
         stroke: "transparent",
         strokeWidth: 0,
+        strokeStyle: "none",
         cornerRadius: 0,
         visible: true,
         locked: false,
@@ -8653,10 +9317,22 @@ export function EditorShell() {
     "--artboard-scale": totalScale,
     "--artboard-x": `${pan.x}px`,
     "--artboard-y": `${pan.y}px`,
+    "--selection-control-scale": selectionControlScale,
+    "--selection-caption-font-size": `${10 * selectionUiScale}px`,
+    "--selection-caption-height": `${selectionCaptionHeight}px`,
+    "--selection-caption-padding": `${6 * selectionUiScale}px`,
+    "--selection-caption-radius": `${2 * selectionUiScale}px`,
+    "--selection-outline-width": `${selectionOutlineWidth}px`,
     backgroundColor: "transparent",
     borderRadius: `${artboard.cornerRadius}px`,
-    overflow: "hidden",
+    overflow: "visible",
   } as CSSProperties;
+  const activeToolbarIndex = Math.max(
+    0,
+    tools.findIndex(({ id }) => id === (spacePressed ? "hand" : activeTool)),
+  );
+  const activeToolIndicator =
+    toolIndicatorMetrics[activeToolbarIndex] ?? toolIndicatorMetrics[0];
 
   const draftBounds = drawDraft
     ? boundsFromPoints(drawDraft.start, drawDraft.current)
@@ -8720,16 +9396,21 @@ export function EditorShell() {
     Boolean(combinedSelectionBounds) &&
     selectedElements.every((element) => !element.locked);
   const selectionDimensionsPlacement = selectionDimensionsBounds
-    ? selectionDimensionsBounds.y + selectionDimensionsBounds.height + 28 <=
+    ? selectionDimensionsBounds.y +
+        selectionDimensionsBounds.height +
+        selectionCaptionGap +
+        selectionCaptionHeight <=
       artboard.height
       ? {
           className: "",
           top:
-            selectionDimensionsBounds.y + selectionDimensionsBounds.height + 8,
+            selectionDimensionsBounds.y +
+            selectionDimensionsBounds.height +
+            selectionCaptionGap,
         }
       : {
           className: "is-above",
-          top: selectionDimensionsBounds.y - 8,
+          top: selectionDimensionsBounds.y - selectionCaptionGap,
         }
     : null;
   const selectionDimensionsValue = selectionDimensionsBounds
@@ -8859,6 +9540,14 @@ export function EditorShell() {
       </header>
 
       <aside aria-label="Creation tools" className="tool-rail">
+        <span
+          aria-hidden="true"
+          className="tool-active-indicator"
+          style={{
+            height: `${activeToolIndicator.height}px`,
+            transform: `translateY(${activeToolIndicator.offset}px)`,
+          }}
+        />
         {tools.map(({ id, icon: Icon, label, asset }) => {
           const isActive = (spacePressed ? "hand" : activeTool) === id;
           return (
@@ -8872,6 +9561,9 @@ export function EditorShell() {
                 setNodeEditElementId(null);
                 if (id !== "rectangle") finishPenPath();
                 setActiveTool(id);
+              }}
+              onPointerDown={() => {
+                if (id === "rectangle") setActiveTool("rectangle");
               }}
               title={label}
               type="button"
@@ -9311,6 +10003,21 @@ export function EditorShell() {
           {elements.map((element) => {
             if (!element.visible) return null;
             const selected = selectedElementIds.includes(element.id);
+            const selectionLineWidth = selectionOutlineWidth;
+            const vectorStrokeOutset =
+              element.type !== "image" &&
+              element.type !== "text" &&
+              element.type !== "line" &&
+              element.strokeStyle !== "none" &&
+              element.stroke !== "transparent" &&
+              element.strokeWidth > 0 &&
+              (element.strokeOpacity ?? 100) > 0
+                ? (element.strokeWidth * selectionControlScale) / 2
+                : 0;
+            const selectionHandleOutset =
+              element.type === "image"
+                ? 0
+                : vectorStrokeOutset + selectionLineWidth / 2;
             const elementStyle = {
               height: `${element.height}px`,
               left: `${element.x}px`,
@@ -9319,6 +10026,8 @@ export function EditorShell() {
               transform: `rotate(${element.rotation}deg)`,
               transformOrigin: "center",
               width: `${element.width}px`,
+              "--selection-handle-outset": `${selectionHandleOutset}px`,
+              "--selection-outline-width": `${selectionLineWidth}px`,
             };
             return (
               <div
@@ -9419,8 +10128,28 @@ export function EditorShell() {
                     {element.text}
                   </div>
                 ) : (
-                  <ShapeGraphic element={element} renderScale={totalScale} />
+                  <ShapeGraphic element={element} />
                 )}
+
+                {selected &&
+                !groupedSelectionBounds &&
+                element.type !== "line" ? (
+                  <SelectionOutlineSvg
+                    centerOutset={selectionHandleOutset}
+                    controlScale={selectionControlScale}
+                    height={element.height}
+                    lineWidth={selectionLineWidth}
+                    showCornerHandles={
+                      nodeEditElementId !== element.id &&
+                      selectedElements.length === 1 &&
+                      !element.locked
+                    }
+                    strokePlacement={
+                      element.type === "image" ? "inside" : "center"
+                    }
+                    width={element.width}
+                  />
+                ) : null}
 
                 {nodeEditElementId === element.id && element.type === "pen" ? (
                   <PenEditControls
@@ -9501,13 +10230,25 @@ export function EditorShell() {
                 groupedSelectionId ? "Group selection" : "Multiple selection"
               }
               className={`group-selection-outline ${groupedSelectionId ? "is-group" : "is-multiple"}`}
-              style={{
-                height: combinedSelectionBounds.height + 6,
-                left: combinedSelectionBounds.x - 3,
-                top: combinedSelectionBounds.y - 3,
-                width: combinedSelectionBounds.width + 6,
-              }}
+              style={
+                {
+                  height: combinedSelectionBounds.height,
+                  left: combinedSelectionBounds.x,
+                  top: combinedSelectionBounds.y,
+                  width: combinedSelectionBounds.width,
+                  "--selection-handle-outset": `${selectionOutlineWidth / 2}px`,
+                  "--selection-outline-width": `${selectionOutlineWidth}px`,
+                } as CSSProperties
+              }
             >
+              <SelectionOutlineSvg
+                centerOutset={selectionOutlineWidth / 2}
+                controlScale={selectionControlScale}
+                height={combinedSelectionBounds.height}
+                lineWidth={selectionOutlineWidth}
+                showCornerHandles={combinedSelectionResizable}
+                width={combinedSelectionBounds.width}
+              />
               {combinedSelectionResizable
                 ? (["nw", "ne", "se", "sw"] as ResizeHandle[]).map((handle) => (
                     <button
@@ -9607,7 +10348,14 @@ export function EditorShell() {
             const horizontal = measurement.axis === "horizontal";
             return (
               <div
-                className={`distance-measurement ${horizontal ? "is-horizontal" : "is-vertical"}`}
+                className={[
+                  "distance-measurement",
+                  horizontal ? "is-horizontal" : "is-vertical",
+                  measurement.hideMinArrow ? "hide-min-arrow" : "",
+                  measurement.hideMaxArrow ? "hide-max-arrow" : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
                 key={`distance-${measurement.axis}-${index}`}
                 style={
                   horizontal
@@ -9796,7 +10544,7 @@ export function EditorShell() {
             <DrawDraftPreview
               bounds={draftBounds}
               draft={drawDraft!}
-              renderScale={totalScale}
+              outlineWidth={selectionOutlineWidth}
             />
           ) : null}
           {marqueeBounds ? (
@@ -9887,7 +10635,7 @@ export function EditorShell() {
           <div className="navigator-zoom">
             <button
               aria-label="Zoom out"
-              onClick={() => setZoom(zoom - 10)}
+              onClick={() => zoomAtCanvasCenter(zoom - 10)}
               type="button"
             >
               <Minus size={13} />
@@ -9895,7 +10643,7 @@ export function EditorShell() {
             <strong>{zoom} %</strong>
             <button
               aria-label="Zoom in"
-              onClick={() => setZoom(zoom + 10)}
+              onClick={() => zoomAtCanvasCenter(zoom + 10)}
               type="button"
             >
               <Plus size={13} />
@@ -9908,38 +10656,41 @@ export function EditorShell() {
         <div
           aria-label="Property sections"
           className="panel-tabs"
-          data-active-tab={activeTool === "settings" ? "scenes" : "design"}
+          data-active-tab={visiblePropertyTab}
           role="tablist"
         >
           <button aria-selected="false" disabled role="tab" type="button">
             INTERACTION
           </button>
           <button
-            aria-selected={activeTool === "settings"}
-            onClick={() => setActiveTool("settings")}
+            aria-selected={visiblePropertyTab === "scenes"}
+            onClick={() => setPropertyTab("scenes")}
             role="tab"
             type="button"
           >
             SCENES
           </button>
           <button
-            aria-selected={activeTool !== "settings"}
-            onClick={() => {
-              if (activeTool === "settings") setActiveTool("selection");
-            }}
+            aria-selected={visiblePropertyTab === "design"}
+            onClick={() => setPropertyTab("design")}
             role="tab"
             type="button"
           >
             DESIGN
           </button>
-          <button aria-selected="false" disabled role="tab" type="button">
+          <button
+            aria-selected={visiblePropertyTab === "sound"}
+            onClick={() => setPropertyTab("sound")}
+            role="tab"
+            type="button"
+          >
             SOUND
           </button>
           <button aria-selected="false" disabled role="tab" type="button">
             LOGIC
           </button>
         </div>
-        {activeTool === "settings" ? (
+        {visiblePropertyTab === "scenes" ? (
           <ScenePanel
             activePageId={activePageId}
             activePageName={activePage?.name ?? "Page"}
@@ -9948,6 +10699,8 @@ export function EditorShell() {
             onRenamePage={renamePage}
             onUpdateArtboard={updateArtboard}
           />
+        ) : visiblePropertyTab === "sound" ? (
+          <SoundPanel />
         ) : (
           <DesignPanel
             artboard={artboard}

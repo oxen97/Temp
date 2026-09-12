@@ -83,6 +83,11 @@ describe("EditorShell", () => {
 
     fireEvent.click(screen.getByRole("tab", { name: "SCENES" }));
 
+    expect(useEditorStore.getState().activeTool).toBe("selection");
+    expect(screen.getByRole("button", { name: "Selection" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
     expect(
       screen.getByRole("tabpanel", { name: "Scenes settings" }),
     ).toBeInTheDocument();
@@ -122,6 +127,50 @@ describe("EditorShell", () => {
       "aria-selected",
       "true",
     );
+  });
+
+  it("keeps the current property tab when creation tools are selected", () => {
+    render(<EditorShell />);
+
+    fireEvent.click(screen.getByRole("tab", { name: "SCENES" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Rectangle$/ }));
+    expect(
+      screen.getByRole("tabpanel", { name: "Scenes settings" }),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /^Text$/ }));
+    expect(
+      screen.getByRole("tabpanel", { name: "Scenes settings" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "SCENES" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+  });
+
+  it("renders the Figma SOUND panel without changing the other panels", () => {
+    render(<EditorShell />);
+
+    fireEvent.click(screen.getByRole("tab", { name: "SOUND" }));
+
+    expect(
+      screen.getByRole("tabpanel", { name: "Sound settings" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "SOUND" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    expect(screen.getByText("Background Music (BGM)")).toBeInTheDocument();
+    expect(screen.getByText("Interaction Sounds")).toBeInTheDocument();
+    expect(screen.getByText("00:00 / 0.0MB")).toBeInTheDocument();
+    expect(screen.getAllByText("효과음 이름.wav")).toHaveLength(2);
+    expect(screen.getByLabelText("Sound volume")).toHaveValue("100");
+    expect(screen.getByRole("button", { name: "Loop" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.getByRole("tab", { name: "DESIGN" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "SCENES" })).toBeInTheDocument();
   });
 
   it("keeps element dragging enabled while the SCENES panel is open", () => {
@@ -201,7 +250,7 @@ describe("EditorShell", () => {
       pointerId: 23,
     });
 
-    expect(useEditorStore.getState().activeTool).toBe("settings");
+    expect(useEditorStore.getState().activeTool).toBe("selection");
     expect(useEditorStore.getState().pages[0].elements[0].x).not.toBe(
       element.x,
     );
@@ -289,6 +338,108 @@ describe("EditorShell", () => {
     );
   });
 
+  it("previews image pixels together with the image frame while resizing", () => {
+    const element: CanvasElement = {
+      cornerRadius: 0,
+      fill: "#ffffff",
+      height: 80,
+      id: "raw-resize-image",
+      locked: false,
+      name: "Raw Resize Image",
+      opacity: 100,
+      rotation: 0,
+      src: "/figma/shape-picker.svg",
+      stroke: "transparent",
+      strokeStyle: "none",
+      strokeWidth: 0,
+      type: "image",
+      visible: true,
+      width: 100,
+      x: 120,
+      y: 140,
+    };
+    useEditorStore.setState({
+      pages: [{ elements: [element], id: "page-1", name: "Intro" }],
+      selectedElementIds: [element.id],
+    });
+
+    const { container } = render(<EditorShell />);
+    const canvas = screen.getByLabelText("Exhibition canvas");
+    const canvasElement = container.querySelector<HTMLElement>(
+      '[data-element-id="raw-resize-image"]',
+    )!;
+    const imageContent = canvasElement.querySelector<HTMLElement>(
+      ".image-shape-content",
+    )!;
+    const imageSource = canvasElement.querySelector<HTMLElement>(
+      ".image-shape-source",
+    )!;
+    const selectionOutline = canvasElement.querySelector<SVGSVGElement>(
+      ".selection-outline-svg",
+    )!;
+    const selectionFrame = selectionOutline.querySelector<SVGRectElement>(
+      "rect[data-selection-frame]",
+    )!;
+    const expectImageOutlineInsideFrame = () => {
+      const viewBox = selectionOutline.viewBox.baseVal;
+      const strokeWidth = Number(selectionFrame.getAttribute("stroke-width"));
+      const x = Number(selectionFrame.getAttribute("x"));
+      const y = Number(selectionFrame.getAttribute("y"));
+      const width = Number(selectionFrame.getAttribute("width"));
+      const height = Number(selectionFrame.getAttribute("height"));
+      expect(selectionOutline.dataset.selectionStrokePlacement).toBe("inside");
+      expect(x).toBeCloseTo(strokeWidth / 2, 6);
+      expect(y).toBeCloseTo(strokeWidth / 2, 6);
+      expect(x * 2 + width).toBeCloseTo(viewBox.width, 6);
+      expect(y * 2 + height).toBeCloseTo(viewBox.height, 6);
+    };
+    expectImageOutlineInsideFrame();
+    Object.assign(canvas, {
+      hasPointerCapture: () => false,
+      releasePointerCapture: () => undefined,
+      setPointerCapture: () => undefined,
+    });
+
+    fireEvent.pointerDown(screen.getByLabelText("Resize se"), {
+      clientX: 220,
+      clientY: 220,
+      pointerId: 25,
+    });
+    fireEvent(
+      canvas,
+      new PointerEvent("pointerrawupdate", {
+        bubbles: true,
+        clientX: 260,
+        clientY: 260,
+        pointerId: 25,
+      }),
+    );
+
+    expect(Number.parseFloat(canvasElement.style.width)).toBeGreaterThan(
+      element.width,
+    );
+    expect(Number.parseFloat(imageContent.style.width)).toBeGreaterThan(
+      element.width,
+    );
+    expect(Number.parseFloat(imageSource.style.width)).toBeGreaterThan(
+      element.width,
+    );
+    expectImageOutlineInsideFrame();
+    expect(useEditorStore.getState().pages[0].elements[0]).toMatchObject({
+      height: element.height,
+      width: element.width,
+    });
+
+    fireEvent.pointerUp(canvas, {
+      clientX: 260,
+      clientY: 260,
+      pointerId: 25,
+    });
+    expect(useEditorStore.getState().pages[0].elements[0].width).toBe(
+      Number.parseFloat(canvasElement.style.width),
+    );
+  });
+
   it("connects SCENES page, viewport, checkbox, and color controls to editor state", () => {
     render(<EditorShell />);
     fireEvent.click(screen.getByRole("tab", { name: "SCENES" }));
@@ -298,11 +449,26 @@ describe("EditorShell", () => {
     fireEvent.blur(pageName);
     expect(useEditorStore.getState().pages[0].name).toBe("Gallery");
 
-    fireEvent.change(screen.getByLabelText("Page Width"), {
+    const pageWidth = screen.getByLabelText("Page Width");
+    const pageHeight = screen.getByLabelText("Page Height");
+    expect(pageWidth).toHaveAttribute("min", "0");
+    expect(pageWidth).not.toHaveAttribute("max");
+    expect(pageHeight).toHaveAttribute("min", "0");
+    expect(pageHeight).not.toHaveAttribute("max");
+
+    fireEvent.change(pageWidth, {
       target: { value: "1600" },
     });
     expect(useEditorStore.getState().artboard).toMatchObject({
-      height: 900,
+      height: 679,
+      width: 1600,
+    });
+
+    fireEvent.change(pageHeight, {
+      target: { value: "5000" },
+    });
+    expect(useEditorStore.getState().artboard).toMatchObject({
+      height: 5000,
       width: 1600,
     });
 
@@ -487,7 +653,7 @@ describe("EditorShell", () => {
   it("opens the Figma shape picker and keeps the selected shape", () => {
     render(<EditorShell />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Rectangle" }));
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Rectangle" }));
     expect(screen.getByRole("toolbar", { name: "Shape picker" })).toBeVisible();
 
     fireEvent.click(screen.getByRole("button", { name: "Circle" }));
@@ -712,10 +878,10 @@ describe("EditorShell", () => {
       container.querySelectorAll(".canvas-element.is-selected"),
     ).toHaveLength(0);
     expect(screen.getByLabelText("Group selection")).toHaveStyle({
-      height: "86px",
-      left: "97px",
-      top: "97px",
-      width: "226px",
+      height: "80px",
+      left: "100px",
+      top: "100px",
+      width: "220px",
     });
 
     useEditorStore.getState().setSelectedElementIds([]);
@@ -847,6 +1013,11 @@ describe("EditorShell", () => {
         .getByRole("option", { name: "Dashed" })
         .querySelector(".design-dropdown-stroke-preview.is-dashed"),
     ).toBeInTheDocument();
+    expect(
+      screen
+        .getByRole("option", { name: "None" })
+        .querySelector(".design-dropdown-stroke-preview.is-none"),
+    ).toBeInTheDocument();
     fireEvent.click(screen.getByRole("option", { name: "Dashed" }));
     fireEvent.change(screen.getByLabelText("Stroke width"), {
       target: { value: "4" },
@@ -876,6 +1047,15 @@ describe("EditorShell", () => {
       { transform: "scale(-1, 1)" },
     );
     expect(screen.getByLabelText("Fill swatch")).toHaveValue("#0c2238");
+
+    fireEvent.click(screen.getByLabelText("Stroke style"));
+    fireEvent.click(screen.getByRole("option", { name: "None" }));
+    expect(useEditorStore.getState().pages[0].elements[0].strokeStyle).toBe(
+      "none",
+    );
+    expect(
+      document.querySelector(".canvas-element .vector-shape polygon"),
+    ).toHaveAttribute("stroke", "none");
   });
 
   it("uses Origin as the responsive anchor when the canvas ratio changes", () => {
@@ -1297,9 +1477,7 @@ describe("EditorShell", () => {
         ),
       ).toHaveAttribute("contenteditable", "true");
     });
-    expect(
-      screen.getByRole("heading", { name: /^TEXT$/ }),
-    ).toBeVisible();
+    expect(screen.getByRole("heading", { name: /^TEXT$/ })).toBeVisible();
     const activeEditor = container.querySelector<HTMLElement>(
       ".canvas-element.element-text .text-shape",
     );
@@ -1418,9 +1596,7 @@ describe("EditorShell", () => {
     const liveDraft = document.querySelector<HTMLElement>(
       ".draw-draft.draw-draft-preview",
     );
-    expect(Number.parseFloat(liveDraft?.style.width ?? "0")).toBeGreaterThan(
-      1,
-    );
+    expect(Number.parseFloat(liveDraft?.style.width ?? "0")).toBeGreaterThan(1);
     fireEvent.pointerUp(canvas, {
       clientX: 220,
       clientY: 150,
@@ -1547,6 +1723,16 @@ describe("EditorShell", () => {
         width: 80,
         x: 10,
         y: 20,
+        imageCrop: {
+          baseHeight: 100,
+          baseWidth: 120,
+          bottom: 10,
+          left: 20,
+          right: 20,
+          scaleX: 1,
+          scaleY: 1,
+          top: 10,
+        },
       },
     ];
     useEditorStore.setState({
@@ -1566,6 +1752,14 @@ describe("EditorShell", () => {
     expect(
       container.querySelector(".canvas-element svg image"),
     ).toHaveAttribute("href", imageSource);
+    expect(
+      container.querySelector(
+        '.canvas-element svg [data-pathfinder-image-viewport="true"]',
+      ),
+    ).toHaveAttribute("width", "80");
+    expect(
+      container.querySelector(".canvas-element svg image"),
+    ).toHaveAttribute("x", "-20");
     fireEvent.click(screen.getByRole("button", { name: "Undo" }));
 
     const subtract = screen.getByRole("button", {
@@ -1607,6 +1801,117 @@ describe("EditorShell", () => {
       container.querySelector(".canvas-element svg clipPath path"),
     ).toHaveAttribute("fill-rule", "evenodd");
     expect(container.querySelector(".canvas-element svg mask")).not.toBeNull();
+    expect(
+      container.querySelector(
+        '.canvas-element svg [data-pathfinder-image-viewport="true"]',
+      ),
+    ).toHaveAttribute("x", "0.2");
+    expect(
+      container.querySelector(
+        '.canvas-element svg [data-pathfinder-image-viewport="true"]',
+      ),
+    ).toHaveAttribute("width", "79.6");
+  });
+
+  it("keeps vector stroke data at its design width when the canvas is zoomed", async () => {
+    const element: CanvasElement = {
+      cornerRadius: 0,
+      fill: "#ffffff",
+      height: 80,
+      id: "zoom-stroke",
+      locked: false,
+      name: "Zoom Stroke",
+      opacity: 100,
+      rotation: 0,
+      stroke: "#000000",
+      strokeWidth: 1,
+      type: "rectangle",
+      visible: true,
+      width: 80,
+      x: 10,
+      y: 20,
+    };
+    useEditorStore.setState({
+      pages: [{ elements: [element], id: "page-1", name: "Intro" }],
+      zoom: 500,
+    });
+
+    const { container } = render(<EditorShell />);
+
+    await waitFor(() =>
+      expect(
+        container.querySelector('[data-element-id="zoom-stroke"] rect'),
+      ).toHaveAttribute("stroke-width", "1"),
+    );
+  });
+
+  it("removes both arrowheads at the shared elbow of diagonal distances", () => {
+    const subject: CanvasElement = {
+      cornerRadius: 0,
+      fill: "#ffffff",
+      height: 50,
+      id: "distance-subject",
+      locked: false,
+      name: "Distance Subject",
+      opacity: 100,
+      rotation: 0,
+      stroke: "#000000",
+      strokeWidth: 1,
+      type: "rectangle",
+      visible: true,
+      width: 50,
+      x: 20,
+      y: 200,
+    };
+    const target: CanvasElement = {
+      ...subject,
+      id: "distance-target",
+      name: "Distance Target",
+      x: 200,
+      y: 20,
+    };
+    useEditorStore.setState({
+      pages: [{ elements: [subject, target], id: "page-1", name: "Intro" }],
+      selectedElementIds: [subject.id],
+    });
+
+    const { container } = render(<EditorShell />);
+    const canvas = screen.getByLabelText("Exhibition canvas");
+    const targetNode = container.querySelector<HTMLElement>(
+      '[data-element-id="distance-target"]',
+    )!;
+    const originalElementFromPoint = document.elementFromPoint;
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: () => targetNode,
+    });
+
+    try {
+      fireEvent.keyDown(window, { key: "Alt" });
+      fireEvent.pointerMove(canvas, {
+        altKey: true,
+        clientX: 200,
+        clientY: 20,
+      });
+      const measurements = container.querySelectorAll(
+        ".distance-measurement:not(.distance-preview-slot)",
+      );
+      expect(measurements).toHaveLength(2);
+      expect(measurements[0]).toHaveClass("hide-min-arrow");
+      expect(measurements[1]).toHaveClass("hide-min-arrow");
+
+      fireEvent.blur(window);
+      expect(
+        container.querySelectorAll(
+          ".distance-measurement:not(.distance-preview-slot)",
+        ),
+      ).toHaveLength(0);
+    } finally {
+      Object.defineProperty(document, "elementFromPoint", {
+        configurable: true,
+        value: originalElementFromPoint,
+      });
+    }
   });
 
   it("moves Pathfinder artwork with a dragged anchor instead of detaching the node", () => {
@@ -2054,7 +2359,7 @@ describe("EditorShell", () => {
     expect(useEditorStore.getState().selectedElementIds).toHaveLength(2);
   });
 
-  it("keeps the rendered triangle size when Pathfinder creates its result", () => {
+  it("keeps the full triangle bounds when Pathfinder creates its result", () => {
     const triangle = (id: string): CanvasElement => ({
       cornerRadius: 0,
       fill: "#ffffff",
@@ -2082,9 +2387,9 @@ describe("EditorShell", () => {
     fireEvent.click(screen.getByRole("button", { name: "Union selection" }));
 
     const result = useEditorStore.getState().pages[0].elements[0];
-    expect(result.x).toBeCloseTo(11.2);
-    expect(result.y).toBeCloseTo(21.2);
-    expect(result.width).toBeCloseTo(117.6);
-    expect(result.height).toBeCloseTo(117.6);
+    expect(result.x).toBeCloseTo(10);
+    expect(result.y).toBeCloseTo(20);
+    expect(result.width).toBeCloseTo(120);
+    expect(result.height).toBeCloseTo(120);
   });
 });

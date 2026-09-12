@@ -27,7 +27,7 @@ export type ImageCrop = {
   top: number;
 };
 
-export type StrokeStyle = "solid" | "dashed" | "dotted";
+export type StrokeStyle = "none" | "solid" | "dashed" | "dotted";
 export type TextResizeMode = "auto-width" | "fixed";
 export type PathfinderOperation =
   | "union"
@@ -192,7 +192,7 @@ type EditorState = {
 const initialArtboard: ArtboardSettings = {
   width: 1920,
   height: 1080,
-  background: "#d9d9d9",
+  background: "#ffffff",
   cornerRadius: 10,
   pageAspectRatio: "16:9",
   pageType: "screen",
