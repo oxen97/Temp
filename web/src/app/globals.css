@@ -2082,7 +2082,7 @@ input[type="number"] {
   height: 22px;
   padding: 0 8px;
   outline: 0;
-  font-size: 8px;
+  font-size: 10px;
   font-weight: 500;
   line-height: 10px;
 }
@@ -2101,7 +2101,7 @@ input[type="number"] {
 .scene-image-title {
   color: #000000;
   font-family: Inter;
-  font-size: 10px;
+  font-size: 12px;
   font-style: normal;
   font-weight: 500;
   line-height: normal;
@@ -2127,7 +2127,7 @@ input[type="number"] {
   height: 22px;
   overflow: hidden;
   align-items: center;
-  font-size: 8px;
+  font-size: 10px;
   font-weight: 500;
   line-height: 10px;
 }
@@ -2156,13 +2156,13 @@ input[type="number"] {
   outline: 0;
   background: transparent;
   color: inherit;
-  font-size: 8px;
+  font-size: 10px;
   font-weight: 500;
 }
 
 .scene-dimension-field > small {
   padding-right: 6px;
-  font-size: 8px;
+  font-size: 10px;
   font-weight: 500;
   line-height: 10px;
   text-align: right;
@@ -2196,7 +2196,7 @@ input[type="number"] {
   appearance: none;
   background: transparent;
   color: inherit;
-  font-size: 8px;
+  font-size: 10px;
   font-weight: 500;
   line-height: 10px;
   cursor: pointer;
@@ -2204,6 +2204,11 @@ input[type="number"] {
 
 .design-dropdown.scene-dropdown {
   position: absolute;
+}
+
+.scene-properties .scene-dropdown .design-dropdown-value,
+.scene-properties .scene-dropdown .design-dropdown-menu button {
+  font-size: 10px;
 }
 
 .scene-ratio-select {
@@ -2237,7 +2242,7 @@ input[type="number"] {
   border: 1px solid var(--border);
   border-radius: 2px;
   background: transparent;
-  font-size: 8px;
+  font-size: 10px;
   font-weight: 500;
   line-height: 10px;
   cursor: pointer;
@@ -2245,7 +2250,7 @@ input[type="number"] {
 
 .scene-page-type button small {
   margin-top: 2px;
-  font-size: 8px;
+  font-size: 10px;
   font-weight: 500;
   line-height: 10px;
 }
@@ -2292,7 +2297,7 @@ input[type="number"] {
   border: 1px solid var(--border);
   border-radius: 2px;
   background: transparent;
-  font-size: 8px;
+  font-size: 10px;
   font-weight: 500;
   line-height: 10px;
   cursor: pointer;
@@ -2377,7 +2382,7 @@ input[type="number"] {
   border: 1px solid var(--border);
   border-radius: 2px;
   background: transparent;
-  font-size: 8px;
+  font-size: 10px;
   font-weight: 500;
   line-height: 10px;
   cursor: pointer;
@@ -2415,7 +2420,7 @@ input[type="number"] {
   height: 22px;
   align-items: center;
   overflow: hidden;
-  font-size: 8px;
+  font-size: 10px;
   font-weight: 500;
   line-height: 10px;
 }
@@ -2449,7 +2454,7 @@ input[type="number"] {
   outline: 0;
   background: transparent;
   color: inherit;
-  font-size: 8px;
+  font-size: 10px;
   font-weight: 500;
 }
 
@@ -2459,13 +2464,13 @@ input[type="number"] {
 
 .scene-percent-field {
   display: grid;
-  grid-template-columns: 15px 7px;
-  column-gap: 7px;
+  grid-template-columns: 20px 8px;
+  column-gap: 4px;
   width: 47px;
   height: 22px;
   align-items: center;
   justify-content: center;
-  font-size: 8px;
+  font-size: 10px;
   font-weight: 600;
   line-height: 10px;
 }
@@ -2475,7 +2480,7 @@ input[type="number"] {
 }
 
 .scene-percent-field input {
-  width: 15px;
+  width: 20px;
   min-width: 0;
   height: 20px;
   padding: 0;
@@ -2483,7 +2488,7 @@ input[type="number"] {
   outline: 0;
   background: transparent;
   color: inherit;
-  font-size: 8px;
+  font-size: 10px;
   font-weight: 600;
   text-align: center;
 }
@@ -2497,7 +2502,7 @@ input[type="number"] {
 .scene-gradient-control-row .scene-percent-field,
 .scene-solid-opacity-field .scene-percent-field input,
 .scene-gradient-control-row .scene-percent-field input {
-  font-size: 7px;
+  font-size: 10px;
 }
 
 .scene-solid-opacity-field {
@@ -2546,7 +2551,7 @@ input[type="number"] {
   width: 71px;
   height: 22px;
   align-items: center;
-  font-size: 8px;
+  font-size: 10px;
   font-weight: 500;
 }
 
@@ -2559,7 +2564,7 @@ input[type="number"] {
   outline: 0;
   background: transparent;
   color: inherit;
-  font-size: 8px;
+  font-size: 10px;
   text-align: right;
 }
 
