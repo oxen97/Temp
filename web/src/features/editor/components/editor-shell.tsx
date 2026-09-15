@@ -16,6 +16,7 @@ import {
   Music2,
   Plus,
   Redo2,
+  Search,
   Smartphone,
   Square,
   Tablet,
@@ -71,9 +72,15 @@ import {
   type PathfinderOperation,
   type PathPoint,
   type ShapeType,
+  type SoundAdvancedSettings,
+  type SoundOutputQuality,
+  type SoundMixerSettings,
+  type SoundPreloadMode,
   type VectorPath,
   defaultBackgroundMusicSettings,
   defaultInteractionSoundSettings,
+  defaultSoundAdvancedSettings,
+  defaultSoundMixerSettings,
   useEditorStore,
 } from "@/features/editor/store/editor-store";
 import { assetPath } from "@/lib/asset-path";
@@ -413,6 +420,8 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
 }
 
+const ARTBOARD_TOOLBAR_GUTTER = 25;
+
 export function calculateCanvasFitZoom(
   canvasWidth: number,
   canvasHeight: number,
@@ -428,7 +437,7 @@ export function calculateCanvasFitZoom(
     return 100;
   }
 
-  const availableWidth = Math.max(1, canvasWidth - 36);
+  const availableWidth = Math.max(1, canvasWidth - ARTBOARD_TOOLBAR_GUTTER * 2);
   const availableHeight = Math.max(1, canvasHeight - 96);
   return Number(
     clamp(
@@ -4292,10 +4301,45 @@ const backgroundMusicStartOptions = [
   { label: "Manual", value: "manual" },
 ] as const;
 
+const soundOutputQualityOptions: {
+  label: string;
+  value: SoundOutputQuality;
+}[] = [
+  { label: "High (320 kbps)", value: "high" },
+  { label: "Medium (192 kbps)", value: "medium" },
+  { label: "Low (128 kbps)", value: "low" },
+];
+
+const soundPreloadOptions: { label: string; value: SoundPreloadMode }[] = [
+  { label: "Auto", value: "auto" },
+  { label: "Preload All", value: "all" },
+  { label: "On Demand", value: "on-demand" },
+];
+
 function isBackgroundMusicStartMode(
   value: string,
 ): value is BackgroundMusicStartMode {
   return backgroundMusicStartOptions.some((option) => option.value === value);
+}
+
+function isSoundOutputQuality(value: string): value is SoundOutputQuality {
+  return soundOutputQualityOptions.some((option) => option.value === value);
+}
+
+function isSoundPreloadMode(value: string): value is SoundPreloadMode {
+  return soundPreloadOptions.some((option) => option.value === value);
+}
+
+export function soundPreloadAttribute(mode: SoundPreloadMode) {
+  if (mode === "all") return "auto" as const;
+  if (mode === "on-demand") return "none" as const;
+  return "metadata" as const;
+}
+
+export function soundOutputBitrate(quality: SoundOutputQuality) {
+  if (quality === "high") return 320;
+  if (quality === "medium") return 192;
+  return 128;
 }
 
 function formatAudioTime(seconds: number) {
@@ -4360,6 +4404,48 @@ export function calculateInteractionSoundVolume(
     );
   }
   return clamp((settings.volume / 100) * envelope, 0, 1);
+}
+
+export type InteractionSoundPlaybackCursor = {
+  lastSource: string | null;
+  sequentialIndex: number;
+};
+
+export function chooseInteractionSoundAsset(
+  settings: InteractionSoundSettings,
+  cursor: InteractionSoundPlaybackCursor,
+  random: () => number = Math.random,
+) {
+  const assets = settings.assets;
+  if (assets.length === 0) return null;
+  if (settings.soundSource === "single" || assets.length === 1) {
+    cursor.lastSource = assets[0].src;
+    return assets[0];
+  }
+
+  let index = 0;
+  if (settings.playbackMode === "sequential") {
+    index = cursor.sequentialIndex % assets.length;
+    cursor.sequentialIndex = (index + 1) % assets.length;
+  } else {
+    const normalizedRandom = clamp(random(), 0, 0.9999999999999999);
+    index = Math.floor(normalizedRandom * assets.length);
+    if (
+      settings.avoidRepeating &&
+      assets.length > 1 &&
+      assets[index].src === cursor.lastSource
+    ) {
+      const alternativeOffset =
+        1 +
+        Math.floor(
+          clamp(random(), 0, 0.9999999999999999) * (assets.length - 1),
+        );
+      index = (index + alternativeOffset) % assets.length;
+    }
+  }
+
+  cursor.lastSource = assets[index].src;
+  return assets[index];
 }
 
 function startInteractionSoundEnvelope(
@@ -4634,10 +4720,12 @@ function SoundStepperField({
 }
 
 function SoundPercentField({
+  ariaLabel = "Sound volume",
   onBegin,
   onChange,
   value,
 }: {
+  ariaLabel?: string;
   onBegin: () => void;
   onChange: (value: number) => void;
   value: number;
@@ -4645,7 +4733,7 @@ function SoundPercentField({
   return (
     <label className="sound-percent-field">
       <SoundNumberInput
-        ariaLabel="Sound volume"
+        ariaLabel={ariaLabel}
         max={100}
         min={0}
         onBegin={onBegin}
@@ -4706,6 +4794,26 @@ const interactionSoundPlaybackOptions: {
   { label: "Sequential", value: "sequential" },
 ];
 
+type AllSoundsTriggerFilter = "all" | InteractionSoundTrigger;
+type AllSoundsObjectFilter = "all" | "shape" | "image";
+
+const allSoundsTriggerFilterOptions: {
+  label: string;
+  value: AllSoundsTriggerFilter;
+}[] = [
+  { label: "All Triggers", value: "all" },
+  ...interactionSoundTriggerOptions,
+];
+
+const allSoundsObjectFilterOptions: {
+  label: string;
+  value: AllSoundsObjectFilter;
+}[] = [
+  { label: "All Objects", value: "all" },
+  { label: "Shapes", value: "shape" },
+  { label: "Images", value: "image" },
+];
+
 function normalizedInteractionSound(
   settings?: InteractionSoundSettings,
 ): InteractionSoundSettings {
@@ -4716,8 +4824,22 @@ function normalizedInteractionSound(
   };
 }
 
+function supportsInteractionSounds(element: CanvasElement) {
+  return [
+    "rectangle",
+    "circle",
+    "triangle",
+    "star",
+    "line",
+    "pen",
+    "image",
+  ].includes(element.type);
+}
+
 type InteractionSoundUploadRequest =
-  { index: number; mode: "replace" } | { mode: "append" };
+  | { index: number; mode: "replace" }
+  | { mode: "append" }
+  | { mode: "apply-common" };
 
 function InteractionSoundFileField({
   asset,
@@ -5013,10 +5135,12 @@ function InteractionSoundDetails({
 }
 
 function InteractionSoundRow({
+  canDeleteAllSounds,
   expanded,
   menuOpen,
   onChange,
   onCheckpoint,
+  onDeleteAllSounds,
   onExpandedChange,
   onMenuOpenChange,
   onPreview,
@@ -5024,10 +5148,12 @@ function InteractionSoundRow({
   playingSource,
   settings,
 }: {
+  canDeleteAllSounds: boolean;
   expanded: boolean;
   menuOpen: boolean;
   onChange: (updates: Partial<InteractionSoundSettings>) => void;
   onCheckpoint: () => void;
+  onDeleteAllSounds: () => void;
   onExpandedChange: (expanded: boolean) => void;
   onMenuOpenChange: (open: boolean) => void;
   onPreview: (asset: BackgroundMusicAsset) => void;
@@ -5088,13 +5214,14 @@ function InteractionSoundRow({
         ]
           .filter(Boolean)
           .join(" ")}
+        data-disabled={settings.enabled === false}
         role="group"
         style={expanded ? { height: `${expandedHeight}px` } : undefined}
       >
         <div className="sound-interaction-row-header">
           <span className="sound-interaction-trigger">{label}</span>
           <SoundPlayButton
-            disabled={!primaryAsset}
+            disabled={!primaryAsset || settings.enabled === false}
             isPlaying={Boolean(
               primaryAsset && playingSource === primaryAsset.src,
             )}
@@ -5104,7 +5231,9 @@ function InteractionSoundRow({
                 : `Preview ${label} sound`
             }
             onClick={() => {
-              if (primaryAsset) onPreview(primaryAsset);
+              if (primaryAsset && settings.enabled !== false) {
+                onPreview(primaryAsset);
+              }
             }}
           />
           <span
@@ -5122,7 +5251,7 @@ function InteractionSoundRow({
           <DesignRange
             ariaLabel={`${label} sound volume`}
             className="sound-mini-slider"
-            disabled={!primaryAsset}
+            disabled={!primaryAsset || settings.enabled === false}
             max={100}
             min={0}
             onBegin={onCheckpoint}
@@ -5159,7 +5288,18 @@ function InteractionSoundRow({
           onKeyDown={(event) => {
             if (event.key === "ArrowDown" || event.key === "ArrowUp") {
               event.preventDefault();
-              menuRef.current?.querySelector("button")?.focus();
+              const items = Array.from(
+                event.currentTarget.querySelectorAll<HTMLButtonElement>(
+                  "button:not(:disabled)",
+                ),
+              );
+              const currentIndex = items.indexOf(
+                document.activeElement as HTMLButtonElement,
+              );
+              const direction = event.key === "ArrowDown" ? 1 : -1;
+              const nextIndex =
+                (currentIndex + direction + items.length) % items.length;
+              items[nextIndex]?.focus();
             }
           }}
           ref={menuRef}
@@ -5175,6 +5315,18 @@ function InteractionSoundRow({
           >
             Event Settings
           </button>
+          <button
+            disabled={!canDeleteAllSounds}
+            onClick={() => {
+              if (!canDeleteAllSounds) return;
+              onMenuOpenChange(false);
+              onDeleteAllSounds();
+            }}
+            role="menuitem"
+            type="button"
+          >
+            Delete Sound
+          </button>
         </div>
       ) : null}
     </div>
@@ -5182,19 +5334,32 @@ function InteractionSoundRow({
 }
 
 function InteractionSoundsSection({
+  canDeleteAllSounds,
+  expanded,
+  mixer,
+  onAppendAssets,
+  onApplyCommonAsset,
   onChange,
   onCheckpoint,
   onCreateObjectUrl,
+  onDeleteAllSounds,
+  onExpandedChange,
   settings,
   showAdd,
 }: {
+  canDeleteAllSounds: boolean;
+  expanded: boolean;
+  mixer: SoundMixerSettings;
+  onAppendAssets: (assets: BackgroundMusicAsset[]) => void;
+  onApplyCommonAsset: (asset: BackgroundMusicAsset) => void;
   onChange: (updates: Partial<InteractionSoundSettings>) => void;
   onCheckpoint: () => void;
   onCreateObjectUrl: (file: Blob) => string;
+  onDeleteAllSounds: () => void;
+  onExpandedChange: (expanded: boolean) => void;
   settings: InteractionSoundSettings;
   showAdd: boolean;
 }) {
-  const [expanded, setExpanded] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [playingSource, setPlayingSource] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -5208,8 +5373,10 @@ function InteractionSoundsSection({
   const previewFadeCancelRef = useRef<(() => void) | null>(null);
   const previewRequestRef = useRef(0);
   const previewSettingsRef = useRef(settings);
+  const mixerRef = useRef(mixer);
   const uploadRequestRef = useRef<InteractionSoundUploadRequest | null>(null);
   previewSettingsRef.current = settings;
+  mixerRef.current = mixer;
 
   const requestUpload = (request: InteractionSoundUploadRequest) => {
     uploadRequestRef.current = request;
@@ -5282,6 +5449,9 @@ function InteractionSoundsSection({
       stopPreview(false);
       const request = ++previewRequestRef.current;
       const currentSettings = previewSettingsRef.current;
+      const mixerGain =
+        (mixerRef.current.interactionSoundVolume / 100) *
+        (mixerRef.current.masterVolume / 100);
       const active = {
         assetSrc: asset.src,
         fadeOutSeconds: currentSettings.fadeOutSeconds,
@@ -5291,7 +5461,7 @@ function InteractionSoundsSection({
       audio.src = asset.src;
       audio.loop = false;
       audio.volume = calculateInteractionSoundVolume(
-        currentSettings,
+        { ...currentSettings, volume: currentSettings.volume * mixerGain },
         0,
         0,
         Number.NaN,
@@ -5309,7 +5479,13 @@ function InteractionSoundsSection({
         setPlayingSource(asset.src);
         previewEnvelopeCancelRef.current = startInteractionSoundEnvelope(
           audio,
-          () => previewSettingsRef.current,
+          () => ({
+            ...previewSettingsRef.current,
+            volume:
+              previewSettingsRef.current.volume *
+              (mixerRef.current.interactionSoundVolume / 100) *
+              (mixerRef.current.masterVolume / 100),
+          }),
           false,
         );
       } catch {
@@ -5324,9 +5500,15 @@ function InteractionSoundsSection({
   useEffect(() => {
     const audio = previewAudioRef.current;
     if (audio && !previewActiveRef.current) {
-      audio.volume = clamp(settings.volume / 100, 0, 1);
+      audio.volume = clamp(
+        (settings.volume / 100) *
+          (mixer.interactionSoundVolume / 100) *
+          (mixer.masterVolume / 100),
+        0,
+        1,
+      );
     }
-  }, [settings.volume]);
+  }, [mixer.interactionSoundVolume, mixer.masterVolume, settings.volume]);
 
   useEffect(
     () => () => {
@@ -5373,10 +5555,17 @@ function InteractionSoundsSection({
       sizeBytes: file.size,
       src: onCreateObjectUrl(file),
     }));
-    const nextAssets = [...settings.assets];
-    if (request.mode === "append") nextAssets.push(...assets);
-    else nextAssets[request.index] = assets[0];
     onCheckpoint();
+    if (request.mode === "append") {
+      onAppendAssets(assets);
+      return;
+    }
+    if (request.mode === "apply-common") {
+      onApplyCommonAsset(assets[0]);
+      return;
+    }
+    const nextAssets = [...settings.assets];
+    nextAssets[request.index] = assets[0];
     onChange({ assets: nextAssets });
   };
 
@@ -5392,7 +5581,7 @@ function InteractionSoundsSection({
           {showAdd ? (
             <button
               className="sound-add-button"
-              onClick={() => requestUpload({ index: 0, mode: "replace" })}
+              onClick={() => requestUpload({ mode: "apply-common" })}
               type="button"
             >
               <span aria-hidden="true">+</span> Add
@@ -5410,11 +5599,17 @@ function InteractionSoundsSection({
           type="file"
         />
         <InteractionSoundRow
+          canDeleteAllSounds={canDeleteAllSounds}
           expanded={expanded}
           menuOpen={menuOpen}
           onChange={updateSettings}
           onCheckpoint={onCheckpoint}
-          onExpandedChange={setExpanded}
+          onDeleteAllSounds={() => {
+            stopPreview(false);
+            onCheckpoint();
+            onDeleteAllSounds();
+          }}
+          onExpandedChange={onExpandedChange}
           onMenuOpenChange={setMenuOpen}
           onPreview={(asset) => void togglePreview(asset)}
           onRequestUpload={requestUpload}
@@ -5433,28 +5628,972 @@ function InteractionSoundsSection({
   );
 }
 
-function SoundPanel({
-  onAttachArtwork,
+function SoundAdvancedToggle({
+  checked,
+  label,
+  onChange,
+}: {
+  checked: boolean;
+  label: string;
+  onChange: () => void;
+}) {
+  return (
+    <button
+      aria-label={label}
+      aria-pressed={checked}
+      className={checked ? "sound-toggle is-active" : "sound-toggle"}
+      onClick={onChange}
+      type="button"
+    >
+      <span />
+    </button>
+  );
+}
+
+export function SoundAdvancedSettingsSection({
+  onChange,
   onCheckpoint,
+  settings,
+}: {
+  onChange: (updates: Partial<SoundAdvancedSettings>) => void;
+  onCheckpoint: () => void;
+  settings: SoundAdvancedSettings;
+}) {
+  const update = (updates: Partial<SoundAdvancedSettings>) => {
+    onCheckpoint();
+    onChange(updates);
+  };
+
+  return (
+    <div className="sound-advanced-wrapper">
+      <div aria-hidden="true" className="sound-advanced-divider" />
+      <section
+        aria-label="Advanced Settings"
+        className="sound-advanced-section"
+      >
+        <h2>Advanced Settings</h2>
+
+        <div className="sound-advanced-row sound-advanced-quality-row">
+          <span className="sound-advanced-label">Output Quality</span>
+          <DesignDropdown
+            ariaLabel="Output quality"
+            className="sound-advanced-dropdown"
+            noScroll
+            onChange={(value) => {
+              if (isSoundOutputQuality(value)) update({ outputQuality: value });
+            }}
+            options={soundOutputQualityOptions}
+            value={settings.outputQuality}
+          />
+        </div>
+
+        <div className="sound-advanced-row sound-advanced-detail-row">
+          <span className="sound-advanced-label">Spatial Sound</span>
+          <span className="sound-advanced-description">
+            Apply positional sound based on object location.
+          </span>
+          <SoundAdvancedToggle
+            checked={settings.spatialSound}
+            label="Spatial Sound"
+            onChange={() => update({ spatialSound: !settings.spatialSound })}
+          />
+        </div>
+
+        <div className="sound-advanced-row sound-advanced-detail-row">
+          <span className="sound-advanced-label">Auto Normalize</span>
+          <span className="sound-advanced-description">
+            Automatically balance volume levels between sounds.
+          </span>
+          <SoundAdvancedToggle
+            checked={settings.autoNormalize}
+            label="Auto Normalize"
+            onChange={() => update({ autoNormalize: !settings.autoNormalize })}
+          />
+        </div>
+
+        <div className="sound-advanced-row">
+          <span className="sound-advanced-label">Preload Sounds</span>
+          <DesignDropdown
+            ariaLabel="Preload sounds"
+            className="sound-advanced-dropdown"
+            noScroll
+            onChange={(value) => {
+              if (isSoundPreloadMode(value)) update({ preloadSounds: value });
+            }}
+            options={soundPreloadOptions}
+            value={settings.preloadSounds}
+          />
+        </div>
+
+        <div className="sound-advanced-row sound-advanced-detail-row">
+          <span className="sound-advanced-label">Unload Unused Sounds</span>
+          <span className="sound-advanced-description">
+            Free up memory for better performance
+          </span>
+          <SoundAdvancedToggle
+            checked={settings.unloadUnusedSounds}
+            label="Unload Unused Sounds"
+            onChange={() =>
+              update({ unloadUnusedSounds: !settings.unloadUnusedSounds })
+            }
+          />
+        </div>
+      </section>
+    </div>
+  );
+}
+
+type AllSoundsEntry = {
+  asset: BackgroundMusicAsset;
+  assetIndex: number;
+  element: CanvasElement;
+  id: string;
+  setting: InteractionSoundSettings;
+  settingIndex: number;
+};
+
+type AllSoundsGroup = {
+  element: CanvasElement;
+  entries: AllSoundsEntry[];
+  id: string;
+};
+
+function AllSoundsPanel({
+  advancedSettings,
+  backgroundMusic,
+  elements,
+  mixer,
+  onDeleteBackgroundMusic,
+  onDeleteInteractionAsset,
+  onGoToElement,
+  onReplaceInteractionSounds,
+  onUpdateAdvanced,
+  onUpdateMixer,
+  onCheckpoint,
+}: {
+  advancedSettings: SoundAdvancedSettings;
+  backgroundMusic: BackgroundMusicSettings;
+  elements: CanvasElement[];
+  mixer: SoundMixerSettings;
+  onDeleteBackgroundMusic: () => void;
+  onDeleteInteractionAsset: (
+    elementId: string,
+    settingIndex: number,
+    assetIndex: number,
+  ) => void;
+  onGoToElement: (elementId: string) => void;
+  onReplaceInteractionSounds: (
+    elementId: string,
+    settings: InteractionSoundSettings[],
+  ) => void;
+  onUpdateAdvanced: (updates: Partial<SoundAdvancedSettings>) => void;
+  onUpdateMixer: (updates: Partial<SoundMixerSettings>) => void;
+  onCheckpoint: () => void;
+}) {
+  const [searchTerm, setSearchTerm] = useState("");
+  const [triggerFilter, setTriggerFilter] =
+    useState<AllSoundsTriggerFilter>("all");
+  const [objectFilter, setObjectFilter] =
+    useState<AllSoundsObjectFilter>("all");
+  const [selectedEntryIds, setSelectedEntryIds] = useState<string[]>([]);
+  const [backgroundMenuOpen, setBackgroundMenuOpen] = useState(false);
+  const [bulkMenuOpen, setBulkMenuOpen] = useState(false);
+  const [bulkVolumeOpen, setBulkVolumeOpen] = useState(false);
+  const [rowMenuId, setRowMenuId] = useState<string | null>(null);
+  const [playingEntryId, setPlayingEntryId] = useState<string | null>(null);
+  const bulkActionsRef = useRef<HTMLSpanElement>(null);
+  const previewAudioRef = useRef<HTMLAudioElement>(null);
+  const backgroundAsset = backgroundMusic.asset;
+
+  const allEntries = useMemo(
+    () =>
+      elements.flatMap((element) =>
+        supportsInteractionSounds(element)
+          ? (element.interactionSounds ?? []).flatMap((setting, settingIndex) =>
+              setting.assets.map((asset, assetIndex) => ({
+                asset,
+                assetIndex,
+                element,
+                id: `${element.id}:${setting.id}:${assetIndex}:${asset.src}`,
+                setting,
+                settingIndex,
+              })),
+            )
+          : [],
+      ),
+    [elements],
+  );
+  const visibleEntries = useMemo(() => {
+    const query = searchTerm.trim().toLocaleLowerCase();
+    return allEntries.filter((entry) => {
+      if (
+        query &&
+        !entry.element.name.toLocaleLowerCase().includes(query) &&
+        !entry.asset.name.toLocaleLowerCase().includes(query)
+      ) {
+        return false;
+      }
+      if (triggerFilter !== "all" && entry.setting.trigger !== triggerFilter) {
+        return false;
+      }
+      if (objectFilter === "image" && entry.element.type !== "image") {
+        return false;
+      }
+      if (objectFilter === "shape" && entry.element.type === "image") {
+        return false;
+      }
+      return true;
+    });
+  }, [allEntries, objectFilter, searchTerm, triggerFilter]);
+  const visibleEntryIds = visibleEntries.map((entry) => entry.id);
+  const visibleGroups = useMemo(
+    () =>
+      visibleEntries.reduce<AllSoundsGroup[]>((groups, entry) => {
+        const id = `${entry.element.id}:${entry.setting.id}`;
+        const current = groups.at(-1);
+        if (current?.id === id) {
+          current.entries.push(entry);
+        } else {
+          groups.push({ element: entry.element, entries: [entry], id });
+        }
+        return groups;
+      }, []),
+    [visibleEntries],
+  );
+  const allVisibleSelected =
+    visibleEntryIds.length > 0 &&
+    visibleEntryIds.every((id) => selectedEntryIds.includes(id));
+  const selectedEntryIdSet = useMemo(
+    () => new Set(selectedEntryIds),
+    [selectedEntryIds],
+  );
+  const selectedEntries = useMemo(
+    () => allEntries.filter((entry) => selectedEntryIdSet.has(entry.id)),
+    [allEntries, selectedEntryIdSet],
+  );
+  const selectedVolume = selectedEntries[0]?.setting.volume ?? 100;
+  const backgroundStartLabel =
+    backgroundMusicStartOptions.find(
+      (option) => option.value === backgroundMusic.startPlayback,
+    )?.label ?? "On Page Enter";
+
+  const stopPreview = useCallback(() => {
+    const audio = previewAudioRef.current;
+    if (audio) {
+      if (!audio.paused) audio.pause();
+      audio.currentTime = 0;
+    }
+    setPlayingEntryId(null);
+  }, []);
+
+  useEffect(() => {
+    if (!bulkMenuOpen) return;
+
+    const closeBulkMenuOnOutsidePointerDown = (event: PointerEvent) => {
+      if (!bulkActionsRef.current?.contains(event.target as Node | null)) {
+        setBulkMenuOpen(false);
+        setBulkVolumeOpen(false);
+      }
+    };
+
+    document.addEventListener("pointerdown", closeBulkMenuOnOutsidePointerDown);
+    return () => {
+      document.removeEventListener(
+        "pointerdown",
+        closeBulkMenuOnOutsidePointerDown,
+      );
+    };
+  }, [bulkMenuOpen]);
+
+  const togglePreview = useCallback(
+    async (entry: AllSoundsEntry) => {
+      const audio = previewAudioRef.current;
+      if (!audio || entry.setting.enabled === false) return;
+      if (playingEntryId === entry.id && !audio.paused) {
+        stopPreview();
+        return;
+      }
+      stopPreview();
+      audio.src = entry.asset.src;
+      audio.volume = clamp(
+        (entry.setting.volume / 100) *
+          (mixer.interactionSoundVolume / 100) *
+          (mixer.masterVolume / 100),
+        0,
+        1,
+      );
+      try {
+        const playResult = audio.play();
+        if (playResult) await playResult;
+        setPlayingEntryId(entry.id);
+      } catch {
+        setPlayingEntryId(null);
+      }
+    },
+    [
+      mixer.interactionSoundVolume,
+      mixer.masterVolume,
+      playingEntryId,
+      stopPreview,
+    ],
+  );
+
+  const updateSelectedSettings = useCallback(
+    (updates: Partial<InteractionSoundSettings>, checkpoint = true) => {
+      if (!selectedEntries.length) return;
+      if (checkpoint) onCheckpoint();
+      const selectedSettingsByElement = new Map<string, Set<number>>();
+      selectedEntries.forEach((entry) => {
+        const indices =
+          selectedSettingsByElement.get(entry.element.id) ?? new Set<number>();
+        indices.add(entry.settingIndex);
+        selectedSettingsByElement.set(entry.element.id, indices);
+      });
+      selectedSettingsByElement.forEach((settingIndices, elementId) => {
+        const element = elements.find(
+          (candidate) => candidate.id === elementId,
+        );
+        if (!element?.interactionSounds) return;
+        onReplaceInteractionSounds(
+          elementId,
+          element.interactionSounds.map((setting, settingIndex) => ({
+            ...setting,
+            ...(settingIndices.has(settingIndex) ? updates : {}),
+            assets: setting.assets.map((asset) => ({ ...asset })),
+          })),
+        );
+      });
+    },
+    [elements, onCheckpoint, onReplaceInteractionSounds, selectedEntries],
+  );
+
+  const deleteSelectedAssets = useCallback(() => {
+    if (!selectedEntries.length) return;
+    onCheckpoint();
+    if (
+      playingEntryId &&
+      selectedEntries.some((entry) => entry.id === playingEntryId)
+    ) {
+      stopPreview();
+    }
+    const selectedAssetsByElement = new Map<string, Set<string>>();
+    selectedEntries.forEach((entry) => {
+      const keys =
+        selectedAssetsByElement.get(entry.element.id) ?? new Set<string>();
+      keys.add(`${entry.settingIndex}:${entry.assetIndex}`);
+      selectedAssetsByElement.set(entry.element.id, keys);
+    });
+    selectedAssetsByElement.forEach((assetKeys, elementId) => {
+      const element = elements.find((candidate) => candidate.id === elementId);
+      if (!element?.interactionSounds) return;
+      onReplaceInteractionSounds(
+        elementId,
+        element.interactionSounds.map((setting, settingIndex) => ({
+          ...setting,
+          assets: setting.assets
+            .filter(
+              (_, assetIndex) =>
+                !assetKeys.has(`${settingIndex}:${assetIndex}`),
+            )
+            .map((asset) => ({ ...asset })),
+        })),
+      );
+    });
+    setSelectedEntryIds([]);
+    setBulkMenuOpen(false);
+    setBulkVolumeOpen(false);
+  }, [
+    elements,
+    onCheckpoint,
+    onReplaceInteractionSounds,
+    playingEntryId,
+    selectedEntries,
+    stopPreview,
+  ]);
+
+  useEffect(
+    () => () => {
+      const audio = previewAudioRef.current;
+      if (!audio) return;
+      if (!audio.paused) audio.pause();
+      audio.removeAttribute("src");
+    },
+    [],
+  );
+
+  return (
+    <div className="sound-all-panel">
+      {backgroundAsset ? (
+        <section
+          aria-label="All Sounds background music"
+          className="sound-all-bgm-section"
+        >
+          <h2>Background Music (BGM)</h2>
+          <div className="sound-all-bgm-card">
+            <span aria-hidden="true" className="sound-all-bgm-thumbnail">
+              {backgroundAsset.artworkSrc ? (
+                <Image
+                  alt=""
+                  fill
+                  sizes="33px"
+                  src={backgroundAsset.artworkSrc}
+                  unoptimized
+                />
+              ) : (
+                <Music2 size={16} strokeWidth={1.5} />
+              )}
+            </span>
+            <span className="sound-all-bgm-copy">
+              <strong title={backgroundAsset.name}>
+                {backgroundAsset.name}
+              </strong>
+              <span className="sound-all-bgm-meta-row">
+                <small>
+                  {formatAudioTime(backgroundAsset.durationSeconds)} /{" "}
+                  {formatAudioSize(backgroundAsset.sizeBytes)}
+                </small>
+                <span className="sound-all-bgm-tags">
+                  <span>{backgroundStartLabel.replace(/^On /, "")}</span>
+                  {backgroundMusic.loop ? <span>Loop</span> : null}
+                </span>
+              </span>
+            </span>
+            <span
+              className="sound-all-bgm-actions"
+              onBlur={(event) => {
+                if (
+                  !event.currentTarget.contains(
+                    event.relatedTarget as Node | null,
+                  )
+                ) {
+                  setBackgroundMenuOpen(false);
+                }
+              }}
+            >
+              <SoundMoreButton
+                controls="all-sounds-background-menu"
+                expanded={backgroundMenuOpen}
+                label="All Sounds background music options"
+                onClick={() => setBackgroundMenuOpen((open) => !open)}
+              />
+              {backgroundMenuOpen ? (
+                <span
+                  aria-label="All Sounds background music options menu"
+                  className="sound-file-menu sound-all-bgm-menu"
+                  id="all-sounds-background-menu"
+                  role="menu"
+                >
+                  <button
+                    onClick={() => {
+                      setBackgroundMenuOpen(false);
+                      onCheckpoint();
+                      onDeleteBackgroundMusic();
+                    }}
+                    role="menuitem"
+                    type="button"
+                  >
+                    Delete Sound
+                  </button>
+                </span>
+              ) : null}
+            </span>
+          </div>
+        </section>
+      ) : null}
+
+      <section
+        aria-label="All Sounds interaction sounds"
+        className="sound-all-interaction-section"
+      >
+        <h2>Interaction Sounds</h2>
+        <div className="sound-all-filters">
+          <label className="sound-all-search">
+            <Search aria-hidden="true" size={9} strokeWidth={1.4} />
+            <input
+              aria-label="Search objects or sounds"
+              onChange={(event) => setSearchTerm(event.currentTarget.value)}
+              placeholder="Search objects or sounds"
+              type="search"
+              value={searchTerm}
+            />
+          </label>
+          <DesignDropdown
+            ariaLabel="Filter sounds by trigger"
+            className="sound-all-filter-dropdown"
+            noScroll
+            onChange={(value) => {
+              if (
+                allSoundsTriggerFilterOptions.some(
+                  (option) => option.value === value,
+                )
+              ) {
+                setTriggerFilter(value as AllSoundsTriggerFilter);
+              }
+            }}
+            options={allSoundsTriggerFilterOptions}
+            value={triggerFilter}
+          />
+          <DesignDropdown
+            ariaLabel="Filter sounds by object type"
+            className="sound-all-filter-dropdown"
+            noScroll
+            onChange={(value) => {
+              if (
+                allSoundsObjectFilterOptions.some(
+                  (option) => option.value === value,
+                )
+              ) {
+                setObjectFilter(value as AllSoundsObjectFilter);
+              }
+            }}
+            options={allSoundsObjectFilterOptions}
+            value={objectFilter}
+          />
+        </div>
+
+        <div className="sound-all-table">
+          <div className="sound-all-table-header">
+            <label className="sound-all-checkbox">
+              <input
+                aria-label="Select all visible sounds"
+                checked={allVisibleSelected}
+                onChange={() =>
+                  setSelectedEntryIds((current) =>
+                    allVisibleSelected
+                      ? current.filter((id) => !visibleEntryIds.includes(id))
+                      : [...new Set([...current, ...visibleEntryIds])],
+                  )
+                }
+                type="checkbox"
+              />
+              <span aria-hidden="true">
+                <Check size={11} strokeWidth={2} />
+              </span>
+            </label>
+            <span>Object</span>
+            <span>Trigger</span>
+            <span>Sound</span>
+            <span
+              className="sound-all-header-actions"
+              onBlur={(event) => {
+                if (
+                  !event.currentTarget.contains(
+                    event.relatedTarget as Node | null,
+                  )
+                ) {
+                  setBulkMenuOpen(false);
+                  setBulkVolumeOpen(false);
+                }
+              }}
+              ref={bulkActionsRef}
+            >
+              <SoundMoreButton
+                controls="all-sounds-bulk-menu"
+                expanded={bulkMenuOpen}
+                label="Edit selected sounds"
+                onClick={() => {
+                  setBulkMenuOpen((open) => !open);
+                  setBulkVolumeOpen(false);
+                }}
+              />
+              {bulkMenuOpen && bulkVolumeOpen && selectedEntries.length ? (
+                <span
+                  aria-label="Selected sounds volume control"
+                  className="sound-file-menu sound-all-bulk-menu is-volume"
+                  id="all-sounds-bulk-menu"
+                  role="group"
+                >
+                  <span className="sound-all-bulk-volume">
+                    <DesignRange
+                      ariaLabel="Selected sounds volume"
+                      className="sound-all-bulk-slider"
+                      max={100}
+                      min={0}
+                      onBegin={onCheckpoint}
+                      onChange={(volume) =>
+                        updateSelectedSettings(
+                          { volume: Math.round(volume) },
+                          false,
+                        )
+                      }
+                      value={selectedVolume}
+                    />
+                    <SoundPercentField
+                      ariaLabel="Selected sounds volume value"
+                      onBegin={onCheckpoint}
+                      onChange={(volume) =>
+                        updateSelectedSettings({ volume }, false)
+                      }
+                      value={selectedVolume}
+                    />
+                  </span>
+                </span>
+              ) : bulkMenuOpen ? (
+                <span
+                  aria-label="Selected sounds options menu"
+                  className="sound-file-menu sound-all-bulk-menu"
+                  id="all-sounds-bulk-menu"
+                  role="menu"
+                >
+                  <button
+                    disabled={!selectedEntries.length}
+                    onClick={deleteSelectedAssets}
+                    role="menuitem"
+                    type="button"
+                  >
+                    Delete
+                  </button>
+                  <button
+                    disabled={!selectedEntries.length}
+                    onClick={() => setBulkVolumeOpen((open) => !open)}
+                    role="menuitem"
+                    type="button"
+                  >
+                    Change Volume
+                  </button>
+                  <button
+                    disabled={!selectedEntries.length}
+                    onClick={() => {
+                      updateSelectedSettings({ enabled: true });
+                      setBulkMenuOpen(false);
+                    }}
+                    role="menuitem"
+                    type="button"
+                  >
+                    Enable
+                  </button>
+                  <button
+                    disabled={!selectedEntries.length}
+                    onClick={() => {
+                      updateSelectedSettings({ enabled: false });
+                      setBulkMenuOpen(false);
+                    }}
+                    role="menuitem"
+                    type="button"
+                  >
+                    Disable
+                  </button>
+                </span>
+              ) : null}
+            </span>
+          </div>
+          <div className="sound-all-table-body">
+            {visibleGroups.length ? (
+              visibleGroups.map((group) => {
+                const groupEntryIds = group.entries.map((entry) => entry.id);
+                const groupSelected = groupEntryIds.every((id) =>
+                  selectedEntryIds.includes(id),
+                );
+                return (
+                  <div
+                    className="sound-all-table-row"
+                    data-disabled={group.entries.every(
+                      (entry) => entry.setting.enabled === false,
+                    )}
+                    key={group.id}
+                    style={{
+                      minHeight: Math.max(37, group.entries.length * 25 + 3),
+                    }}
+                  >
+                    <label className="sound-all-checkbox">
+                      <input
+                        aria-label={`Select ${group.element.name} sounds`}
+                        checked={groupSelected}
+                        onChange={() =>
+                          setSelectedEntryIds((current) =>
+                            groupSelected
+                              ? current.filter(
+                                  (id) => !groupEntryIds.includes(id),
+                                )
+                              : [...new Set([...current, ...groupEntryIds])],
+                          )
+                        }
+                        type="checkbox"
+                      />
+                      <span aria-hidden="true">
+                        <Check size={11} strokeWidth={2} />
+                      </span>
+                    </label>
+                    <span className="sound-all-object-cell">
+                      <span
+                        aria-hidden="true"
+                        className={`sound-all-object-thumbnail layer-symbol ${group.element.pathfinder ? "symbol-pathfinder" : `symbol-${group.element.type}`}`}
+                      >
+                        <LayerSymbol element={group.element} />
+                        {group.element.type === "image" && group.element.src ? (
+                          <span
+                            className="layer-image-preview"
+                            style={{
+                              backgroundImage: `url(${group.element.src})`,
+                            }}
+                          />
+                        ) : null}
+                      </span>
+                      <span title={group.element.name}>
+                        {group.element.name}
+                      </span>
+                    </span>
+                    <div className="sound-all-group-lines">
+                      {group.entries.map((entry) => {
+                        const triggerLabel =
+                          interactionSoundTriggerOptions.find(
+                            (option) => option.value === entry.setting.trigger,
+                          )?.label ?? entry.setting.trigger;
+                        const menuOpen = rowMenuId === entry.id;
+                        return (
+                          <div className="sound-all-table-line" key={entry.id}>
+                            <span className="sound-all-trigger-cell">
+                              {triggerLabel}
+                            </span>
+                            <span className="sound-all-sound-cell">
+                              <SoundPlayButton
+                                disabled={entry.setting.enabled === false}
+                                isPlaying={playingEntryId === entry.id}
+                                label={
+                                  playingEntryId === entry.id
+                                    ? `Pause ${entry.asset.name}`
+                                    : `Play ${entry.asset.name}`
+                                }
+                                onClick={() => void togglePreview(entry)}
+                              />
+                              <span title={entry.asset.name}>
+                                {entry.asset.name}
+                              </span>
+                            </span>
+                            <span
+                              className="sound-all-row-actions"
+                              onBlur={(event) => {
+                                if (
+                                  !event.currentTarget.contains(
+                                    event.relatedTarget as Node | null,
+                                  )
+                                ) {
+                                  setRowMenuId(null);
+                                }
+                              }}
+                            >
+                              <SoundMoreButton
+                                controls={`all-sound-row-menu-${entry.id}`}
+                                expanded={menuOpen}
+                                label={`More options for ${entry.asset.name}`}
+                                onClick={() =>
+                                  setRowMenuId((current) =>
+                                    current === entry.id ? null : entry.id,
+                                  )
+                                }
+                              />
+                              {menuOpen ? (
+                                <span
+                                  aria-label={`${entry.asset.name} options menu`}
+                                  className="sound-file-menu sound-all-row-menu"
+                                  id={`all-sound-row-menu-${entry.id}`}
+                                  role="menu"
+                                >
+                                  <button
+                                    onClick={() => {
+                                      setRowMenuId(null);
+                                      if (playingEntryId === entry.id)
+                                        stopPreview();
+                                      onCheckpoint();
+                                      onDeleteInteractionAsset(
+                                        entry.element.id,
+                                        entry.settingIndex,
+                                        entry.assetIndex,
+                                      );
+                                    }}
+                                    role="menuitem"
+                                    type="button"
+                                  >
+                                    Delete Sound
+                                  </button>
+                                  <button
+                                    onClick={() => {
+                                      setRowMenuId(null);
+                                      onGoToElement(entry.element.id);
+                                    }}
+                                    role="menuitem"
+                                    type="button"
+                                  >
+                                    Go to Layer
+                                  </button>
+                                </span>
+                              ) : null}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })
+            ) : (
+              <p className="sound-all-empty">No interaction sounds</p>
+            )}
+          </div>
+        </div>
+      </section>
+
+      <section aria-label="Master Volume" className="sound-all-master-section">
+        <h2>Master Volume</h2>
+        <div className="sound-all-master-row">
+          <span>Master</span>
+          <DesignRange
+            ariaLabel="Master sound volume"
+            className="sound-all-master-slider"
+            max={100}
+            min={0}
+            onBegin={onCheckpoint}
+            onChange={(masterVolume) =>
+              onUpdateMixer({
+                masterVolume: clamp(Math.round(masterVolume), 0, 100),
+              })
+            }
+            value={mixer.masterVolume}
+          />
+          <SoundPercentField
+            ariaLabel="Master sound volume value"
+            onBegin={onCheckpoint}
+            onChange={(masterVolume) => onUpdateMixer({ masterVolume })}
+            value={mixer.masterVolume}
+          />
+        </div>
+        <div className="sound-all-master-row">
+          <span>Background Music</span>
+          <DesignRange
+            ariaLabel="All Sounds background music volume"
+            className="sound-all-master-slider"
+            max={100}
+            min={0}
+            onBegin={onCheckpoint}
+            onChange={(backgroundMusicVolume) =>
+              onUpdateMixer({
+                backgroundMusicVolume: clamp(
+                  Math.round(backgroundMusicVolume),
+                  0,
+                  100,
+                ),
+              })
+            }
+            value={mixer.backgroundMusicVolume}
+          />
+          <SoundPercentField
+            ariaLabel="All Sounds background music volume value"
+            onBegin={onCheckpoint}
+            onChange={(backgroundMusicVolume) =>
+              onUpdateMixer({ backgroundMusicVolume })
+            }
+            value={mixer.backgroundMusicVolume}
+          />
+        </div>
+        <div className="sound-all-master-row">
+          <span>Interaction Sound</span>
+          <DesignRange
+            ariaLabel="All Sounds interaction sound volume"
+            className="sound-all-master-slider"
+            max={100}
+            min={0}
+            onBegin={onCheckpoint}
+            onChange={(interactionSoundVolume) =>
+              onUpdateMixer({
+                interactionSoundVolume: clamp(
+                  Math.round(interactionSoundVolume),
+                  0,
+                  100,
+                ),
+              })
+            }
+            value={mixer.interactionSoundVolume}
+          />
+          <SoundPercentField
+            ariaLabel="All Sounds interaction sound volume value"
+            onBegin={onCheckpoint}
+            onChange={(interactionSoundVolume) =>
+              onUpdateMixer({ interactionSoundVolume })
+            }
+            value={mixer.interactionSoundVolume}
+          />
+        </div>
+      </section>
+
+      <SoundAdvancedSettingsSection
+        onChange={onUpdateAdvanced}
+        onCheckpoint={onCheckpoint}
+        settings={advancedSettings}
+      />
+      <audio
+        aria-hidden="true"
+        className="sound-all-preview-audio"
+        onEnded={() => setPlayingEntryId(null)}
+        preload="metadata"
+        ref={previewAudioRef}
+      />
+    </div>
+  );
+}
+
+function SoundPanel({
+  advancedSettings,
+  elements,
+  mixer,
+  onAttachArtwork,
+  onAppendInteractionSoundAssets,
+  onApplyCommonInteractionSoundAsset,
+  onCheckpoint,
+  onClearInteractionSoundAssets,
   onCreateObjectUrl,
+  onDeleteInteractionAsset,
+  onReplaceInteractionSounds,
+  onSelectElement,
   onUpdate,
+  onUpdateAdvanced,
+  onUpdateInteractionExpanded,
   onUpdateInteractionSound,
+  onUpdateMixer,
   pageId,
   selectedElements,
   settings,
 }: {
+  advancedSettings: SoundAdvancedSettings;
+  elements: CanvasElement[];
+  mixer: SoundMixerSettings;
   onAttachArtwork: (pageId: string, assetSrc: string, artwork: Blob) => void;
+  onAppendInteractionSoundAssets: (
+    elementIds: string[],
+    assets: BackgroundMusicAsset[],
+  ) => void;
+  onApplyCommonInteractionSoundAsset: (
+    elementIds: string[],
+    asset: BackgroundMusicAsset,
+  ) => void;
   onCheckpoint: () => void;
+  onClearInteractionSoundAssets: (elementIds: string[]) => void;
   onCreateObjectUrl: (file: Blob) => string;
+  onDeleteInteractionAsset: (
+    elementId: string,
+    settingIndex: number,
+    assetIndex: number,
+  ) => void;
+  onReplaceInteractionSounds: (
+    elementId: string,
+    settings: InteractionSoundSettings[],
+  ) => void;
+  onSelectElement: (elementId: string) => void;
   onUpdate: (updates: Partial<BackgroundMusicSettings>) => void;
+  onUpdateAdvanced: (updates: Partial<SoundAdvancedSettings>) => void;
+  onUpdateInteractionExpanded: (
+    elementIds: string[],
+    expanded: boolean,
+  ) => void;
   onUpdateInteractionSound: (
     elementIds: string[],
     settings: InteractionSoundSettings,
   ) => void;
+  onUpdateMixer: (updates: Partial<SoundMixerSettings>) => void;
   pageId: string;
   selectedElements: CanvasElement[];
   settings: BackgroundMusicSettings;
 }) {
+  const [soundScope, setSoundScope] = useState<"selected" | "all">("selected");
   const [expanded, setExpanded] = useState(true);
   const [fileMenuOpen, setFileMenuOpen] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -5487,14 +6626,10 @@ function SoundPanel({
     asset?.artworkSrc && asset.artworkSrc !== failedArtworkSource
       ? asset.artworkSrc
       : null;
-  const hasShapeSelection =
+  const hasInteractionSoundSelection =
     selectedElements.length > 0 &&
-    selectedElements.every((element) =>
-      ["rectangle", "circle", "triangle", "star", "line", "pen"].includes(
-        element.type,
-      ),
-    );
-  const selectedShapeKey = selectedElements
+    selectedElements.every(supportsInteractionSounds);
+  const selectedSoundElementKey = selectedElements
     .map((element) => element.id)
     .sort()
     .join(":");
@@ -5506,6 +6641,9 @@ function SoundPanel({
     const sound = normalizedInteractionSound(element.interactionSounds?.[0]);
     return `${sound.trigger}:${sound.event}` === interactionSignature;
   });
+  const canDeleteAllSounds = selectedElements.some((element) =>
+    element.interactionSounds?.some((sound) => sound.assets.length > 0),
+  );
   const updateInteractionSound = (
     updates: Partial<InteractionSoundSettings>,
   ) => {
@@ -5557,18 +6695,21 @@ function SoundPanel({
   const applyPreviewVolume = useCallback(() => {
     const audio = audioRef.current;
     if (!audio) return;
-    const volume = effectiveBackgroundMusicVolume(
-      settings,
-      audio.currentTime,
-      audio.duration,
-    );
+    const volume =
+      effectiveBackgroundMusicVolume(
+        settings,
+        audio.currentTime,
+        audio.duration,
+      ) *
+      (mixer.backgroundMusicVolume / 100) *
+      (mixer.masterVolume / 100);
     if (gainNodeRef.current) {
       audio.volume = 1;
       gainNodeRef.current.gain.value = volume;
     } else {
       audio.volume = volume;
     }
-  }, [settings]);
+  }, [mixer.backgroundMusicVolume, mixer.masterVolume, settings]);
 
   const prepareAudioGraph = useCallback(async () => {
     const audio = audioRef.current;
@@ -5758,329 +6899,410 @@ function SoundPanel({
   return (
     <section
       aria-label="Sound settings"
-      className="sound-properties"
+      className={
+        soundScope === "all"
+          ? "sound-properties is-all-sounds"
+          : "sound-properties"
+      }
       role="tabpanel"
     >
       <div aria-label="Sound scope" className="sound-scope-tabs" role="group">
-        <button aria-pressed="true" className="is-active" type="button">
+        <button
+          aria-pressed={soundScope === "selected"}
+          className={soundScope === "selected" ? "is-active" : undefined}
+          onClick={() => setSoundScope("selected")}
+          type="button"
+        >
           Selected Object
         </button>
-        <button aria-pressed="false" type="button">
+        <button
+          aria-pressed={soundScope === "all"}
+          className={soundScope === "all" ? "is-active" : undefined}
+          onClick={() => {
+            stopPreview(true);
+            setSoundScope("all");
+          }}
+          type="button"
+        >
           All Sounds
         </button>
       </div>
 
-      <section className="sound-bgm-section">
-        <div className="sound-section-heading">
-          <h2>Background Music (BGM)</h2>
-          <button
-            aria-expanded={expanded}
-            aria-label={
-              expanded ? "Collapse background music" : "Expand background music"
-            }
-            className={
-              expanded ? "sound-bgm-collapse is-expanded" : "sound-bgm-collapse"
-            }
-            onClick={() => setExpanded((current) => !current)}
-            type="button"
-          >
-            <Image
-              alt=""
-              aria-hidden="true"
-              height={9}
-              src={assetPath("/figma/sound/Group%20263.svg")}
-              width={9}
-            />
-          </button>
-        </div>
-
-        <div className="sound-bgm-content" hidden={!expanded}>
-          <div className="sound-upload-card">
-            <div aria-hidden="true" className="sound-file-thumbnail">
-              {asset ? (
-                visibleArtworkSource ? (
-                  <Image
-                    alt=""
-                    className="sound-file-thumbnail-artwork"
-                    fill
-                    onError={() => setFailedArtworkSource(visibleArtworkSource)}
-                    sizes="33px"
-                    src={visibleArtworkSource}
-                    unoptimized
-                  />
-                ) : (
-                  <Music2
-                    aria-hidden="true"
-                    className="sound-file-thumbnail-icon"
-                    size={16}
-                    strokeWidth={1.5}
-                  />
-                )
-              ) : null}
-            </div>
-            <div className="sound-upload-copy">
-              <strong title={asset?.name}>{asset?.name ?? "No file"}</strong>
-              <span
-                aria-live="polite"
-                className={audioError ? "is-error" : undefined}
+      {soundScope === "selected" ? (
+        <>
+          <section className="sound-bgm-section">
+            <div className="sound-section-heading">
+              <h2>Background Music (BGM)</h2>
+              <button
+                aria-expanded={expanded}
+                aria-label={
+                  expanded
+                    ? "Collapse background music"
+                    : "Expand background music"
+                }
+                className={
+                  expanded
+                    ? "sound-bgm-collapse is-expanded"
+                    : "sound-bgm-collapse"
+                }
+                onClick={() => setExpanded((current) => !current)}
+                type="button"
               >
-                {audioError ?? (
-                  <>
-                    {formatAudioTime(asset?.durationSeconds ?? 0)} /{" "}
-                    {formatAudioSize(asset?.sizeBytes ?? 0)}
-                  </>
-                )}
-              </span>
-            </div>
-            <div className="sound-preview-row">
-              <SoundPlayButton
-                disabled={!asset || Boolean(audioError)}
-                isPlaying={isPlaying}
-                label={
-                  isPlaying
-                    ? "Pause background music preview"
-                    : "Play background music preview"
-                }
-                onClick={() => void togglePreview()}
-              />
-              <span aria-hidden="true" className="sound-preview-track">
-                <canvas className="sound-preview-waveform" ref={waveformRef} />
-              </span>
-            </div>
-            <span className="sound-preview-time">
-              {formatAudioTime(currentTime)} /{" "}
-              {formatAudioTime(asset?.durationSeconds ?? 0)}
-            </span>
-            <div
-              className="sound-file-actions"
-              onBlur={(event) => {
-                if (
-                  !event.currentTarget.contains(
-                    event.relatedTarget as Node | null,
-                  )
-                ) {
-                  setFileMenuOpen(false);
-                }
-              }}
-              onKeyDown={(event) => {
-                if (event.key === "Escape") setFileMenuOpen(false);
-              }}
-            >
-              <input
-                accept="audio/*,.mp3,.wav,.ogg,.m4a,.aac,.flac"
-                aria-label="Choose background music file"
-                className="sound-file-input"
-                onChange={handleFileChange}
-                ref={fileInputRef}
-                type="file"
-              />
-              {asset ? (
-                <SoundMoreButton
-                  controls="background-music-file-menu"
-                  expanded={fileMenuOpen}
-                  label="Background music file options"
-                  onClick={() => setFileMenuOpen((current) => !current)}
+                <Image
+                  alt=""
+                  aria-hidden="true"
+                  height={9}
+                  src={assetPath("/figma/sound/Group%20263.svg")}
+                  width={9}
                 />
-              ) : (
+              </button>
+            </div>
+
+            <div className="sound-bgm-content" hidden={!expanded}>
+              <div className="sound-upload-card">
+                <div aria-hidden="true" className="sound-file-thumbnail">
+                  {asset ? (
+                    visibleArtworkSource ? (
+                      <Image
+                        alt=""
+                        className="sound-file-thumbnail-artwork"
+                        fill
+                        onError={() =>
+                          setFailedArtworkSource(visibleArtworkSource)
+                        }
+                        sizes="33px"
+                        src={visibleArtworkSource}
+                        unoptimized
+                      />
+                    ) : (
+                      <Music2
+                        aria-hidden="true"
+                        className="sound-file-thumbnail-icon"
+                        size={16}
+                        strokeWidth={1.5}
+                      />
+                    )
+                  ) : null}
+                </div>
+                <div className="sound-upload-copy">
+                  <strong title={asset?.name}>
+                    {asset?.name ?? "No file"}
+                  </strong>
+                  <span
+                    aria-live="polite"
+                    className={audioError ? "is-error" : undefined}
+                  >
+                    {audioError ?? (
+                      <>
+                        {formatAudioTime(asset?.durationSeconds ?? 0)} /{" "}
+                        {formatAudioSize(asset?.sizeBytes ?? 0)}
+                      </>
+                    )}
+                  </span>
+                </div>
+                <div className="sound-preview-row">
+                  <SoundPlayButton
+                    disabled={!asset || Boolean(audioError)}
+                    isPlaying={isPlaying}
+                    label={
+                      isPlaying
+                        ? "Pause background music preview"
+                        : "Play background music preview"
+                    }
+                    onClick={() => void togglePreview()}
+                  />
+                  <span aria-hidden="true" className="sound-preview-track">
+                    <canvas
+                      className="sound-preview-waveform"
+                      ref={waveformRef}
+                    />
+                  </span>
+                </div>
+                <span className="sound-preview-time">
+                  {formatAudioTime(currentTime)} /{" "}
+                  {formatAudioTime(asset?.durationSeconds ?? 0)}
+                </span>
+                <div
+                  className="sound-file-actions"
+                  onBlur={(event) => {
+                    if (
+                      !event.currentTarget.contains(
+                        event.relatedTarget as Node | null,
+                      )
+                    ) {
+                      setFileMenuOpen(false);
+                    }
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Escape") setFileMenuOpen(false);
+                  }}
+                >
+                  <input
+                    accept="audio/*,.mp3,.wav,.ogg,.m4a,.aac,.flac"
+                    aria-label="Choose background music file"
+                    className="sound-file-input"
+                    onChange={handleFileChange}
+                    ref={fileInputRef}
+                    type="file"
+                  />
+                  {asset ? (
+                    <SoundMoreButton
+                      controls="background-music-file-menu"
+                      expanded={fileMenuOpen}
+                      label="Background music file options"
+                      onClick={() => setFileMenuOpen((current) => !current)}
+                    />
+                  ) : (
+                    <button
+                      aria-label="Upload background music"
+                      className="sound-upload-button"
+                      onClick={() => fileInputRef.current?.click()}
+                      type="button"
+                    >
+                      <Image
+                        alt=""
+                        aria-hidden="true"
+                        height={15}
+                        src={assetPath("/figma/upload.svg")}
+                        width={18}
+                      />
+                    </button>
+                  )}
+                  {asset && fileMenuOpen ? (
+                    <div
+                      aria-label="Background music file options menu"
+                      className="sound-file-menu"
+                      id="background-music-file-menu"
+                      onKeyDown={(event) => {
+                        if (
+                          event.key !== "ArrowDown" &&
+                          event.key !== "ArrowUp"
+                        ) {
+                          return;
+                        }
+                        event.preventDefault();
+                        const items = Array.from(
+                          event.currentTarget.querySelectorAll("button"),
+                        );
+                        const currentIndex = items.indexOf(
+                          document.activeElement as HTMLButtonElement,
+                        );
+                        const direction = event.key === "ArrowDown" ? 1 : -1;
+                        const nextIndex =
+                          (currentIndex + direction + items.length) %
+                          items.length;
+                        items[nextIndex]?.focus();
+                      }}
+                      ref={fileMenuRef}
+                      role="menu"
+                    >
+                      <button
+                        onClick={() => {
+                          setFileMenuOpen(false);
+                          fileInputRef.current?.click();
+                        }}
+                        role="menuitem"
+                        type="button"
+                      >
+                        Change File
+                      </button>
+                      <button
+                        onClick={() => {
+                          stopPreview(true);
+                          onCheckpoint();
+                          onUpdate({ asset: null });
+                          setFileMenuOpen(false);
+                        }}
+                        role="menuitem"
+                        type="button"
+                      >
+                        Delete File
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
+                <audio
+                  loop={settings.loop}
+                  onEnded={() => {
+                    setCurrentTime(audioRef.current?.duration ?? 0);
+                    setIsPlaying(false);
+                    suspendAudioGraph();
+                  }}
+                  onCanPlay={() => setAudioErrorState(null)}
+                  onError={() => {
+                    stopPreview(true);
+                    if (asset) {
+                      setAudioErrorState({
+                        message: "Unsupported audio",
+                        source: asset.src,
+                      });
+                    }
+                  }}
+                  onLoadedMetadata={(event) => {
+                    if (!asset) return;
+                    setAudioErrorState(null);
+                    const durationSeconds = Number.isFinite(
+                      event.currentTarget.duration,
+                    )
+                      ? event.currentTarget.duration
+                      : 0;
+                    if (
+                      Math.abs(durationSeconds - asset.durationSeconds) > 0.01
+                    ) {
+                      onUpdate({ asset: { ...asset, durationSeconds } });
+                    }
+                  }}
+                  onPause={() => setIsPlaying(false)}
+                  onTimeUpdate={(event) => {
+                    setCurrentTime(event.currentTarget.currentTime);
+                    applyPreviewVolume();
+                  }}
+                  preload="metadata"
+                  ref={audioRef}
+                  src={asset?.src}
+                />
+              </div>
+
+              <div className="sound-control-row sound-volume-row">
+                <span className="sound-control-label">Volume</span>
+                <DesignRange
+                  ariaLabel="Background music volume"
+                  className="sound-slider"
+                  max={100}
+                  min={0}
+                  onBegin={onCheckpoint}
+                  onChange={updateVolume}
+                  value={settings.volume}
+                />
+                <SoundPercentField
+                  onBegin={onCheckpoint}
+                  onChange={updateVolume}
+                  value={settings.volume}
+                />
+              </div>
+
+              <div className="sound-control-row">
+                <span className="sound-control-label">Fade In</span>
+                <SoundStepperField
+                  ariaLabel="Fade in duration"
+                  onBegin={onCheckpoint}
+                  onChange={(fadeInSeconds) => onUpdate({ fadeInSeconds })}
+                  value={settings.fadeInSeconds}
+                />
+              </div>
+
+              <div className="sound-control-row">
+                <span className="sound-control-label">Fade Out</span>
+                <SoundStepperField
+                  ariaLabel="Fade out duration"
+                  onBegin={onCheckpoint}
+                  onChange={(fadeOutSeconds) => onUpdate({ fadeOutSeconds })}
+                  value={settings.fadeOutSeconds}
+                />
+              </div>
+
+              <div className="sound-control-row">
+                <span className="sound-control-label">Loop</span>
                 <button
-                  aria-label="Upload background music"
-                  className="sound-upload-button"
-                  onClick={() => fileInputRef.current?.click()}
+                  aria-label="Loop"
+                  aria-pressed={settings.loop}
+                  className={
+                    settings.loop ? "sound-toggle is-active" : "sound-toggle"
+                  }
+                  onClick={() => {
+                    onCheckpoint();
+                    onUpdate({ loop: !settings.loop });
+                  }}
                   type="button"
                 >
-                  <Image
-                    alt=""
-                    aria-hidden="true"
-                    height={15}
-                    src={assetPath("/figma/upload.svg")}
-                    width={18}
-                  />
+                  <span />
                 </button>
-              )}
-              {asset && fileMenuOpen ? (
-                <div
-                  aria-label="Background music file options menu"
-                  className="sound-file-menu"
-                  id="background-music-file-menu"
-                  onKeyDown={(event) => {
-                    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") {
-                      return;
-                    }
-                    event.preventDefault();
-                    const items = Array.from(
-                      event.currentTarget.querySelectorAll("button"),
-                    );
-                    const currentIndex = items.indexOf(
-                      document.activeElement as HTMLButtonElement,
-                    );
-                    const direction = event.key === "ArrowDown" ? 1 : -1;
-                    const nextIndex =
-                      (currentIndex + direction + items.length) % items.length;
-                    items[nextIndex]?.focus();
+              </div>
+
+              <div className="sound-control-row">
+                <span className="sound-control-label">Start Playback</span>
+                <DesignDropdown
+                  ariaLabel="Start playback"
+                  className="sound-playback-select"
+                  noScroll
+                  onChange={(startPlayback) => {
+                    if (!isBackgroundMusicStartMode(startPlayback)) return;
+                    onCheckpoint();
+                    onUpdate({ startPlayback });
                   }}
-                  ref={fileMenuRef}
-                  role="menu"
-                >
-                  <button
-                    onClick={() => {
-                      setFileMenuOpen(false);
-                      fileInputRef.current?.click();
-                    }}
-                    role="menuitem"
-                    type="button"
-                  >
-                    Change File
-                  </button>
-                  <button
-                    onClick={() => {
-                      stopPreview(true);
-                      onCheckpoint();
-                      onUpdate({ asset: null });
-                      setFileMenuOpen(false);
-                    }}
-                    role="menuitem"
-                    type="button"
-                  >
-                    Delete File
-                  </button>
+                  options={backgroundMusicStartOptions}
+                  value={settings.startPlayback}
+                />
+              </div>
+
+              {settings.startPlayback === "after-delay" ? (
+                <div className="sound-control-row sound-delay-row">
+                  <span className="sound-control-label">Delay</span>
+                  <SoundStepperField
+                    ariaLabel="Playback delay"
+                    onBegin={onCheckpoint}
+                    onChange={(delaySeconds) => onUpdate({ delaySeconds })}
+                    value={settings.delaySeconds}
+                  />
                 </div>
               ) : null}
             </div>
-            <audio
-              loop={settings.loop}
-              onEnded={() => {
-                setCurrentTime(audioRef.current?.duration ?? 0);
-                setIsPlaying(false);
-                suspendAudioGraph();
-              }}
-              onCanPlay={() => setAudioErrorState(null)}
-              onError={() => {
-                stopPreview(true);
-                if (asset) {
-                  setAudioErrorState({
-                    message: "Unsupported audio",
-                    source: asset.src,
-                  });
-                }
-              }}
-              onLoadedMetadata={(event) => {
-                if (!asset) return;
-                setAudioErrorState(null);
-                const durationSeconds = Number.isFinite(
-                  event.currentTarget.duration,
+          </section>
+          {hasInteractionSoundSelection ? (
+            <InteractionSoundsSection
+              canDeleteAllSounds={canDeleteAllSounds}
+              expanded={selectedElements[0]?.interactionSoundExpanded ?? false}
+              key={selectedSoundElementKey}
+              mixer={mixer}
+              onAppendAssets={(assets) =>
+                onAppendInteractionSoundAssets(
+                  selectedElements.map((element) => element.id),
+                  assets,
                 )
-                  ? event.currentTarget.duration
-                  : 0;
-                if (Math.abs(durationSeconds - asset.durationSeconds) > 0.01) {
-                  onUpdate({ asset: { ...asset, durationSeconds } });
-                }
-              }}
-              onPause={() => setIsPlaying(false)}
-              onTimeUpdate={(event) => {
-                setCurrentTime(event.currentTarget.currentTime);
-                applyPreviewVolume();
-              }}
-              preload="metadata"
-              ref={audioRef}
-              src={asset?.src}
-            />
-          </div>
-
-          <div className="sound-control-row sound-volume-row">
-            <span className="sound-control-label">Volume</span>
-            <DesignRange
-              ariaLabel="Background music volume"
-              className="sound-slider"
-              max={100}
-              min={0}
-              onBegin={onCheckpoint}
-              onChange={updateVolume}
-              value={settings.volume}
-            />
-            <SoundPercentField
-              onBegin={onCheckpoint}
-              onChange={updateVolume}
-              value={settings.volume}
-            />
-          </div>
-
-          <div className="sound-control-row">
-            <span className="sound-control-label">Fade In</span>
-            <SoundStepperField
-              ariaLabel="Fade in duration"
-              onBegin={onCheckpoint}
-              onChange={(fadeInSeconds) => onUpdate({ fadeInSeconds })}
-              value={settings.fadeInSeconds}
-            />
-          </div>
-
-          <div className="sound-control-row">
-            <span className="sound-control-label">Fade Out</span>
-            <SoundStepperField
-              ariaLabel="Fade out duration"
-              onBegin={onCheckpoint}
-              onChange={(fadeOutSeconds) => onUpdate({ fadeOutSeconds })}
-              value={settings.fadeOutSeconds}
-            />
-          </div>
-
-          <div className="sound-control-row">
-            <span className="sound-control-label">Loop</span>
-            <button
-              aria-label="Loop"
-              aria-pressed={settings.loop}
-              className={
-                settings.loop ? "sound-toggle is-active" : "sound-toggle"
               }
-              onClick={() => {
-                onCheckpoint();
-                onUpdate({ loop: !settings.loop });
-              }}
-              type="button"
-            >
-              <span />
-            </button>
-          </div>
-
-          <div className="sound-control-row">
-            <span className="sound-control-label">Start Playback</span>
-            <DesignDropdown
-              ariaLabel="Start playback"
-              className="sound-playback-select"
-              noScroll
-              onChange={(startPlayback) => {
-                if (!isBackgroundMusicStartMode(startPlayback)) return;
-                onCheckpoint();
-                onUpdate({ startPlayback });
-              }}
-              options={backgroundMusicStartOptions}
-              value={settings.startPlayback}
+              onApplyCommonAsset={(asset) =>
+                onApplyCommonInteractionSoundAsset(
+                  selectedElements.map((element) => element.id),
+                  asset,
+                )
+              }
+              onChange={updateInteractionSound}
+              onCheckpoint={onCheckpoint}
+              onCreateObjectUrl={onCreateObjectUrl}
+              onDeleteAllSounds={() =>
+                onClearInteractionSoundAssets(
+                  selectedElements.map((element) => element.id),
+                )
+              }
+              onExpandedChange={(nextExpanded) =>
+                onUpdateInteractionExpanded(
+                  selectedElements.map((element) => element.id),
+                  nextExpanded,
+                )
+              }
+              settings={interactionSoundSettings}
+              showAdd={selectedElements.length > 1 && hasCommonInteraction}
             />
-          </div>
-
-          {settings.startPlayback === "after-delay" ? (
-            <div className="sound-control-row sound-delay-row">
-              <span className="sound-control-label">Delay</span>
-              <SoundStepperField
-                ariaLabel="Playback delay"
-                onBegin={onCheckpoint}
-                onChange={(delaySeconds) => onUpdate({ delaySeconds })}
-                value={settings.delaySeconds}
-              />
-            </div>
           ) : null}
-        </div>
-      </section>
-      {hasShapeSelection ? (
-        <InteractionSoundsSection
-          key={selectedShapeKey}
-          onChange={updateInteractionSound}
+        </>
+      ) : (
+        <AllSoundsPanel
+          advancedSettings={advancedSettings}
+          backgroundMusic={settings}
+          elements={elements}
+          mixer={mixer}
           onCheckpoint={onCheckpoint}
-          onCreateObjectUrl={onCreateObjectUrl}
-          settings={interactionSoundSettings}
-          showAdd={selectedElements.length > 1 && hasCommonInteraction}
+          onDeleteBackgroundMusic={() => onUpdate({ asset: null })}
+          onDeleteInteractionAsset={onDeleteInteractionAsset}
+          onGoToElement={(elementId) => {
+            onSelectElement(elementId);
+            setSoundScope("selected");
+          }}
+          onReplaceInteractionSounds={onReplaceInteractionSounds}
+          onUpdateAdvanced={onUpdateAdvanced}
+          onUpdateMixer={onUpdateMixer}
         />
-      ) : null}
+      )}
     </section>
   );
 }
@@ -7921,14 +9143,63 @@ function viewerPreviewLayout(
 }
 
 function ViewerBackgroundMusic({
+  advancedSettings,
+  ducked,
+  mixer,
   settings,
 }: {
+  advancedSettings: SoundAdvancedSettings;
+  ducked: boolean;
+  mixer: SoundMixerSettings;
   settings: BackgroundMusicSettings;
 }) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
+  const advancedSettingsRef = useRef(advancedSettings);
+  advancedSettingsRef.current = advancedSettings;
+  const mixerRef = useRef(mixer);
+  mixerRef.current = mixer;
+  const duckGainRef = useRef(ducked ? 0.25 : 1);
   const source = settings.asset?.src;
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    const startGain = duckGainRef.current;
+    const targetGain = ducked ? 0.25 : 1;
+    const duration = ducked ? 120 : 240;
+    const startedAt = performance.now();
+    let animationTimer = 0;
+
+    const renderDucking = () => {
+      const now = performance.now();
+      const progress = clamp((now - startedAt) / duration, 0, 1);
+      duckGainRef.current =
+        startGain + (targetGain - startGain) * (1 - (1 - progress) ** 3);
+      if (audio) {
+        audio.volume = clamp(
+          effectiveBackgroundMusicVolume(
+            settingsRef.current,
+            audio.currentTime,
+            audio.duration,
+          ) *
+            (mixerRef.current.backgroundMusicVolume / 100) *
+            (mixerRef.current.masterVolume / 100) *
+            duckGainRef.current,
+          0,
+          1,
+        );
+      }
+      if (progress >= 1 && animationTimer) {
+        window.clearInterval(animationTimer);
+        animationTimer = 0;
+      }
+    };
+
+    renderDucking();
+    animationTimer = window.setInterval(renderDucking, 16);
+    return () => window.clearInterval(animationTimer);
+  }, [ducked]);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -7941,14 +9212,19 @@ function ViewerBackgroundMusic({
     const interactionTarget = document.querySelector(
       ".viewer-preview-viewport",
     );
+    if (audio.getAttribute("src") !== source) audio.src = source;
 
     const updateVolume = () => {
       const currentSettings = settingsRef.current;
-      audio.volume = effectiveBackgroundMusicVolume(
-        currentSettings,
-        audio.currentTime,
-        audio.duration,
-      );
+      audio.volume =
+        effectiveBackgroundMusicVolume(
+          currentSettings,
+          audio.currentTime,
+          audio.duration,
+        ) *
+        (mixerRef.current.backgroundMusicVolume / 100) *
+        (mixerRef.current.masterVolume / 100) *
+        duckGainRef.current;
     };
 
     const render = () => {
@@ -8031,8 +9307,14 @@ function ViewerBackgroundMusic({
     <audio
       aria-hidden="true"
       className="viewer-background-music"
+      data-ducked={ducked}
       loop={settings.loop}
-      preload="auto"
+      onEnded={(event) => {
+        if (advancedSettingsRef.current.unloadUnusedSounds) {
+          event.currentTarget.removeAttribute("src");
+        }
+      }}
+      preload={soundPreloadAttribute(advancedSettings.preloadSounds)}
       ref={audioRef}
       src={source}
     />
@@ -8064,15 +9346,24 @@ type ViewerActiveInteractionSound = {
   trigger: InteractionSoundTrigger;
 };
 
+type ViewerInteractionAudioGraph = {
+  compressor: DynamicsCompressorNode;
+  panner: StereoPannerNode | null;
+};
+
 function ViewerPreview({
+  advancedSound,
   artboard,
   backgroundMusic,
   elements,
+  mixer,
   onClose,
 }: {
+  advancedSound: SoundAdvancedSettings;
   artboard: ArtboardSettings;
   backgroundMusic: BackgroundMusicSettings;
   elements: CanvasElement[];
+  mixer: SoundMixerSettings;
   onClose: () => void;
 }) {
   const [viewport, setViewport] = useState(() => ({
@@ -8080,28 +9371,110 @@ function ViewerPreview({
       typeof window === "undefined" ? artboard.height : window.innerHeight,
     width: typeof window === "undefined" ? artboard.width : window.innerWidth,
   }));
-  const interactionChannelCount = useMemo(
-    () =>
-      Math.max(
-        1,
-        ...elements.flatMap((element) =>
-          (element.interactionSounds ?? []).map((sound) =>
-            sound.soundSource === "multiple"
-              ? sound.assets.length
-              : Math.min(1, sound.assets.length),
-          ),
-        ),
-      ),
-    [elements],
-  );
+  const [backgroundMusicDucked, setBackgroundMusicDucked] = useState(false);
   const interactionAudioRefs = useRef<(HTMLAudioElement | null)[]>([]);
   const activeInteractionRef = useRef<ViewerActiveInteractionSound | null>(
     null,
   );
+  const interactionPlaybackCursorsRef = useRef(
+    new Map<string, InteractionSoundPlaybackCursor>(),
+  );
+  const interactionAudioContextRef = useRef<AudioContext | null>(null);
+  const interactionAudioGraphsRef = useRef(
+    new Map<HTMLAudioElement, ViewerInteractionAudioGraph>(),
+  );
+  const advancedSoundRef = useRef(advancedSound);
+  advancedSoundRef.current = advancedSound;
+  const mixerRef = useRef(mixer);
+  mixerRef.current = mixer;
   const pointerSessionsRef = useRef(
     new Map<number, ViewerInteractionPointerSession>(),
   );
   const scrollStopTimersRef = useRef(new Map<string, number>());
+
+  const unloadInteractionAudio = useCallback((audio: HTMLAudioElement) => {
+    if (advancedSoundRef.current.unloadUnusedSounds) {
+      audio.removeAttribute("src");
+    }
+  }, []);
+
+  const configureInteractionAudio = useCallback(
+    (audio: HTMLAudioElement, element: CanvasElement) => {
+      const currentSettings = advancedSoundRef.current;
+      if (!currentSettings.spatialSound && !currentSettings.autoNormalize) {
+        return;
+      }
+
+      const AudioContextConstructor =
+        window.AudioContext ??
+        (
+          window as typeof window & {
+            webkitAudioContext?: typeof AudioContext;
+          }
+        ).webkitAudioContext;
+      if (!AudioContextConstructor) return;
+
+      try {
+        let context = interactionAudioContextRef.current;
+        if (!context) {
+          context = new AudioContextConstructor();
+          interactionAudioContextRef.current = context;
+        }
+
+        let graph = interactionAudioGraphsRef.current.get(audio);
+        if (!graph) {
+          const sourceNode = context.createMediaElementSource(audio);
+          const compressor = context.createDynamicsCompressor();
+          const panner = context.createStereoPanner
+            ? context.createStereoPanner()
+            : null;
+          if (panner) {
+            sourceNode.connect(panner);
+            panner.connect(compressor);
+          } else {
+            sourceNode.connect(compressor);
+          }
+          compressor.connect(context.destination);
+          graph = { compressor, panner };
+          interactionAudioGraphsRef.current.set(audio, graph);
+        }
+
+        const now = context.currentTime;
+        const centerX = element.x + element.width / 2;
+        const pan = currentSettings.spatialSound
+          ? clamp((centerX / Math.max(1, artboard.width)) * 2 - 1, -1, 1)
+          : 0;
+        graph.panner?.pan.setValueAtTime(pan, now);
+
+        graph.compressor.threshold.setValueAtTime(
+          currentSettings.autoNormalize ? -24 : 0,
+          now,
+        );
+        graph.compressor.knee.setValueAtTime(
+          currentSettings.autoNormalize ? 30 : 0,
+          now,
+        );
+        graph.compressor.ratio.setValueAtTime(
+          currentSettings.autoNormalize ? 4 : 1,
+          now,
+        );
+        graph.compressor.attack.setValueAtTime(
+          currentSettings.autoNormalize ? 0.003 : 0,
+          now,
+        );
+        graph.compressor.release.setValueAtTime(
+          currentSettings.autoNormalize ? 0.25 : 0,
+          now,
+        );
+        if (context.state === "suspended") {
+          void context.resume().catch(() => undefined);
+        }
+      } catch {
+        // Keep native HTML audio playback when Web Audio is unavailable.
+      }
+    },
+    [artboard.width],
+  );
 
   const cancelInteractionAnimations = useCallback(
     (active = activeInteractionRef.current) => {
@@ -8116,19 +9489,21 @@ function ViewerPreview({
   );
 
   const stopInteractionPlaybackImmediately = useCallback(
-    (active = activeInteractionRef.current) => {
+    (active = activeInteractionRef.current, restoreBackgroundMusic = true) => {
       if (!active) return;
       cancelInteractionAnimations(active);
       active.channels.forEach(({ audio }) => {
         if (!audio.paused) audio.pause();
         audio.currentTime = 0;
         audio.loop = false;
+        unloadInteractionAudio(audio);
       });
       if (activeInteractionRef.current === active) {
         activeInteractionRef.current = null;
       }
+      if (restoreBackgroundMusic) setBackgroundMusicDucked(false);
     },
-    [cancelInteractionAnimations],
+    [cancelInteractionAnimations, unloadInteractionAudio],
   );
 
   const handleInteractionChannelEnded = useCallback(
@@ -8144,11 +9519,13 @@ function ViewerPreview({
       channel.fadeCancel = null;
       channel.ended = true;
       audio.loop = false;
+      unloadInteractionAudio(audio);
       if (active.channels.every((candidate) => candidate.ended)) {
         activeInteractionRef.current = null;
+        setBackgroundMusicDucked(false);
       }
     },
-    [],
+    [unloadInteractionAudio],
   );
 
   const markInteractionChannelFailed = useCallback(
@@ -8163,11 +9540,13 @@ function ViewerPreview({
       channel.fadeCancel = null;
       channel.ended = true;
       channel.audio.loop = false;
+      unloadInteractionAudio(channel.audio);
       if (active.channels.every((candidate) => candidate.ended)) {
         activeInteractionRef.current = null;
+        setBackgroundMusicDucked(false);
       }
     },
-    [],
+    [unloadInteractionAudio],
   );
 
   const playInteractionEvent = useCallback(
@@ -8179,11 +9558,16 @@ function ViewerPreview({
     ) => {
       const setting = element.interactionSounds?.find(
         (sound) =>
+          sound.enabled !== false &&
           sound.trigger === trigger &&
           sound.event === interactionEvent &&
           sound.assets.length > 0,
       );
       if (!setting) return false;
+
+      const mixerGain =
+        (mixerRef.current.interactionSoundVolume / 100) *
+        (mixerRef.current.masterVolume / 100);
 
       const active = activeInteractionRef.current;
       if (
@@ -8196,45 +9580,47 @@ function ViewerPreview({
           active.channels.forEach((channel) => {
             channel.fadeCancel?.();
             channel.fadeCancel = null;
-            channel.audio.volume = active.targetVolume;
+            channel.audio.volume = clamp(
+              (setting.volume / 100) * mixerGain,
+              0,
+              1,
+            );
           });
+          active.targetVolume = clamp((setting.volume / 100) * mixerGain, 0, 1);
           active.stopping = false;
         }
         return true;
       }
 
-      const assets =
-        setting.soundSource === "single"
-          ? setting.assets.slice(0, 1)
-          : setting.assets;
-      if (assets.length === 0) return false;
-
-      const audioElements = assets.map(
-        (_asset, index) => interactionAudioRefs.current[index],
-      );
-      if (audioElements.some((audio) => !audio)) return false;
+      const cursorKey = `${element.id}:${setting.id}`;
+      let cursor = interactionPlaybackCursorsRef.current.get(cursorKey);
+      if (!cursor) {
+        cursor = { lastSource: null, sequentialIndex: 0 };
+        interactionPlaybackCursorsRef.current.set(cursorKey, cursor);
+      }
+      const asset = chooseInteractionSoundAsset(setting, cursor);
+      const audio = interactionAudioRefs.current[0];
+      if (!asset || !audio) return false;
 
       stopInteractionPlaybackImmediately(active);
-      const channels: ViewerInteractionAudioChannel[] = assets.map(
-        (asset, index) => {
-          const audio = audioElements[index] as HTMLAudioElement;
-          audio.loop = continuous;
-          audio.src = asset.src;
-          audio.volume = calculateInteractionSoundVolume(
-            setting,
-            0,
-            0,
-            Number.NaN,
-            continuous,
-          );
-          return {
-            audio,
-            ended: false,
-            envelopeCancel: null,
-            fadeCancel: null,
-          };
-        },
+      audio.loop = continuous;
+      audio.src = asset.src;
+      audio.volume = calculateInteractionSoundVolume(
+        { ...setting, volume: setting.volume * mixerGain },
+        0,
+        0,
+        Number.NaN,
+        continuous,
       );
+      configureInteractionAudio(audio, element);
+      const channels: ViewerInteractionAudioChannel[] = [
+        {
+          audio,
+          ended: false,
+          envelopeCancel: null,
+          fadeCancel: null,
+        },
+      ];
       const nextActive: ViewerActiveInteractionSound = {
         channels,
         continuous,
@@ -8242,10 +9628,11 @@ function ViewerPreview({
         fadeOutSeconds: setting.fadeOutSeconds,
         settingId: setting.id,
         stopping: false,
-        targetVolume: clamp(setting.volume / 100, 0, 1),
+        targetVolume: clamp((setting.volume / 100) * mixerGain, 0, 1),
         trigger,
       };
       activeInteractionRef.current = nextActive;
+      setBackgroundMusicDucked(true);
 
       channels.forEach((channel) => {
         const beginEnvelope = () => {
@@ -8254,7 +9641,13 @@ function ViewerPreview({
           }
           channel.envelopeCancel = startInteractionSoundEnvelope(
             channel.audio,
-            () => setting,
+            () => ({
+              ...setting,
+              volume:
+                setting.volume *
+                (mixerRef.current.interactionSoundVolume / 100) *
+                (mixerRef.current.masterVolume / 100),
+            }),
             continuous,
           );
         };
@@ -8273,7 +9666,11 @@ function ViewerPreview({
       });
       return true;
     },
-    [markInteractionChannelFailed, stopInteractionPlaybackImmediately],
+    [
+      configureInteractionAudio,
+      markInteractionChannelFailed,
+      stopInteractionPlaybackImmediately,
+    ],
   );
 
   const stopContinuousInteraction = useCallback(
@@ -8302,8 +9699,10 @@ function ViewerPreview({
         channel.audio.currentTime = 0;
         channel.audio.loop = false;
         channel.ended = true;
+        unloadInteractionAudio(channel.audio);
         if (completedChannels.size === active.channels.length) {
           activeInteractionRef.current = null;
+          setBackgroundMusicDucked(false);
         }
       };
       active.channels.forEach((channel) => {
@@ -8320,7 +9719,7 @@ function ViewerPreview({
         }
       });
     },
-    [],
+    [unloadInteractionAudio],
   );
 
   const endPointerInteraction = useCallback(
@@ -8341,10 +9740,12 @@ function ViewerPreview({
   useEffect(() => {
     const timers = scrollStopTimersRef.current;
     const audioElements = [...interactionAudioRefs.current];
+    const playbackCursors = interactionPlaybackCursorsRef.current;
+    const audioGraphs = interactionAudioGraphsRef.current;
     return () => {
       timers.forEach((timer) => window.clearTimeout(timer));
       timers.clear();
-      stopInteractionPlaybackImmediately();
+      stopInteractionPlaybackImmediately(undefined, false);
       audioElements.forEach((audio) => {
         if (!audio) return;
         if (!audio.paused) audio.pause();
@@ -8352,9 +9753,16 @@ function ViewerPreview({
         audio.loop = false;
         audio.removeAttribute("src");
       });
+      playbackCursors.clear();
+      audioGraphs.clear();
+      const audioContext = interactionAudioContextRef.current;
+      interactionAudioContextRef.current = null;
+      if (audioContext && audioContext.state !== "closed") {
+        void audioContext.close().catch(() => undefined);
+      }
       activeInteractionRef.current = null;
     };
-  }, [interactionChannelCount, stopInteractionPlaybackImmediately]);
+  }, [stopInteractionPlaybackImmediately]);
 
   useLayoutEffect(() => {
     const measure = () => {
@@ -8385,24 +9793,45 @@ function ViewerPreview({
       aria-label="Viewer preview"
       aria-modal="true"
       className="viewer-preview"
+      data-output-kbps={soundOutputBitrate(advancedSound.outputQuality)}
+      data-output-quality={advancedSound.outputQuality}
       role="dialog"
     >
-      <ViewerBackgroundMusic settings={backgroundMusic} />
-      {Array.from({ length: interactionChannelCount }, (_, index) => (
-        <audio
-          aria-hidden="true"
-          className="viewer-interaction-sound"
-          data-channel-index={index}
-          key={index}
-          onEnded={(event) =>
-            handleInteractionChannelEnded(event.currentTarget)
-          }
-          preload="auto"
-          ref={(audio) => {
-            interactionAudioRefs.current[index] = audio;
-          }}
-        />
-      ))}
+      <ViewerBackgroundMusic
+        advancedSettings={advancedSound}
+        ducked={backgroundMusicDucked}
+        mixer={mixer}
+        settings={backgroundMusic}
+      />
+      <audio
+        aria-hidden="true"
+        className="viewer-interaction-sound"
+        data-channel-index={0}
+        onEnded={(event) => handleInteractionChannelEnded(event.currentTarget)}
+        preload={soundPreloadAttribute(advancedSound.preloadSounds)}
+        ref={(audio) => {
+          interactionAudioRefs.current[0] = audio;
+        }}
+      />
+      {advancedSound.preloadSounds !== "on-demand"
+        ? Array.from(
+            new Map(
+              elements.flatMap((element) =>
+                (element.interactionSounds ?? []).flatMap((setting) =>
+                  setting.assets.map((asset) => [asset.src, asset] as const),
+                ),
+              ),
+            ).values(),
+          ).map((asset) => (
+            <audio
+              aria-hidden="true"
+              className="viewer-sound-preload"
+              key={asset.src}
+              preload={soundPreloadAttribute(advancedSound.preloadSounds)}
+              src={asset.src}
+            />
+          ))
+        : null}
       <button
         aria-label="Close preview"
         className="viewer-preview-close interface-scale-surface"
@@ -8847,9 +10276,11 @@ export function EditorShell() {
     toggleElementVisible,
     undo,
     updateArtboard,
+    updateAdvancedSound,
     updateBackgroundMusic,
     updateElement,
     updateElements,
+    updateSoundMixer,
     zoom,
   } = useEditorStore();
   const activePage = pages.find((page) => page.id === activePageId) ?? pages[0];
@@ -8857,6 +10288,14 @@ export function EditorShell() {
   const backgroundMusicSettings: BackgroundMusicSettings = {
     ...defaultBackgroundMusicSettings,
     ...(activePage?.backgroundMusic ?? {}),
+  };
+  const advancedSoundSettings: SoundAdvancedSettings = {
+    ...defaultSoundAdvancedSettings,
+    ...(activePage?.advancedSound ?? {}),
+  };
+  const soundMixerSettings: SoundMixerSettings = {
+    ...defaultSoundMixerSettings,
+    ...(activePage?.soundMixer ?? {}),
   };
   const selectionToolActive =
     activeTool === "selection" || activeTool === "settings";
@@ -11644,6 +13083,144 @@ export function EditorShell() {
     [updateElement],
   );
 
+  const appendInteractionSoundAssetsForElements = useCallback(
+    (elementIds: string[], assets: BackgroundMusicAsset[]) => {
+      elementIds.forEach((elementId) => {
+        const currentElement = useEditorStore
+          .getState()
+          .pages.flatMap((page) => page.elements)
+          .find((element) => element.id === elementId);
+        const existingSettings = currentElement?.interactionSounds;
+        const primarySettings = normalizedInteractionSound(
+          existingSettings?.[0],
+        );
+        updateElement(elementId, {
+          interactionSounds: [
+            {
+              ...primarySettings,
+              soundSource: "multiple",
+              assets: [
+                ...primarySettings.assets.map((asset) => ({ ...asset })),
+                ...assets.map((asset) => ({ ...asset })),
+              ],
+            },
+            ...(existingSettings?.slice(1).map((sound) => ({
+              ...sound,
+              assets: sound.assets.map((asset) => ({ ...asset })),
+            })) ?? []),
+          ],
+        });
+      });
+    },
+    [updateElement],
+  );
+
+  const applyCommonInteractionSoundAssetForElements = useCallback(
+    (elementIds: string[], asset: BackgroundMusicAsset) => {
+      elementIds.forEach((elementId) => {
+        const currentElement = useEditorStore
+          .getState()
+          .pages.flatMap((page) => page.elements)
+          .find((element) => element.id === elementId);
+        const existingSettings = currentElement?.interactionSounds;
+        const primarySettings = normalizedInteractionSound(
+          existingSettings?.[0],
+        );
+        updateElement(elementId, {
+          interactionSounds: [
+            {
+              ...primarySettings,
+              assets:
+                primarySettings.soundSource === "multiple"
+                  ? [
+                      ...primarySettings.assets.map((existingAsset) => ({
+                        ...existingAsset,
+                      })),
+                      { ...asset },
+                    ]
+                  : [{ ...asset }],
+            },
+            ...(existingSettings?.slice(1).map((sound) => ({
+              ...sound,
+              assets: sound.assets.map((existingAsset) => ({
+                ...existingAsset,
+              })),
+            })) ?? []),
+          ],
+        });
+      });
+    },
+    [updateElement],
+  );
+
+  const clearInteractionSoundAssetsForElements = useCallback(
+    (elementIds: string[]) => {
+      elementIds.forEach((elementId) => {
+        const currentElement = useEditorStore
+          .getState()
+          .pages.flatMap((page) => page.elements)
+          .find((element) => element.id === elementId);
+        const existingSettings = currentElement?.interactionSounds;
+        updateElement(elementId, {
+          interactionSounds: (existingSettings?.length
+            ? existingSettings
+            : [defaultInteractionSoundSettings]
+          ).map((sound) => ({
+            ...sound,
+            assets: [],
+          })),
+        });
+      });
+    },
+    [updateElement],
+  );
+
+  const deleteInteractionSoundAsset = useCallback(
+    (elementId: string, settingIndex: number, assetIndex: number) => {
+      const currentElement = useEditorStore
+        .getState()
+        .pages.flatMap((page) => page.elements)
+        .find((element) => element.id === elementId);
+      if (!currentElement?.interactionSounds?.[settingIndex]) return;
+      updateElement(elementId, {
+        interactionSounds: currentElement.interactionSounds.map(
+          (sound, currentSettingIndex) => ({
+            ...sound,
+            assets: sound.assets
+              .filter(
+                (_, currentAssetIndex) =>
+                  currentSettingIndex !== settingIndex ||
+                  currentAssetIndex !== assetIndex,
+              )
+              .map((asset) => ({ ...asset })),
+          }),
+        ),
+      });
+    },
+    [updateElement],
+  );
+
+  const replaceInteractionSoundsForElement = useCallback(
+    (elementId: string, interactionSounds: InteractionSoundSettings[]) => {
+      updateElement(elementId, {
+        interactionSounds: interactionSounds.map((sound) => ({
+          ...sound,
+          assets: sound.assets.map((asset) => ({ ...asset })),
+        })),
+      });
+    },
+    [updateElement],
+  );
+
+  const updateInteractionExpandedForElements = useCallback(
+    (elementIds: string[], interactionSoundExpanded: boolean) => {
+      elementIds.forEach((elementId) =>
+        updateElement(elementId, { interactionSoundExpanded }),
+      );
+    },
+    [updateElement],
+  );
+
   const attachBackgroundMusicArtwork = useCallback(
     (pageId: string, assetSrc: string, artwork: Blob) => {
       if (!editorMountedRef.current) return;
@@ -12304,6 +13881,10 @@ export function EditorShell() {
             >
               {[...elements].reverse().map((element) => {
                 const selected = selectedElementIds.includes(element.id);
+                const hasSound =
+                  element.interactionSounds?.some(
+                    (sound) => sound.assets.length > 0,
+                  ) ?? false;
                 return (
                   <div
                     aria-selected={selected}
@@ -12398,36 +13979,48 @@ export function EditorShell() {
                         {element.name}
                       </span>
                     )}
-                    <button
-                      aria-label={`${element.locked ? "Unlock" : "Lock"} ${element.name}`}
-                      className={`layer-action ${element.locked ? "is-persistent" : ""}`}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        toggleElementLocked(element.id);
-                      }}
-                      type="button"
-                    >
-                      {element.locked ? (
-                        <Lock size={11} />
-                      ) : (
-                        <Unlock size={11} />
-                      )}
-                    </button>
-                    <button
-                      aria-label={`${element.visible ? "Hide" : "Show"} ${element.name}`}
-                      className={`layer-action ${!element.visible ? "is-persistent" : ""}`}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        toggleElementVisible(element.id);
-                      }}
-                      type="button"
-                    >
-                      {element.visible ? (
-                        <Eye size={12} />
-                      ) : (
-                        <EyeOff size={12} />
-                      )}
-                    </button>
+                    <span className="layer-controls">
+                      {hasSound ? (
+                        <Image
+                          alt=""
+                          aria-hidden="true"
+                          className="layer-sound-indicator"
+                          height={10}
+                          src={assetPath("/figma/sound/layer-sound.svg")}
+                          width={8}
+                        />
+                      ) : null}
+                      <button
+                        aria-label={`${element.locked ? "Unlock" : "Lock"} ${element.name}`}
+                        className={`layer-action ${element.locked ? "is-persistent" : ""}`}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          toggleElementLocked(element.id);
+                        }}
+                        type="button"
+                      >
+                        {element.locked ? (
+                          <Lock size={11} />
+                        ) : (
+                          <Unlock size={11} />
+                        )}
+                      </button>
+                      <button
+                        aria-label={`${element.visible ? "Hide" : "Show"} ${element.name}`}
+                        className={`layer-action ${!element.visible ? "is-persistent" : ""}`}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          toggleElementVisible(element.id);
+                        }}
+                        type="button"
+                      >
+                        {element.visible ? (
+                          <Eye size={12} />
+                        ) : (
+                          <EyeOff size={12} />
+                        )}
+                      </button>
+                    </span>
                   </div>
                 );
               })}
@@ -13288,11 +14881,34 @@ export function EditorShell() {
           />
         ) : visiblePropertyTab === "sound" ? (
           <SoundPanel
+            advancedSettings={advancedSoundSettings}
+            elements={elements}
+            mixer={soundMixerSettings}
             onAttachArtwork={attachBackgroundMusicArtwork}
+            onAppendInteractionSoundAssets={
+              appendInteractionSoundAssetsForElements
+            }
+            onApplyCommonInteractionSoundAsset={
+              applyCommonInteractionSoundAssetForElements
+            }
             onCheckpoint={checkpoint}
+            onClearInteractionSoundAssets={
+              clearInteractionSoundAssetsForElements
+            }
             onCreateObjectUrl={createBackgroundMusicObjectUrl}
+            onDeleteInteractionAsset={deleteInteractionSoundAsset}
+            onReplaceInteractionSounds={replaceInteractionSoundsForElement}
+            onSelectElement={(elementId) => {
+              setSelectedElementIds([elementId]);
+              setSelectedGuideIds([]);
+              setSelectedPenNodes([]);
+              setSelectedPenHandles([]);
+            }}
             onUpdate={updateBackgroundMusic}
+            onUpdateAdvanced={updateAdvancedSound}
+            onUpdateInteractionExpanded={updateInteractionExpandedForElements}
             onUpdateInteractionSound={updateInteractionSoundForElements}
+            onUpdateMixer={updateSoundMixer}
             pageId={activePageId}
             selectedElements={selectedElements}
             settings={backgroundMusicSettings}
@@ -13318,9 +14934,11 @@ export function EditorShell() {
       </aside>
       {previewVisible ? (
         <ViewerPreview
+          advancedSound={advancedSoundSettings}
           artboard={artboard}
           backgroundMusic={backgroundMusicSettings}
           elements={elements}
+          mixer={soundMixerSettings}
           onClose={() => setPreviewVisible(false)}
         />
       ) : null}

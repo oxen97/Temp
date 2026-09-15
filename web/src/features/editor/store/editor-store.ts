@@ -98,6 +98,7 @@ export type CanvasElement = {
   closed?: boolean;
   vectorPaths?: VectorPath[];
   interactionSounds?: InteractionSoundSettings[];
+  interactionSoundExpanded?: boolean;
 };
 
 export type InteractionSoundTrigger =
@@ -122,6 +123,7 @@ export type InteractionSoundPlaybackMode = "shuffle" | "sequential";
 export type InteractionSoundSettings = {
   assets: BackgroundMusicAsset[];
   avoidRepeating: boolean;
+  enabled: boolean;
   event: InteractionSoundEvent;
   fadeInSeconds: number;
   fadeOutSeconds: number;
@@ -154,9 +156,27 @@ export type BackgroundMusicSettings = {
   volume: number;
 };
 
+export type SoundOutputQuality = "low" | "medium" | "high";
+export type SoundPreloadMode = "auto" | "all" | "on-demand";
+
+export type SoundAdvancedSettings = {
+  autoNormalize: boolean;
+  outputQuality: SoundOutputQuality;
+  preloadSounds: SoundPreloadMode;
+  spatialSound: boolean;
+  unloadUnusedSounds: boolean;
+};
+
+export type SoundMixerSettings = {
+  backgroundMusicVolume: number;
+  interactionSoundVolume: number;
+  masterVolume: number;
+};
+
 export const defaultInteractionSoundSettings: InteractionSoundSettings = {
   assets: [],
   avoidRepeating: true,
+  enabled: true,
   event: "enter",
   fadeInSeconds: 0,
   fadeOutSeconds: 0,
@@ -177,11 +197,27 @@ export const defaultBackgroundMusicSettings: BackgroundMusicSettings = {
   volume: 100,
 };
 
+export const defaultSoundAdvancedSettings: SoundAdvancedSettings = {
+  autoNormalize: true,
+  outputQuality: "high",
+  preloadSounds: "auto",
+  spatialSound: true,
+  unloadUnusedSounds: true,
+};
+
+export const defaultSoundMixerSettings: SoundMixerSettings = {
+  backgroundMusicVolume: 100,
+  interactionSoundVolume: 100,
+  masterVolume: 100,
+};
+
 export type EditorPage = {
   id: string;
   name: string;
   elements: CanvasElement[];
   backgroundMusic?: BackgroundMusicSettings;
+  advancedSound?: SoundAdvancedSettings;
+  soundMixer?: SoundMixerSettings;
 };
 
 export type ArtboardSettings = {
@@ -244,6 +280,8 @@ type EditorState = {
   setZoom: (zoom: number) => void;
   updateArtboard: (updates: Partial<ArtboardSettings>) => void;
   updateBackgroundMusic: (updates: Partial<BackgroundMusicSettings>) => void;
+  updateAdvancedSound: (updates: Partial<SoundAdvancedSettings>) => void;
+  updateSoundMixer: (updates: Partial<SoundMixerSettings>) => void;
   setBackgroundMusicArtwork: (
     pageId: string,
     assetSrc: string,
@@ -322,6 +360,8 @@ function clonePages(pages: EditorPage[]) {
             : null,
         }
       : undefined,
+    advancedSound: page.advancedSound ? { ...page.advancedSound } : undefined,
+    soundMixer: page.soundMixer ? { ...page.soundMixer } : undefined,
     elements: page.elements.map((element) => ({
       ...element,
       points: element.points?.map((point) => ({
@@ -489,6 +529,36 @@ export const useEditorStore = create<EditorState>((set) => ({
               backgroundMusic: {
                 ...defaultBackgroundMusicSettings,
                 ...page.backgroundMusic,
+                ...updates,
+              },
+            }
+          : page,
+      ),
+    })),
+  updateAdvancedSound: (updates) =>
+    set((state) => ({
+      pages: state.pages.map((page) =>
+        page.id === state.activePageId
+          ? {
+              ...page,
+              advancedSound: {
+                ...defaultSoundAdvancedSettings,
+                ...page.advancedSound,
+                ...updates,
+              },
+            }
+          : page,
+      ),
+    })),
+  updateSoundMixer: (updates) =>
+    set((state) => ({
+      pages: state.pages.map((page) =>
+        page.id === state.activePageId
+          ? {
+              ...page,
+              soundMixer: {
+                ...defaultSoundMixerSettings,
+                ...page.soundMixer,
                 ...updates,
               },
             }

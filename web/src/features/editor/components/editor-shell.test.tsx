@@ -7,6 +7,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
+import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { INTERFACE_SCALE_STORAGE_KEY } from "../lib/interface-scale";
@@ -21,7 +22,10 @@ import type {
 import {
   calculateCanvasFitZoom,
   calculateInteractionSoundVolume,
+  chooseInteractionSoundAsset,
   EditorShell,
+  soundOutputBitrate,
+  soundPreloadAttribute,
 } from "./editor-shell";
 
 beforeEach(() => {
@@ -197,8 +201,8 @@ function createMp3WithEmbeddedPng() {
 
 describe("canvas fit zoom", () => {
   it("fits to the available canvas without using device pixel ratio", () => {
-    expect(calculateCanvasFitZoom(1200, 900, 1920, 1080)).toBe(60.62);
-    expect(calculateCanvasFitZoom(3000, 2000, 1920, 1080)).toBe(154.38);
+    expect(calculateCanvasFitZoom(1200, 900, 1920, 1080)).toBe(59.9);
+    expect(calculateCanvasFitZoom(3000, 2000, 1920, 1080)).toBe(153.65);
   });
 
   it("clamps invalid and extreme fit values", () => {
@@ -229,6 +233,62 @@ describe("interaction sound fades", () => {
     expect(calculateInteractionSoundVolume(settings, 2, 9.5, 10, true)).toBe(
       0.8,
     );
+  });
+});
+
+describe("interaction sound playback selection", () => {
+  const assets = [
+    testSoundAsset("first"),
+    testSoundAsset("second"),
+    testSoundAsset("third"),
+  ];
+
+  it("plays Multiple Sounds one at a time in sequential order", () => {
+    const settings = testInteractionSound({
+      assets,
+      playbackMode: "sequential",
+      soundSource: "multiple",
+    });
+    const cursor = { lastSource: null, sequentialIndex: 0 };
+
+    expect(chooseInteractionSoundAsset(settings, cursor)?.src).toBe(
+      "blob:first",
+    );
+    expect(chooseInteractionSoundAsset(settings, cursor)?.src).toBe(
+      "blob:second",
+    );
+    expect(chooseInteractionSoundAsset(settings, cursor)?.src).toBe(
+      "blob:third",
+    );
+    expect(chooseInteractionSoundAsset(settings, cursor)?.src).toBe(
+      "blob:first",
+    );
+  });
+
+  it("shuffles one sound while avoiding consecutive repeats when enabled", () => {
+    const settings = testInteractionSound({
+      assets,
+      avoidRepeating: true,
+      playbackMode: "shuffle",
+      soundSource: "multiple",
+    });
+    const cursor = { lastSource: null, sequentialIndex: 0 };
+
+    expect(chooseInteractionSoundAsset(settings, cursor, () => 0)?.src).toBe(
+      "blob:first",
+    );
+    expect(chooseInteractionSoundAsset(settings, cursor, () => 0)?.src).toBe(
+      "blob:second",
+    );
+  });
+
+  it("maps advanced sound output and preload settings", () => {
+    expect(soundOutputBitrate("high")).toBe(320);
+    expect(soundOutputBitrate("medium")).toBe(192);
+    expect(soundOutputBitrate("low")).toBe(128);
+    expect(soundPreloadAttribute("all")).toBe("auto");
+    expect(soundPreloadAttribute("auto")).toBe("metadata");
+    expect(soundPreloadAttribute("on-demand")).toBe("none");
   });
 });
 
@@ -308,11 +368,11 @@ describe("EditorShell", () => {
     fireEvent.click(screen.getByRole("button", { name: "100 %" }));
     fireEvent.click(screen.getByRole("menuitem", { name: /Zoom to Fit/ }));
 
-    await waitFor(() => expect(useEditorStore.getState().zoom).toBe(96.36));
+    await waitFor(() => expect(useEditorStore.getState().zoom).toBe(95.2));
 
     act(() => useEditorStore.getState().setZoom(200));
     fireEvent.keyDown(window, { code: "Digit1", key: "!", shiftKey: true });
-    expect(useEditorStore.getState().zoom).toBe(96.36);
+    expect(useEditorStore.getState().zoom).toBe(95.2);
   });
 
   it("renders gradient and image backgrounds in the SCENES thumbnail", () => {
@@ -454,11 +514,15 @@ describe("EditorShell", () => {
     expect(
       screen.getByRole("button", { name: "Start playback" }),
     ).toHaveTextContent("On Page Enter");
+    expect(
+      screen.queryByRole("region", { name: "Advanced Settings" }),
+    ).not.toBeInTheDocument();
+    expect(document.querySelector(".sound-advanced-divider")).toBeNull();
     expect(screen.getByRole("tab", { name: "DESIGN" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "SCENES" })).toBeInTheDocument();
   });
 
-  it("only shows Interaction Sounds for selected shapes", () => {
+  it("shows Interaction Sounds for shapes and uploaded images", () => {
     const rectangle: CanvasElement = {
       cornerRadius: 0,
       fill: "#ffffff",
@@ -494,10 +558,19 @@ describe("EditorShell", () => {
       type: "text",
       x: 380,
     };
+    const image: CanvasElement = {
+      ...rectangle,
+      id: "sound-image",
+      name: "Sound Image",
+      src: "/figma/shape-picker.svg",
+      stroke: "transparent",
+      type: "image",
+      x: 520,
+    };
     useEditorStore.setState({
       pages: [
         {
-          elements: [rectangle, circle, text],
+          elements: [rectangle, circle, text, image],
           id: "page-1",
           name: "Intro",
         },
@@ -527,6 +600,19 @@ describe("EditorShell", () => {
       screen.queryByRole("region", { name: "Interaction Sounds" }),
     ).not.toBeInTheDocument();
 
+    act(() => useEditorStore.setState({ selectedElementIds: [image.id] }));
+    expect(
+      screen.getByRole("region", { name: "Interaction Sounds" }),
+    ).toBeInTheDocument();
+
+    act(() =>
+      useEditorStore.setState({ selectedElementIds: [rectangle.id, image.id] }),
+    );
+    expect(
+      screen.getByRole("region", { name: "Interaction Sounds" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Add$/ })).toBeInTheDocument();
+
     act(() =>
       useEditorStore.setState({
         selectedElementIds: [rectangle.id, text.id],
@@ -535,6 +621,313 @@ describe("EditorShell", () => {
     expect(
       screen.queryByRole("region", { name: "Interaction Sounds" }),
     ).not.toBeInTheDocument();
+  });
+
+  it("keeps global Advanced Settings ready without showing them for Selected Object", () => {
+    render(<EditorShell />);
+    fireEvent.click(screen.getByRole("tab", { name: "SOUND" }));
+
+    expect(
+      screen.queryByRole("region", { name: "Advanced Settings" }),
+    ).not.toBeInTheDocument();
+
+    act(() =>
+      useEditorStore.getState().updateAdvancedSound({
+        autoNormalize: false,
+        outputQuality: "medium",
+        preloadSounds: "on-demand",
+        spatialSound: false,
+        unloadUnusedSounds: false,
+      }),
+    );
+
+    expect(useEditorStore.getState().pages[0].advancedSound).toEqual({
+      autoNormalize: false,
+      outputQuality: "medium",
+      preloadSounds: "on-demand",
+      spatialSound: false,
+      unloadUnusedSounds: false,
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Preview" }));
+    const preview = screen.getByRole("dialog", { name: "Viewer preview" });
+    expect(preview).toHaveAttribute("data-output-quality", "medium");
+    expect(preview).toHaveAttribute("data-output-kbps", "192");
+    expect(
+      preview.querySelector<HTMLAudioElement>(".viewer-interaction-sound"),
+    ).toHaveAttribute("preload", "none");
+  });
+
+  it("lists, searches, filters, and navigates All Sounds without showing an empty BGM section", () => {
+    const shape = testSoundShape("sound-shape-layer", 100, [
+      testInteractionSound({
+        assets: [testSoundAsset("soft-chime")],
+        id: "shape-hover-sound",
+      }),
+    ]);
+    shape.name = "Hero Rectangle";
+    const image: CanvasElement = {
+      ...testSoundShape("sound-image-layer", 260, [
+        testInteractionSound({
+          assets: [testSoundAsset("poster-click")],
+          event: "click",
+          id: "image-click-sound",
+          trigger: "click",
+        }),
+      ]),
+      name: "Poster Image",
+      src: "/figma/shape-picker.svg",
+      type: "image",
+    };
+    useEditorStore.setState({
+      pages: [{ elements: [shape, image], id: "page-1", name: "Intro" }],
+    });
+
+    render(<EditorShell />);
+    fireEvent.click(screen.getByRole("tab", { name: "SOUND" }));
+    fireEvent.click(screen.getByRole("button", { name: "All Sounds" }));
+
+    expect(
+      screen.queryByRole("region", { name: "All Sounds background music" }),
+    ).not.toBeInTheDocument();
+    const interactionSounds = screen.getByRole("region", {
+      name: "All Sounds interaction sounds",
+    });
+    expect(within(interactionSounds).getByText("Hero Rectangle")).toBeVisible();
+    expect(within(interactionSounds).getByText("Poster Image")).toBeVisible();
+
+    fireEvent.change(screen.getByLabelText("Search objects or sounds"), {
+      target: { value: "poster-click" },
+    });
+    expect(
+      within(interactionSounds).queryByText("Hero Rectangle"),
+    ).not.toBeInTheDocument();
+    expect(within(interactionSounds).getByText("Poster Image")).toBeVisible();
+
+    fireEvent.change(screen.getByLabelText("Search objects or sounds"), {
+      target: { value: "" },
+    });
+    fireEvent.click(screen.getByLabelText("Filter sounds by trigger"));
+    fireEvent.click(screen.getByRole("option", { name: "Hover" }));
+    expect(within(interactionSounds).getByText("Hero Rectangle")).toBeVisible();
+    expect(
+      within(interactionSounds).queryByText("Poster Image"),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByLabelText("Filter sounds by trigger"));
+    fireEvent.click(screen.getByRole("option", { name: "All Triggers" }));
+    fireEvent.click(screen.getByLabelText("Filter sounds by object type"));
+    fireEvent.click(screen.getByRole("option", { name: "Images" }));
+    expect(within(interactionSounds).getByText("Poster Image")).toBeVisible();
+    expect(
+      within(interactionSounds).queryByText("Hero Rectangle"),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "More options for poster-click.wav",
+      }),
+    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Go to Layer" }));
+    expect(useEditorStore.getState().selectedElementIds).toEqual([image.id]);
+    expect(
+      screen.getByRole("button", { name: "Selected Object" }),
+    ).toHaveAttribute("aria-pressed", "true");
+    expect(
+      screen.getByRole("region", { name: "Interaction Sounds" }),
+    ).toBeInTheDocument();
+  });
+
+  it("deletes BGM and an individual interaction asset from All Sounds", () => {
+    const shape = testSoundShape("delete-sound-layer", 100, [
+      testInteractionSound({
+        assets: [testSoundAsset("keep-me"), testSoundAsset("delete-me")],
+        id: "delete-sound-setting",
+        soundSource: "multiple",
+      }),
+    ]);
+    useEditorStore.setState({
+      pages: [
+        {
+          backgroundMusic: {
+            asset: testSoundAsset("all-sounds-bgm"),
+            delaySeconds: 0,
+            fadeInSeconds: 0,
+            fadeOutSeconds: 0,
+            loop: true,
+            startPlayback: "on-page-enter",
+            volume: 100,
+          },
+          elements: [shape],
+          id: "page-1",
+          name: "Intro",
+        },
+      ],
+    });
+
+    render(<EditorShell />);
+    fireEvent.click(screen.getByRole("tab", { name: "SOUND" }));
+    fireEvent.click(screen.getByRole("button", { name: "All Sounds" }));
+
+    const backgroundSection = screen.getByRole("region", {
+      name: "All Sounds background music",
+    });
+    fireEvent.click(
+      within(backgroundSection).getByRole("button", {
+        name: "All Sounds background music options",
+      }),
+    );
+    const backgroundMenu = within(backgroundSection).getByRole("menu", {
+      name: "All Sounds background music options menu",
+    });
+    expect(within(backgroundMenu).getAllByRole("menuitem")).toHaveLength(1);
+    fireEvent.click(
+      within(backgroundMenu).getByRole("menuitem", {
+        name: "Delete Sound",
+      }),
+    );
+    expect(
+      useEditorStore.getState().pages[0].backgroundMusic?.asset,
+    ).toBeNull();
+    expect(
+      screen.queryByRole("region", { name: "All Sounds background music" }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "More options for delete-me.wav" }),
+    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Delete Sound" }));
+    expect(
+      useEditorStore.getState().pages[0].elements[0].interactionSounds?.[0]
+        .assets,
+    ).toEqual([testSoundAsset("keep-me")]);
+  });
+
+  it("applies All Sounds bulk actions only to checked sound rows", () => {
+    const first = testSoundShape("bulk-first", 100, [
+      testInteractionSound({
+        assets: [testSoundAsset("bulk-first")],
+        id: "bulk-first-setting",
+        volume: 90,
+      }),
+    ]);
+    const second = testSoundShape("bulk-second", 260, [
+      testInteractionSound({
+        assets: [testSoundAsset("bulk-second")],
+        id: "bulk-second-setting",
+        volume: 70,
+      }),
+    ]);
+    useEditorStore.setState({
+      pages: [{ elements: [first, second], id: "page-1", name: "Intro" }],
+    });
+
+    render(<EditorShell />);
+    fireEvent.click(screen.getByRole("tab", { name: "SOUND" }));
+    fireEvent.click(screen.getByRole("button", { name: "All Sounds" }));
+
+    expect(document.querySelectorAll(".layer-sound-indicator")).toHaveLength(2);
+    fireEvent.click(screen.getByLabelText("Select bulk-first sounds"));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Edit selected sounds" }),
+    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Change Volume" }));
+    expect(
+      screen.getByRole("group", { name: "Selected sounds volume control" }),
+    ).toBeVisible();
+    fireEvent.pointerDown(document.body);
+    expect(
+      screen.queryByRole("group", { name: "Selected sounds volume control" }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Edit selected sounds" }),
+    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Change Volume" }));
+    expect(screen.getByLabelText("Selected sounds volume")).toBeVisible();
+    fireEvent.change(screen.getByLabelText("Selected sounds volume value"), {
+      target: { value: "42" },
+    });
+    expect(
+      useEditorStore.getState().pages[0].elements[0].interactionSounds?.[0]
+        .volume,
+    ).toBe(42);
+    expect(
+      useEditorStore.getState().pages[0].elements[1].interactionSounds?.[0]
+        .volume,
+    ).toBe(70);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Edit selected sounds" }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Edit selected sounds" }),
+    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Disable" }));
+    expect(
+      useEditorStore.getState().pages[0].elements[0].interactionSounds?.[0]
+        .enabled,
+    ).toBe(false);
+    expect(
+      screen.getByRole("button", { name: "Play bulk-first.wav" }),
+    ).toBeDisabled();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Edit selected sounds" }),
+    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Delete" }));
+    expect(
+      useEditorStore.getState().pages[0].elements[0].interactionSounds?.[0]
+        .assets,
+    ).toEqual([]);
+    expect(
+      useEditorStore.getState().pages[0].elements[1].interactionSounds?.[0]
+        .assets,
+    ).toEqual([testSoundAsset("bulk-second")]);
+  });
+
+  it("stores All Sounds mixer and Advanced Settings as page-wide sound controls", () => {
+    render(<EditorShell />);
+    fireEvent.click(screen.getByRole("tab", { name: "SOUND" }));
+    fireEvent.click(screen.getByRole("button", { name: "All Sounds" }));
+
+    expect(screen.getByRole("region", { name: "Master Volume" })).toBeVisible();
+    expect(
+      screen.getByRole("region", { name: "Advanced Settings" }),
+    ).toBeVisible();
+
+    fireEvent.change(screen.getByLabelText("Master sound volume"), {
+      target: { value: "70" },
+    });
+    fireEvent.change(
+      screen.getByLabelText("All Sounds background music volume value"),
+      { target: { value: "55" } },
+    );
+    fireEvent.change(
+      screen.getByLabelText("All Sounds interaction sound volume value"),
+      { target: { value: "35" } },
+    );
+    expect(useEditorStore.getState().pages[0].soundMixer).toEqual({
+      backgroundMusicVolume: 55,
+      interactionSoundVolume: 35,
+      masterVolume: 70,
+    });
+
+    fireEvent.click(screen.getByLabelText("Output quality"));
+    fireEvent.click(screen.getByRole("option", { name: "Medium (192 kbps)" }));
+    fireEvent.click(screen.getByRole("button", { name: "Spatial Sound" }));
+    fireEvent.click(screen.getByRole("button", { name: "Auto Normalize" }));
+    fireEvent.click(screen.getByLabelText("Preload sounds"));
+    fireEvent.click(screen.getByRole("option", { name: "On Demand" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Unload Unused Sounds" }),
+    );
+    expect(useEditorStore.getState().pages[0].advancedSound).toEqual({
+      autoNormalize: false,
+      outputQuality: "medium",
+      preloadSounds: "on-demand",
+      spatialSound: false,
+      unloadUnusedSounds: false,
+    });
   });
 
   it("disables empty interaction audio and opens its Event Settings", () => {
@@ -587,6 +980,9 @@ describe("EditorShell", () => {
     expect(
       screen.getByRole("menu", { name: "Hover sound options menu" }),
     ).toBeInTheDocument();
+    expect(
+      screen.getByRole("menuitem", { name: "Delete Sound" }),
+    ).toBeDisabled();
     fireEvent.click(screen.getByRole("menuitem", { name: "Event Settings" }));
 
     expect(hoverRow).toHaveClass("is-expanded");
@@ -643,6 +1039,229 @@ describe("EditorShell", () => {
         .map((option) => option.textContent),
     ).toEqual(["Shuffle", "Sequential"]);
     expect(within(playbackMenu).queryByText("Random")).not.toBeInTheDocument();
+  });
+
+  it("dims and disables a collapsed selected-object sound marked disabled", () => {
+    const rectangle = testSoundShape("disabled-selected-sound", 100, [
+      testInteractionSound({
+        assets: [testSoundAsset("disabled-selected-sound")],
+        enabled: false,
+      }),
+    ]);
+    useEditorStore.setState({
+      pages: [{ elements: [rectangle], id: "page-1", name: "Intro" }],
+      selectedElementIds: [rectangle.id],
+    });
+
+    render(<EditorShell />);
+    fireEvent.click(screen.getByRole("tab", { name: "SOUND" }));
+
+    const hoverRow = screen.getByRole("group", {
+      name: "Hover interaction sound",
+    });
+    expect(hoverRow).toHaveAttribute("data-disabled", "true");
+    expect(hoverRow).not.toHaveClass("is-expanded");
+    expect(
+      within(hoverRow).getByRole("button", { name: "Preview Hover sound" }),
+    ).toBeDisabled();
+    expect(
+      within(hoverRow).getByLabelText("Hover sound volume"),
+    ).toBeDisabled();
+  });
+
+  it("appends a shared upload to every selected Multiple Sounds object", () => {
+    const first = testSoundShape("shared-multiple-first", 100, [
+      testInteractionSound({
+        assets: [testSoundAsset("first-existing")],
+        id: "first-shared-setting",
+        soundSource: "multiple",
+      }),
+    ]);
+    const second = testSoundShape("shared-multiple-second", 260, [
+      testInteractionSound({
+        assets: [testSoundAsset("second-existing")],
+        id: "second-shared-setting",
+        soundSource: "multiple",
+      }),
+    ]);
+    useEditorStore.setState({
+      pages: [{ elements: [first, second], id: "page-1", name: "Intro" }],
+      selectedElementIds: [first.id, second.id],
+    });
+
+    render(<EditorShell />);
+    fireEvent.click(screen.getByRole("tab", { name: "SOUND" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Add$/ }));
+    fireEvent.change(screen.getByLabelText("Choose interaction sound file"), {
+      target: {
+        files: [
+          new File([new Uint8Array([1, 2, 3])], "shared-added.wav", {
+            type: "audio/wav",
+          }),
+        ],
+      },
+    });
+
+    const [storedFirst, storedSecond] =
+      useEditorStore.getState().pages[0].elements;
+    expect(
+      storedFirst.interactionSounds?.[0].assets.map((asset) => asset.name),
+    ).toEqual(["first-existing.wav", "shared-added.wav"]);
+    expect(
+      storedSecond.interactionSounds?.[0].assets.map((asset) => asset.name),
+    ).toEqual(["second-existing.wav", "shared-added.wav"]);
+  });
+
+  it("applies a common upload according to each selected object's sound source", () => {
+    const single = testSoundShape("mixed-common-single", 100, [
+      testInteractionSound({
+        assets: [testSoundAsset("single-existing")],
+        id: "mixed-single-setting",
+        soundSource: "single",
+      }),
+    ]);
+    const multiple = testSoundShape("mixed-common-multiple", 260, [
+      testInteractionSound({
+        assets: [testSoundAsset("multiple-existing")],
+        id: "mixed-multiple-setting",
+        soundSource: "multiple",
+      }),
+    ]);
+    useEditorStore.setState({
+      pages: [{ elements: [single, multiple], id: "page-1", name: "Intro" }],
+      selectedElementIds: [single.id, multiple.id],
+    });
+
+    render(<EditorShell />);
+    fireEvent.click(screen.getByRole("tab", { name: "SOUND" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Add$/ }));
+    fireEvent.change(screen.getByLabelText("Choose interaction sound file"), {
+      target: {
+        files: [
+          new File([new Uint8Array([4, 5, 6])], "common-sound.wav", {
+            type: "audio/wav",
+          }),
+        ],
+      },
+    });
+
+    const [storedSingle, storedMultiple] =
+      useEditorStore.getState().pages[0].elements;
+    expect(storedSingle.interactionSounds?.[0]).toMatchObject({
+      soundSource: "single",
+    });
+    expect(
+      storedSingle.interactionSounds?.[0].assets.map((asset) => asset.name),
+    ).toEqual(["common-sound.wav"]);
+    expect(storedMultiple.interactionSounds?.[0]).toMatchObject({
+      soundSource: "multiple",
+    });
+    expect(
+      storedMultiple.interactionSounds?.[0].assets.map((asset) => asset.name),
+    ).toEqual(["multiple-existing.wav", "common-sound.wav"]);
+  });
+
+  it("deletes every interaction sound asset from the selected object", () => {
+    const shape = testSoundShape("delete-all-object-sounds", 100, [
+      testInteractionSound({
+        assets: [testSoundAsset("hover-sound")],
+        id: "delete-hover-setting",
+      }),
+      testInteractionSound({
+        assets: [testSoundAsset("click-sound")],
+        event: "click",
+        id: "delete-click-setting",
+        trigger: "click",
+      }),
+    ]);
+    useEditorStore.setState({
+      pages: [{ elements: [shape], id: "page-1", name: "Intro" }],
+      selectedElementIds: [shape.id],
+    });
+
+    render(<EditorShell />);
+    fireEvent.click(screen.getByRole("tab", { name: "SOUND" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "More Hover sound options" }),
+    );
+    const deleteSound = screen.getByRole("menuitem", {
+      name: "Delete Sound",
+    });
+    expect(deleteSound).toBeEnabled();
+    fireEvent.click(deleteSound);
+
+    const storedSounds =
+      useEditorStore.getState().pages[0].elements[0].interactionSounds;
+    expect(storedSounds).toHaveLength(2);
+    expect(storedSounds?.every((sound) => sound.assets.length === 0)).toBe(
+      true,
+    );
+    expect(
+      screen.getByRole("group", { name: "Hover interaction sound" }),
+    ).toHaveClass("is-empty");
+  });
+
+  it("restores each shape's expanded Event Settings and sound choices", () => {
+    const first = testSoundShape("persistent-sound-first", 100);
+    const second = testSoundShape("persistent-sound-second", 260);
+    useEditorStore.setState({
+      pages: [{ elements: [first, second], id: "page-1", name: "Intro" }],
+      selectedElementIds: [first.id],
+    });
+
+    render(<EditorShell />);
+    fireEvent.click(screen.getByRole("tab", { name: "SOUND" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "More Hover sound options" }),
+    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Event Settings" }));
+
+    let details = screen.getByRole("group", { name: "Hover sound details" });
+    fireEvent.click(
+      within(details).getByRole("radio", { name: "Multiple Sounds" }),
+    );
+    fireEvent.click(
+      within(details).getByRole("button", {
+        name: "Hover sound playback mode",
+      }),
+    );
+    fireEvent.click(screen.getByRole("option", { name: "Sequential" }));
+    fireEvent.click(
+      within(details).getByRole("checkbox", {
+        name: "Avoid repeating the same sound",
+      }),
+    );
+
+    act(() => useEditorStore.setState({ selectedElementIds: [second.id] }));
+    expect(
+      screen.queryByRole("group", { name: "Hover sound details" }),
+    ).not.toBeInTheDocument();
+
+    act(() => useEditorStore.setState({ selectedElementIds: [first.id] }));
+    details = screen.getByRole("group", { name: "Hover sound details" });
+    expect(
+      within(details).getByRole("radio", { name: "Multiple Sounds" }),
+    ).toHaveAttribute("aria-checked", "true");
+    expect(
+      within(details).getByRole("button", {
+        name: "Hover sound playback mode",
+      }),
+    ).toHaveTextContent("Sequential");
+    expect(
+      within(details).getByRole("checkbox", {
+        name: "Avoid repeating the same sound",
+      }),
+    ).not.toBeChecked();
+
+    const stored = useEditorStore
+      .getState()
+      .pages[0].elements.find((element) => element.id === first.id);
+    expect(stored?.interactionSoundExpanded).toBe(true);
+    expect(stored?.interactionSounds?.[0]).toMatchObject({
+      avoidRepeating: false,
+      playbackMode: "sequential",
+      soundSource: "multiple",
+    });
   });
 
   it("shows the exact Event choices for each interaction sound Trigger", () => {
@@ -1053,6 +1672,39 @@ describe("EditorShell", () => {
     await waitFor(() => expect(play).toHaveBeenCalledTimes(1));
   });
 
+  it("keeps On Page Enter music sourced during development effect replay", async () => {
+    const playedSources: (string | null)[] = [];
+    vi.mocked(HTMLMediaElement.prototype.play).mockImplementation(function (
+      this: HTMLMediaElement,
+    ) {
+      playedSources.push(this.getAttribute("src"));
+      return Promise.resolve();
+    });
+    setTestBackgroundMusic("on-page-enter");
+
+    render(
+      <StrictMode>
+        <EditorShell />
+      </StrictMode>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Preview" }));
+
+    const backgroundMusic = await waitFor(() => {
+      const audio = document.querySelector<HTMLAudioElement>(
+        ".viewer-background-music",
+      );
+      expect(audio).not.toBeNull();
+      return audio!;
+    });
+    expect(backgroundMusic).toHaveAttribute(
+      "src",
+      "blob:viewer-background-music-test",
+    );
+    expect(playedSources.length).toBeGreaterThan(0);
+    expect(playedSources).not.toContain(null);
+    expect(playedSources).not.toContain("");
+  });
+
   it("waits for viewer interaction and leaves manual playback idle", async () => {
     const play = vi.mocked(HTMLMediaElement.prototype.play);
     setTestBackgroundMusic("manual");
@@ -1193,7 +1845,91 @@ describe("EditorShell", () => {
     expect(play).toHaveBeenCalledTimes(5);
   });
 
-  it("plays and fades every Multiple Sounds file at the same time", async () => {
+  it("ducks background music while an interaction sound is playing", async () => {
+    setTestBackgroundMusic("on-page-enter");
+    const clickShape = testSoundShape("ducking-click", 140, [
+      testInteractionSound({
+        assets: [testSoundAsset("ducking")],
+        event: "click",
+        id: "ducking-setting",
+        trigger: "click",
+      }),
+    ]);
+    useEditorStore.setState((state) => ({
+      pages: state.pages.map((page) => ({
+        ...page,
+        elements: [clickShape],
+      })),
+    }));
+
+    render(<EditorShell />);
+    fireEvent.click(screen.getByRole("button", { name: "Preview" }));
+    const preview = screen.getByRole("dialog", { name: "Viewer preview" });
+    const backgroundMusic = preview.querySelector<HTMLAudioElement>(
+      ".viewer-background-music",
+    )!;
+    const interactionAudio = preview.querySelector<HTMLAudioElement>(
+      ".viewer-interaction-sound",
+    )!;
+    const previewElement = preview.querySelector<HTMLElement>(
+      `[data-element-id="${clickShape.id}"]`,
+    )!;
+
+    expect(backgroundMusic).toHaveAttribute("data-ducked", "false");
+    fireEvent.click(previewElement);
+    expect(backgroundMusic).toHaveAttribute("data-ducked", "true");
+    await waitFor(() => expect(backgroundMusic.volume).toBeCloseTo(0.25, 1));
+
+    fireEvent.ended(interactionAudio);
+    expect(backgroundMusic).toHaveAttribute("data-ducked", "false");
+    await waitFor(() => expect(backgroundMusic.volume).toBeGreaterThan(0.95));
+  });
+
+  it("applies the All Sounds master and channel volumes to viewer playback", () => {
+    setTestBackgroundMusic("on-page-enter");
+    const clickShape = testSoundShape("mixer-click", 140, [
+      testInteractionSound({
+        assets: [testSoundAsset("mixer-interaction")],
+        event: "click",
+        id: "mixer-click-setting",
+        trigger: "click",
+        volume: 80,
+      }),
+    ]);
+    useEditorStore.setState((state) => ({
+      pages: state.pages.map((page) => ({
+        ...page,
+        backgroundMusic: page.backgroundMusic
+          ? { ...page.backgroundMusic, volume: 80 }
+          : undefined,
+        elements: [clickShape],
+        soundMixer: {
+          backgroundMusicVolume: 50,
+          interactionSoundVolume: 50,
+          masterVolume: 50,
+        },
+      })),
+    }));
+
+    render(<EditorShell />);
+    fireEvent.click(screen.getByRole("button", { name: "Preview" }));
+    const preview = screen.getByRole("dialog", { name: "Viewer preview" });
+    const backgroundMusic = preview.querySelector<HTMLAudioElement>(
+      ".viewer-background-music",
+    )!;
+    const interactionAudio = preview.querySelector<HTMLAudioElement>(
+      ".viewer-interaction-sound",
+    )!;
+    const previewElement = preview.querySelector<HTMLElement>(
+      `[data-element-id="${clickShape.id}"]`,
+    )!;
+
+    expect(backgroundMusic.volume).toBeCloseTo(0.2, 5);
+    fireEvent.click(previewElement);
+    expect(interactionAudio.volume).toBeCloseTo(0.2, 5);
+  });
+
+  it("plays and fades one Multiple Sounds file at a time in sequence", async () => {
     vi.useFakeTimers();
     const pausedByMedia = new WeakMap<HTMLMediaElement, boolean>();
     vi.spyOn(HTMLMediaElement.prototype, "paused", "get").mockImplementation(
@@ -1244,57 +1980,42 @@ describe("EditorShell", () => {
     const interactionAudios = Array.from(
       preview.querySelectorAll<HTMLAudioElement>(".viewer-interaction-sound"),
     );
-    expect(interactionAudios).toHaveLength(2);
+    expect(interactionAudios).toHaveLength(1);
+    const interactionAudio = interactionAudios[0];
 
     fireEvent.pointerEnter(previewElement);
     await act(async () => Promise.resolve());
-    expect(play).toHaveBeenCalledTimes(2);
-    expect(interactionAudios.map((audio) => audio.src)).toEqual([
-      "blob:first",
-      "blob:second",
-    ]);
-    interactionAudios.forEach((audio) => {
-      expect(audio.loop).toBe(true);
-      expect(audio.volume).toBe(0);
-    });
+    expect(play).toHaveBeenCalledTimes(1);
+    expect(interactionAudio.src).toBe("blob:first");
+    expect(interactionAudio.loop).toBe(true);
+    expect(interactionAudio.volume).toBe(0);
 
     act(() => vi.advanceTimersByTime(112));
-    interactionAudios.forEach((audio) => {
-      expect(audio.volume).toBeGreaterThan(0);
-      expect(audio.volume).toBeLessThan(0.6);
-    });
-    expect(interactionAudios[0].volume).toBeCloseTo(
-      interactionAudios[1].volume,
-      5,
-    );
+    expect(interactionAudio.volume).toBeGreaterThan(0);
+    expect(interactionAudio.volume).toBeLessThan(0.6);
 
     act(() => vi.advanceTimersByTime(150));
-    interactionAudios.forEach((audio) =>
-      expect(audio.volume).toBeCloseTo(0.6, 5),
-    );
+    expect(interactionAudio.volume).toBeCloseTo(0.6, 5);
 
     const pausesBeforeLeave = pause.mock.calls.length;
     fireEvent.pointerLeave(previewElement);
     expect(pause).toHaveBeenCalledTimes(pausesBeforeLeave);
     act(() => vi.advanceTimersByTime(112));
-    interactionAudios.forEach((audio) => {
-      expect(audio.volume).toBeGreaterThan(0);
-      expect(audio.volume).toBeLessThan(0.6);
-    });
-    expect(interactionAudios[0].volume).toBeCloseTo(
-      interactionAudios[1].volume,
-      5,
-    );
+    expect(interactionAudio.volume).toBeGreaterThan(0);
+    expect(interactionAudio.volume).toBeLessThan(0.6);
 
     act(() => vi.advanceTimersByTime(150));
-    expect(pause).toHaveBeenCalledTimes(pausesBeforeLeave + 2);
-    interactionAudios.forEach((audio) => {
-      expect(audio.loop).toBe(false);
-      expect(pausedByMedia.get(audio)).toBe(true);
-    });
+    expect(pause).toHaveBeenCalledTimes(pausesBeforeLeave + 1);
+    expect(interactionAudio.loop).toBe(false);
+    expect(pausedByMedia.get(interactionAudio)).toBe(true);
+
+    fireEvent.pointerEnter(previewElement);
+    await act(async () => Promise.resolve());
+    expect(play).toHaveBeenCalledTimes(2);
+    expect(interactionAudio.src).toBe("blob:second");
   });
 
-  it("replaces a simultaneous sound group only for a configured trigger", async () => {
+  it("replaces the active selected sound only for a configured trigger", async () => {
     const pausedByMedia = new WeakMap<HTMLMediaElement, boolean>();
     vi.spyOn(HTMLMediaElement.prototype, "paused", "get").mockImplementation(
       function (this: HTMLMediaElement) {
@@ -1317,6 +2038,7 @@ describe("EditorShell", () => {
         assets: [testSoundAsset("first"), testSoundAsset("second")],
         event: "while-hovering",
         id: "hover-group-setting",
+        playbackMode: "sequential",
         soundSource: "multiple",
         trigger: "hover",
       }),
@@ -1327,6 +2049,7 @@ describe("EditorShell", () => {
         assets: [testSoundAsset("third"), testSoundAsset("fourth")],
         event: "click",
         id: "click-group-setting",
+        playbackMode: "sequential",
         soundSource: "multiple",
         trigger: "click",
       }),
@@ -1352,14 +2075,12 @@ describe("EditorShell", () => {
 
     fireEvent.pointerEnter(element(hoverShape.id));
     await act(async () => Promise.resolve());
-    expect(play).toHaveBeenCalledTimes(2);
-    expect(interactionAudios.map((audio) => audio.src)).toEqual([
-      "blob:first",
-      "blob:second",
-    ]);
+    expect(play).toHaveBeenCalledTimes(1);
+    expect(interactionAudios).toHaveLength(1);
+    expect(interactionAudios[0].src).toBe("blob:first");
 
     fireEvent.click(element(emptyShape.id));
-    expect(play).toHaveBeenCalledTimes(2);
+    expect(play).toHaveBeenCalledTimes(1);
     expect(pause).not.toHaveBeenCalled();
     interactionAudios.forEach((audio) =>
       expect(pausedByMedia.get(audio)).toBe(false),
@@ -1367,12 +2088,9 @@ describe("EditorShell", () => {
 
     fireEvent.click(element(clickShape.id));
     await act(async () => Promise.resolve());
-    expect(pause).toHaveBeenCalledTimes(2);
-    expect(play).toHaveBeenCalledTimes(4);
-    expect(interactionAudios.map((audio) => audio.src)).toEqual([
-      "blob:third",
-      "blob:fourth",
-    ]);
+    expect(pause).toHaveBeenCalledTimes(1);
+    expect(play).toHaveBeenCalledTimes(2);
+    expect(interactionAudios[0].src).toBe("blob:third");
     interactionAudios.forEach((audio) =>
       expect(pausedByMedia.get(audio)).toBe(false),
     );

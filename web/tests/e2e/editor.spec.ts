@@ -92,10 +92,17 @@ test("keeps the artboard unselected when its empty area is clicked", async ({
   if (!before || !canvasBounds) {
     throw new Error("Artboard bounds are unavailable");
   }
-  expect(before.x).toBeGreaterThanOrEqual(canvasBounds.x - 0.5);
-  expect(before.x + before.width).toBeLessThanOrEqual(
-    canvasBounds.x + canvasBounds.width + 0.5,
-  );
+  expect(before.x - canvasBounds.x).toBeCloseTo(25, 0);
+  expect(
+    canvasBounds.x + canvasBounds.width - (before.x + before.width),
+  ).toBeCloseTo(25, 0);
+  const canvasGutters = await page
+    .getByLabel("Exhibition canvas")
+    .evaluate((canvas) => ({
+      left: getComputedStyle(canvas, "::before").width,
+      right: getComputedStyle(canvas, "::after").width,
+    }));
+  expect(canvasGutters).toEqual({ left: "25px", right: "25px" });
 
   await page.getByRole("button", { name: "Selection", exact: true }).click();
   await page.mouse.click(before.x + 20, before.y + 20);
@@ -887,6 +894,93 @@ test("keeps a new pen curve black with a one-pixel stroke", async ({
     .locator(".pen-visible-path");
   await expect(curve).toHaveAttribute("stroke", "#000000");
   await expect(curve).toHaveAttribute("stroke-width", "1");
+});
+
+test("uses the complete pen path as the preview hover target", async ({
+  page,
+}) => {
+  test.skip(
+    (page.viewportSize()?.width ?? 0) <= 960,
+    "Pen interaction preview is desktop-only",
+  );
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await waitForEditor(page);
+
+  await page.getByRole("button", { name: "Rectangle", exact: true }).click();
+  await page
+    .getByRole("toolbar", { name: "Shape picker" })
+    .getByRole("button", { name: "Pen Tool", exact: true })
+    .click();
+  const artboardBox = await page.getByLabel("Artboard").boundingBox();
+  if (!artboardBox) throw new Error("Artboard bounds are unavailable");
+  await page.mouse.click(artboardBox.x + 180, artboardBox.y + 180);
+  await page.mouse.click(artboardBox.x + 250, artboardBox.y + 120);
+  await page.mouse.dblclick(artboardBox.x + 340, artboardBox.y + 190);
+
+  await page.getByRole("tab", { name: "SOUND" }).click();
+  const panel = page.getByRole("tabpanel", { name: "Sound settings" });
+  await panel.getByRole("button", { name: "More Hover sound options" }).click();
+  await panel.getByRole("menuitem", { name: "Event Settings" }).click();
+  const [fileChooser] = await Promise.all([
+    page.waitForEvent("filechooser"),
+    panel.getByRole("button", { name: "Add Sound" }).click(),
+  ]);
+  await fileChooser.setFiles("public/figma/sound/test-interaction-click.wav");
+
+  await page.getByRole("button", { name: "Preview", exact: true }).click();
+  const preview = page.getByRole("dialog", { name: "Viewer preview" });
+  const previewPen = preview.locator(".viewer-preview-element.element-pen");
+  const hitPath = previewPen.locator(".pen-hit-area").first();
+  await expect(previewPen).toHaveCSS("pointer-events", "none");
+  await expect(hitPath).toHaveCSS("pointer-events", "stroke");
+
+  const audio = preview.locator(".viewer-interaction-sound");
+  await audio.evaluate((element) => {
+    element.addEventListener("play", () => {
+      const current = Number(element.getAttribute("data-play-count") ?? "0");
+      element.setAttribute("data-play-count", String(current + 1));
+    });
+  });
+  const pathPoints = await hitPath.evaluate((element) => {
+    const path = element as SVGPathElement;
+    const matrix = path.getScreenCTM();
+    if (!matrix) throw new Error("Pen path matrix is unavailable");
+    const length = path.getTotalLength();
+    return [0.15, 0.85].map((amount) => {
+      const point = path.getPointAtLength(length * amount);
+      const screenPoint = new DOMPoint(point.x, point.y).matrixTransform(
+        matrix,
+      );
+      return { x: screenPoint.x, y: screenPoint.y };
+    });
+  });
+  const emptyPoint = await previewPen.evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    const candidates = [
+      [0.1, 0.1],
+      [0.9, 0.1],
+      [0.1, 0.9],
+      [0.9, 0.9],
+      [0.5, 0.5],
+    ];
+    for (const [xAmount, yAmount] of candidates) {
+      const x = bounds.left + bounds.width * xAmount;
+      const y = bounds.top + bounds.height * yAmount;
+      if (
+        document.elementFromPoint(x, y)?.closest(".element-pen") !== element
+      ) {
+        return { x, y };
+      }
+    }
+    throw new Error("An empty point inside the pen bounds was not found");
+  });
+
+  await page.mouse.move(1, 1);
+  await page.mouse.move(pathPoints[0].x, pathPoints[0].y);
+  await expect.poll(() => audio.getAttribute("data-play-count")).toBe("1");
+  await page.mouse.move(emptyPoint.x, emptyPoint.y);
+  await page.mouse.move(pathPoints[1].x, pathPoints[1].y);
+  await expect.poll(() => audio.getAttribute("data-play-count")).toBe("2");
 });
 
 test("shows pen helper lines while drawing and after completion", async ({
@@ -1815,8 +1909,8 @@ test("shows scene before design and renders design controls", async ({
   await expect(propertyTabs.nth(2)).toHaveAttribute("aria-selected", "true");
 
   await page.getByRole("button", { name: "Setting", exact: true }).click();
-  await expect(propertyTabs.nth(1)).toHaveAttribute("aria-selected", "true");
-  await expect(propertyTabs.nth(2)).toHaveAttribute("aria-selected", "false");
+  await expect(propertyTabs.nth(1)).toHaveAttribute("aria-selected", "false");
+  await expect(propertyTabs.nth(2)).toHaveAttribute("aria-selected", "true");
 
   await propertyTabs.nth(2).click();
   const artboard = page.getByLabel("Artboard");
@@ -1833,6 +1927,18 @@ test("shows scene before design and renders design controls", async ({
   await expect(page.locator(".design-properties")).toContainText(
     "Corner Radius",
   );
+  const transformHeadingBox = await page
+    .locator(
+      ".design-properties > .property-section:first-child > .panel-heading",
+    )
+    .boundingBox();
+  const shapeHeadingBox = await page
+    .locator(".design-properties .appearance-section > .panel-heading")
+    .boundingBox();
+  if (!transformHeadingBox || !shapeHeadingBox) {
+    throw new Error("Design section heading bounds are unavailable");
+  }
+  expect(shapeHeadingBox.x).toBeCloseTo(transformHeadingBox.x, 0);
 });
 
 function createTestWavBuffer() {
@@ -2030,6 +2136,398 @@ test("matches the Figma sound-panel geometry", async ({ page }) => {
   await expect(panel).not.toContainText("Interaction Sounds");
 });
 
+test("matches the Figma All Sounds layout and opens its layer", async ({
+  page,
+}) => {
+  test.skip(
+    (page.viewportSize()?.width ?? 0) <= 960,
+    "Properties panel is desktop-only",
+  );
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await waitForEditor(page);
+
+  const artboardBox = await page.getByLabel("Artboard").boundingBox();
+  if (!artboardBox) throw new Error("Artboard bounds are unavailable");
+  await page.getByRole("button", { name: "Rectangle", exact: true }).click();
+  await page.mouse.move(artboardBox.x + 100, artboardBox.y + 100);
+  await page.mouse.down();
+  await page.mouse.move(artboardBox.x + 220, artboardBox.y + 190, {
+    steps: 2,
+  });
+  await page.mouse.up();
+  await page.getByRole("tab", { name: "SOUND" }).click();
+
+  const panel = page.getByRole("tabpanel", { name: "Sound settings" });
+  await panel.getByLabel("Choose background music file").setInputFiles({
+    buffer: createTestWavBuffer(),
+    mimeType: "audio/wav",
+    name: "gallery-background.wav",
+  });
+  await panel.getByRole("button", { name: "More Hover sound options" }).click();
+  await panel.getByRole("menuitem", { name: "Event Settings" }).click();
+  const [soundChooser] = await Promise.all([
+    page.waitForEvent("filechooser"),
+    panel.getByRole("button", { name: "Add Sound" }).click(),
+  ]);
+  await soundChooser.setFiles("public/figma/sound/test-interaction-click.wav");
+  await panel.getByRole("button", { name: "All Sounds" }).click();
+
+  const panelBox = await panel.boundingBox();
+  if (!panelBox) throw new Error("Sound panel bounds are unavailable");
+  const relativeBounds = async (selector: string) => {
+    const bounds = await panel.locator(selector).boundingBox();
+    if (!bounds) throw new Error(`All Sounds bounds unavailable: ${selector}`);
+    return {
+      height: bounds.height,
+      width: bounds.width,
+      x: bounds.x - panelBox.x,
+      y: bounds.y - panelBox.y,
+    };
+  };
+
+  await expect(panel.getByText("Background Music (BGM)")).toBeVisible();
+  await expect(panel.getByText("Rectangle 1", { exact: true })).toBeVisible();
+  await expect(panel.getByText("test-interaction-click.wav")).toBeVisible();
+  expect(await relativeBounds(".sound-all-bgm-section")).toMatchObject({
+    width: 308,
+    x: 16,
+    y: 44,
+  });
+  expect(await relativeBounds(".sound-all-bgm-card")).toMatchObject({
+    height: 48,
+    width: 308,
+    x: 16,
+  });
+  const bgmCardBox = await panel.locator(".sound-all-bgm-card").boundingBox();
+  const bgmHeadingBox = await panel
+    .getByRole("heading", { name: "Background Music (BGM)" })
+    .boundingBox();
+  const bgmOptionsIconBox = await panel
+    .getByRole("button", { name: "All Sounds background music options" })
+    .locator("img")
+    .boundingBox();
+  if (!bgmCardBox || !bgmHeadingBox || !bgmOptionsIconBox) {
+    throw new Error("Background music action bounds are unavailable");
+  }
+  expect(bgmCardBox.y - (bgmHeadingBox.y + bgmHeadingBox.height)).toBeCloseTo(
+    11,
+    0,
+  );
+  expect(bgmOptionsIconBox.y - bgmCardBox.y).toBeCloseTo(6, 0);
+  expect(
+    bgmCardBox.x +
+      bgmCardBox.width -
+      (bgmOptionsIconBox.x + bgmOptionsIconBox.width),
+  ).toBeCloseTo(7, 0);
+  await panel
+    .getByRole("button", { name: "All Sounds background music options" })
+    .click();
+  const bgmMenuBox = await panel
+    .getByRole("menu", { name: "All Sounds background music options menu" })
+    .boundingBox();
+  if (!bgmMenuBox)
+    throw new Error("Background music menu bounds are unavailable");
+  expect(bgmMenuBox.y + bgmMenuBox.height).toBeLessThanOrEqual(bgmCardBox.y);
+  await panel
+    .getByRole("button", { name: "All Sounds background music options" })
+    .click();
+  const metadataBox = await panel
+    .locator(".sound-all-bgm-copy small")
+    .boundingBox();
+  const tagsBox = await panel.locator(".sound-all-bgm-tags").boundingBox();
+  if (!metadataBox || !tagsBox) {
+    throw new Error("Background music metadata bounds are unavailable");
+  }
+  expect(tagsBox.x - (metadataBox.x + metadataBox.width)).toBeCloseTo(9, 0);
+  expect(
+    tagsBox.y + tagsBox.height / 2 - (metadataBox.y + metadataBox.height / 2),
+  ).toBeCloseTo(0, 0);
+  await expect(panel.locator(".sound-all-bgm-tags > span").first()).toHaveCSS(
+    "border-color",
+    "rgb(171, 81, 240)",
+  );
+  const backgroundDivider = await panel
+    .locator(".sound-all-bgm-section")
+    .evaluate((element) => {
+      const style = getComputedStyle(element, "::after");
+      return { left: style.left, width: style.width };
+    });
+  expect(backgroundDivider).toEqual({ left: "-16px", width: "340px" });
+  expect(await relativeBounds(".sound-all-filters")).toMatchObject({
+    height: 22,
+    width: 339,
+    x: 0,
+  });
+  expect(await relativeBounds(".sound-all-search")).toMatchObject({
+    height: 22,
+    width: 168,
+    x: 0,
+  });
+  expect(
+    await relativeBounds(".sound-all-filter-dropdown:nth-child(2)"),
+  ).toMatchObject({
+    height: 22,
+    width: 82,
+    x: 172,
+  });
+  expect(
+    await relativeBounds(".sound-all-filter-dropdown:nth-child(3)"),
+  ).toMatchObject({
+    height: 22,
+    width: 81,
+    x: 258,
+  });
+  expect(await relativeBounds(".sound-all-table")).toMatchObject({
+    width: 339,
+    x: 0,
+  });
+  const filterBox = await panel.locator(".sound-all-filters").boundingBox();
+  const tableBox = await panel.locator(".sound-all-table").boundingBox();
+  if (!filterBox || !tableBox) {
+    throw new Error("All Sounds list bounds are unavailable");
+  }
+  expect(panelBox.x + panelBox.width - (filterBox.x + filterBox.width)).toBe(6);
+  expect(panelBox.x + panelBox.width - (tableBox.x + tableBox.width)).toBe(6);
+  expect(await relativeBounds(".sound-all-master-section")).toMatchObject({
+    width: 340,
+    x: 0,
+  });
+  await expect(panel.locator(".sound-all-table-header")).toHaveCSS(
+    "background-color",
+    "rgba(186, 186, 186, 0.2)",
+  );
+  await expect(panel.locator(".sound-all-object-thumbnail")).toHaveCSS(
+    "background-color",
+    "rgba(0, 0, 0, 0)",
+  );
+  await expect(panel).toHaveCSS("scrollbar-width", "none");
+  expect(
+    await relativeBounds(".sound-all-object-thumbnail.symbol-rectangle"),
+  ).toMatchObject({ height: 15, width: 15 });
+  await expect(
+    panel.locator(".sound-all-object-thumbnail.symbol-rectangle"),
+  ).toHaveCSS("border-radius", "0px");
+  expect(
+    await panel
+      .locator(".sound-all-object-thumbnail.symbol-rectangle")
+      .evaluate((element) => {
+        const style = getComputedStyle(element, "::before");
+        return { height: style.height, width: style.width };
+      }),
+  ).toEqual({ height: "14px", width: "14px" });
+  await expect(panel.locator(".sound-all-object-cell")).toHaveCSS("gap", "4px");
+  await expect(panel.locator(".sound-all-trigger-cell")).toHaveCSS(
+    "color",
+    "rgb(0, 0, 0)",
+  );
+  await expect(panel.getByLabel("Master sound volume value")).toHaveValue(
+    "100",
+  );
+  const masterTrackHeights = await panel
+    .locator(".sound-all-master-slider .design-range-fill")
+    .evaluateAll((tracks) =>
+      tracks.map((track) => getComputedStyle(track).height),
+    );
+  expect(new Set(masterTrackHeights).size).toBe(1);
+  await expect(panel.locator(".sound-all-table-header")).toHaveCSS(
+    "font-size",
+    "10px",
+  );
+  await expect(panel.locator(".sound-all-table-row")).toHaveCSS(
+    "font-size",
+    "10px",
+  );
+
+  await panel.getByLabel("Select Rectangle 1 sounds").check({ force: true });
+  await panel.getByRole("button", { name: "Edit selected sounds" }).click();
+  const bulkMenu = panel.getByRole("menu", {
+    name: "Selected sounds options menu",
+  });
+  await expect(bulkMenu.getByRole("menuitem")).toHaveText([
+    "Delete",
+    "Change Volume",
+    "Enable",
+    "Disable",
+  ]);
+  await bulkMenu.getByRole("menuitem", { name: "Change Volume" }).click();
+  const bulkVolume = panel.getByRole("group", {
+    name: "Selected sounds volume control",
+  });
+  const [bulkVolumeBox, bulkSliderBox, bulkFieldBox] = await Promise.all([
+    bulkVolume.boundingBox(),
+    bulkVolume
+      .getByRole("slider", { name: "Selected sounds volume", exact: true })
+      .boundingBox(),
+    bulkVolume.locator(".sound-percent-field").boundingBox(),
+  ]);
+  if (!bulkVolumeBox || !bulkSliderBox || !bulkFieldBox) {
+    throw new Error("Selected sounds volume bounds are unavailable");
+  }
+  expect(bulkFieldBox.x - (bulkSliderBox.x + bulkSliderBox.width)).toBeCloseTo(
+    3,
+    0,
+  );
+  expect(
+    bulkVolumeBox.x +
+      bulkVolumeBox.width -
+      (bulkFieldBox.x + bulkFieldBox.width),
+  ).toBeGreaterThanOrEqual(5);
+  await panel.getByRole("heading", { name: "Interaction Sounds" }).click();
+  await expect(bulkVolume).toHaveCount(0);
+  await panel.getByRole("button", { name: "Edit selected sounds" }).click();
+  await panel
+    .getByRole("menu", { name: "Selected sounds options menu" })
+    .getByRole("menuitem", { name: "Disable" })
+    .click();
+  await expect(
+    panel.getByRole("button", { name: "Play test-interaction-click.wav" }),
+  ).toBeDisabled();
+  const disabledRow = panel.locator(
+    ".sound-all-table-row[data-disabled='true']",
+  );
+  const disabledTrigger = disabledRow.locator(".sound-all-trigger-cell");
+  const disabledPlay = disabledRow.getByRole("button", {
+    name: "Play test-interaction-click.wav",
+  });
+  const disabledDots = disabledRow.getByRole("button", {
+    name: "More options for test-interaction-click.wav",
+  });
+  const [disabledTriggerBox, disabledPlayBox, disabledDotsBox] =
+    await Promise.all([
+      disabledTrigger.boundingBox(),
+      disabledPlay.boundingBox(),
+      disabledDots.boundingBox(),
+    ]);
+  if (!disabledTriggerBox || !disabledPlayBox || !disabledDotsBox) {
+    throw new Error("Disabled All Sounds row bounds are unavailable");
+  }
+  const triggerCenter = disabledTriggerBox.y + disabledTriggerBox.height / 2;
+  expect(disabledPlayBox.y + disabledPlayBox.height / 2).toBeCloseTo(
+    triggerCenter,
+    0,
+  );
+  expect(disabledDotsBox.y + disabledDotsBox.height / 2).toBeCloseTo(
+    triggerCenter,
+    0,
+  );
+  await expect(disabledRow.locator(".sound-all-object-cell")).toHaveCSS(
+    "opacity",
+    "0.45",
+  );
+  await expect(disabledTrigger).toHaveCSS("opacity", "0.45");
+  await expect(disabledRow.locator(".sound-all-sound-cell")).toHaveCSS(
+    "opacity",
+    "0.45",
+  );
+  await disabledDots.click();
+  await panel
+    .getByRole("menu", {
+      name: "test-interaction-click.wav options menu",
+    })
+    .getByRole("menuitem", { name: "Go to Layer" })
+    .click();
+  const disabledSelectedRow = panel.getByRole("group", {
+    name: "Hover interaction sound",
+  });
+  if (
+    await disabledSelectedRow.evaluate((row) =>
+      row.classList.contains("is-expanded"),
+    )
+  ) {
+    await panel
+      .getByRole("button", { name: "More Hover sound options" })
+      .click();
+    await panel.getByRole("menuitem", { name: "Event Settings" }).click();
+  }
+  await expect(disabledSelectedRow).toHaveAttribute("data-disabled", "true");
+  await expect(
+    disabledSelectedRow.getByRole("button", {
+      exact: true,
+      name: "Preview Hover sound",
+    }),
+  ).toBeDisabled();
+  await expect(
+    disabledSelectedRow.getByLabel("Hover sound volume", { exact: true }),
+  ).toBeDisabled();
+  for (const selector of [
+    ".sound-interaction-trigger",
+    ".sound-play-button",
+    ".sound-interaction-name",
+    ".sound-interaction-volume",
+    ".sound-mini-slider",
+  ]) {
+    await expect(disabledSelectedRow.locator(selector)).toHaveCSS(
+      "opacity",
+      "0.45",
+    );
+  }
+  await panel.getByRole("button", { name: "More Hover sound options" }).click();
+  await panel.getByRole("menuitem", { name: "Event Settings" }).click();
+  await expect(disabledSelectedRow).toHaveClass(/is-expanded/);
+  for (const selector of [
+    ".sound-interaction-name",
+    ".sound-interaction-volume",
+    ".sound-event-file-name",
+    ".sound-event-volume-value",
+  ]) {
+    await expect(disabledSelectedRow.locator(selector)).toHaveCSS(
+      "opacity",
+      "0.45",
+    );
+  }
+  await panel.getByRole("button", { name: "All Sounds" }).click();
+  await panel.getByLabel("Select Rectangle 1 sounds").check({ force: true });
+  await panel.getByRole("button", { name: "Edit selected sounds" }).click();
+  await panel
+    .getByRole("menu", { name: "Selected sounds options menu" })
+    .getByRole("menuitem", { name: "Enable" })
+    .click();
+  await expect(
+    panel.getByRole("button", { name: "Play test-interaction-click.wav" }),
+  ).toBeEnabled();
+
+  await page.locator(".zoom-control").click();
+  await page.getByRole("menuitemradio", { name: "150%" }).click();
+  const scaledTrackHeights = await panel
+    .locator(".sound-all-master-slider .design-range-fill")
+    .evaluateAll((tracks) =>
+      tracks.map((track) => track.getBoundingClientRect().height),
+    );
+  expect(new Set(scaledTrackHeights).size).toBe(1);
+
+  await panel
+    .getByRole("button", {
+      name: "More options for test-interaction-click.wav",
+    })
+    .click();
+  const rowMenu = panel.getByRole("menu", {
+    name: "test-interaction-click.wav options menu",
+  });
+  await expect(rowMenu.getByRole("menuitem")).toHaveText([
+    "Delete Sound",
+    "Go to Layer",
+  ]);
+  await rowMenu.getByRole("menuitem", { name: "Go to Layer" }).click();
+  await expect(
+    panel.getByRole("button", { name: "Selected Object" }),
+  ).toHaveAttribute("aria-pressed", "true");
+  await expect(
+    panel.getByRole("region", { name: "Interaction Sounds" }),
+  ).toBeVisible();
+});
+
+test("keeps topbar publish labels at twelve pixels", async ({ page }) => {
+  await waitForEditor(page);
+  await expect(page.getByRole("button", { name: "SHARE" })).toHaveCSS(
+    "font-size",
+    "12px",
+  );
+  await expect(page.getByRole("button", { name: "SEND" })).toHaveCSS(
+    "font-size",
+    "12px",
+  );
+});
+
 test("shows and expands Interaction Sounds for a selected shape", async ({
   page,
 }) => {
@@ -2077,6 +2575,11 @@ test("shows and expands Interaction Sounds for a selected shape", async ({
     0,
   );
   expect(headingBox.y - dividerBox.y).toBeCloseTo(13, 0);
+
+  await expect(
+    panel.getByRole("region", { name: "Advanced Settings" }),
+  ).toHaveCount(0);
+  await expect(panel.locator(".sound-advanced-divider")).toHaveCount(0);
 
   const hoverRow = panel.getByRole("group", {
     name: "Hover interaction sound",
@@ -2139,7 +2642,7 @@ test("shows and expands Interaction Sounds for a selected shape", async ({
   ).toHaveCount(0);
 });
 
-test("plays every Multiple Sounds file on the same trigger", async ({
+test("plays Multiple Sounds one at a time in sequential order", async ({
   page,
 }) => {
   test.skip(
@@ -2166,6 +2669,13 @@ test("plays every Multiple Sounds file on the same trigger", async ({
   await panel.getByRole("menuitem", { name: "Event Settings" }).click();
   let details = panel.getByRole("group", { name: "Hover sound details" });
   await details.getByRole("radio", { name: "Multiple Sounds" }).click();
+  await details
+    .getByRole("button", { name: "Hover sound playback mode" })
+    .click();
+  await page
+    .getByRole("listbox", { name: "Hover sound playback mode menu" })
+    .getByRole("option", { name: "Sequential" })
+    .click();
 
   const [fileChooser] = await Promise.all([
     page.waitForEvent("filechooser"),
@@ -2214,24 +2724,42 @@ test("plays every Multiple Sounds file on the same trigger", async ({
   await page.getByRole("button", { name: "Preview", exact: true }).click();
   const preview = page.getByRole("dialog", { name: "Viewer preview" });
   const audioChannels = preview.locator(".viewer-interaction-sound");
-  await expect(audioChannels).toHaveCount(2);
+  await expect(audioChannels).toHaveCount(1);
   await audioChannels.evaluateAll((audios) => {
-    audios.forEach((audio) => {
-      audio.addEventListener(
-        "play",
-        () => audio.setAttribute("data-played", "true"),
-        { once: true },
+    audios[0].addEventListener("play", () => {
+      const playedSources = JSON.parse(
+        audios[0].getAttribute("data-played-sources") ?? "[]",
+      ) as string[];
+      playedSources.push(audios[0].getAttribute("src") ?? "");
+      audios[0].setAttribute(
+        "data-played-sources",
+        JSON.stringify(playedSources),
       );
     });
   });
-  await preview.locator(".viewer-preview-element").click();
+
+  const previewElement = preview.locator(".viewer-preview-element");
+  await previewElement.click();
+  await previewElement.click();
+  await previewElement.click();
   await expect
     .poll(() =>
-      audioChannels.evaluateAll((audios) =>
-        audios.map((audio) => audio.getAttribute("data-played")),
+      audioChannels.evaluateAll(
+        (audios) =>
+          JSON.parse(
+            audios[0].getAttribute("data-played-sources") ?? "[]",
+          ) as string[],
       ),
     )
-    .toEqual(["true", "true"]);
+    .toHaveLength(3);
+  const playedSources = await audioChannels.evaluateAll(
+    (audios) =>
+      JSON.parse(
+        audios[0].getAttribute("data-played-sources") ?? "[]",
+      ) as string[],
+  );
+  expect(playedSources[0]).not.toBe(playedSources[1]);
+  expect(playedSources[2]).toBe(playedSources[0]);
 });
 
 test("manages background music files and playback settings", async ({
@@ -2413,6 +2941,39 @@ test("manages background music files and playback settings", async ({
     panel.getByRole("button", { name: "Upload background music" }),
   ).toBeVisible();
   await expect(fileOptions).toHaveCount(0);
+});
+
+test("plays background music on page entry in the audience preview", async ({
+  page,
+}) => {
+  test.skip(
+    (page.viewportSize()?.width ?? 0) <= 960,
+    "Properties panel is desktop-only",
+  );
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await waitForEditor(page);
+  await page.getByRole("tab", { name: "SOUND" }).click();
+
+  const panel = page.getByRole("tabpanel", { name: "Sound settings" });
+  await panel.getByLabel("Choose background music file").setInputFiles({
+    buffer: createTestWavBuffer(),
+    mimeType: "audio/wav",
+    name: "page-entry-background.wav",
+  });
+  await expect(
+    panel.getByRole("button", { name: "Start playback" }),
+  ).toContainText("On Page Enter");
+
+  await page.getByRole("button", { name: "Preview", exact: true }).click();
+  const backgroundMusic = page
+    .getByRole("dialog", { name: "Viewer preview" })
+    .locator(".viewer-background-music");
+  await expect(backgroundMusic).toHaveAttribute("src", /^blob:/);
+  await expect
+    .poll(() =>
+      backgroundMusic.evaluate((audio) => (audio as HTMLAudioElement).paused),
+    )
+    .toBe(false);
 });
 
 test("shows embedded audio cover art and uses an icon when no cover exists", async ({
