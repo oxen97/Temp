@@ -1,16 +1,10 @@
 import type { Metadata } from "next";
-import { Inter } from "next/font/google";
 import type { CSSProperties } from "react";
 
 import { assetPath } from "@/lib/asset-path";
 
+import "@fontsource-variable/inter/wght.css";
 import "./globals.css";
-
-const designInter = Inter({
-  display: "swap",
-  subsets: ["latin"],
-  variable: "--design-inter",
-});
 
 export const metadata: Metadata = {
   title: "AMOUS",
@@ -35,9 +29,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
           type="image/svg+xml"
         />
       </head>
-      <body className={designInter.variable} style={assetStyles}>
-        {children}
-      </body>
+      <body style={assetStyles}>{children}</body>
     </html>
   );
 }

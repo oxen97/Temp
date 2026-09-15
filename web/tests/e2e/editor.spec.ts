@@ -3,6 +3,10 @@ import { expect, test } from "@playwright/test";
 async function waitForEditor(page: import("@playwright/test").Page) {
   await page.goto("/");
   await page.getByLabel("Exhibition canvas").waitFor();
+  if ((page.viewportSize()?.width ?? 0) > 960) {
+    await page.locator(".zoom-menu").click();
+    await page.getByRole("menuitem", { name: /Zoom to Fit/ }).click();
+  }
   await page.waitForTimeout(500);
 }
 
@@ -958,10 +962,14 @@ test("shows pen helper lines while drawing and after completion", async ({
   await expectStablePenControls();
 
   const canvas = page.getByLabel("Exhibition canvas");
+  await page.locator(".zoom-menu").click();
+  await page.getByRole("menuitem", { name: /Actual Size/ }).click();
+  const canvasBox = await canvas.boundingBox();
+  if (!canvasBox) throw new Error("Canvas bounds are unavailable");
   for (let step = 0; step < 40; step += 1) {
     await canvas.dispatchEvent("wheel", {
-      clientX: second.x,
-      clientY: second.y,
+      clientX: canvasBox.x + canvasBox.width / 2,
+      clientY: canvasBox.y + canvasBox.height / 2,
       ctrlKey: true,
       deltaX: 0,
       deltaY: -100,
@@ -1136,8 +1144,15 @@ test("text, zoom, page creation, and delete are functional", async ({
   await page.keyboard.press("Delete");
   await expect(page.getByLabel("Text 1", { exact: true })).toHaveCount(0);
 
+  await page.locator(".zoom-menu").click();
+  await page.getByRole("menuitem", { name: /Actual Size/ }).click();
   await page.getByRole("button", { name: "Zoom", exact: true }).click();
-  await page.mouse.click(box.x + 300, box.y + 250);
+  const canvasBox = await page.getByLabel("Exhibition canvas").boundingBox();
+  if (!canvasBox) throw new Error("Canvas bounds are unavailable");
+  await page.mouse.click(
+    canvasBox.x + canvasBox.width / 2,
+    canvasBox.y + canvasBox.height / 2,
+  );
   await expect(page.getByRole("button", { name: /110 %/ })).toBeVisible();
 
   await page.getByRole("button", { name: "Add scene" }).click();
@@ -1468,17 +1483,20 @@ test("canvas zoom uses Ctrl-wheel and Zoom tool mouse buttons", async ({
   await waitForEditor(page);
 
   const canvas = page.getByLabel("Exhibition canvas");
+  await page.locator(".zoom-menu").click();
+  await page.getByRole("menuitem", { name: /Actual Size/ }).click();
   const zoomButton = page.getByRole("button", { name: "Zoom", exact: true });
   await zoomButton.click();
 
-  const artboard = page.getByLabel("Artboard");
-  const box = await artboard.boundingBox();
-  if (!box) throw new Error("Artboard bounds are unavailable");
+  const box = await canvas.boundingBox();
+  if (!box) throw new Error("Canvas bounds are unavailable");
 
-  await page.mouse.click(box.x + 240, box.y + 200);
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
   await expect(page.getByRole("button", { name: "110 %" })).toBeVisible();
 
-  await page.mouse.click(box.x + 240, box.y + 200, { button: "right" });
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2, {
+    button: "right",
+  });
   await expect(page.getByRole("button", { name: "100 %" })).toBeVisible();
 
   await canvas.dispatchEvent("wheel", {
@@ -1510,6 +1528,9 @@ test("keeps selection and image crop controls at a stable screen size while zoom
   await page.getByRole("button", { name: "Add uploaded asset 1" }).click({
     force: true,
   });
+
+  await page.locator(".zoom-menu").click();
+  await page.getByRole("menuitem", { name: /Actual Size/ }).click();
 
   const artboard = page.getByLabel("Artboard");
   const canvas = page.getByLabel("Exhibition canvas");
@@ -1760,7 +1781,7 @@ test("keeps selection and image crop controls at a stable screen size while zoom
         ),
       ),
     )
-    .toBeLessThan(0.01);
+    .toBeCloseTo(0.1, 2);
   await expect
     .poll(async () => (await corner.boundingBox())?.width ?? 0)
     .toBeCloseTo(9, 1);
@@ -1814,6 +1835,64 @@ test("shows scene before design and renders design controls", async ({
   );
 });
 
+function createTestWavBuffer() {
+  const sampleRate = 8_000;
+  const durationSeconds = 2;
+  const sampleCount = sampleRate * durationSeconds;
+  const bytesPerSample = 2;
+  const dataSize = sampleCount * bytesPerSample;
+  const buffer = Buffer.alloc(44 + dataSize);
+
+  buffer.write("RIFF", 0);
+  buffer.writeUInt32LE(buffer.length - 8, 4);
+  buffer.write("WAVE", 8);
+  buffer.write("fmt ", 12);
+  buffer.writeUInt32LE(16, 16);
+  buffer.writeUInt16LE(1, 20);
+  buffer.writeUInt16LE(1, 22);
+  buffer.writeUInt32LE(sampleRate, 24);
+  buffer.writeUInt32LE(sampleRate * bytesPerSample, 28);
+  buffer.writeUInt16LE(bytesPerSample, 32);
+  buffer.writeUInt16LE(16, 34);
+  buffer.write("data", 36);
+  buffer.writeUInt32LE(dataSize, 40);
+
+  for (let index = 0; index < sampleCount; index += 1) {
+    const sample = Math.sin((index / sampleRate) * Math.PI * 2 * 440);
+    buffer.writeInt16LE(
+      Math.round(sample * 8_000),
+      44 + index * bytesPerSample,
+    );
+  }
+
+  return buffer;
+}
+
+function createTestMp3WithCoverBuffer() {
+  const image = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+    "base64",
+  );
+  const payload = Buffer.concat([
+    Buffer.from([0]),
+    Buffer.from("image/png\0", "ascii"),
+    Buffer.from([3, 0]),
+    image,
+  ]);
+  const frameHeader = Buffer.alloc(10);
+  frameHeader.write("APIC", 0, "ascii");
+  frameHeader.writeUInt32BE(payload.length, 4);
+  const frame = Buffer.concat([frameHeader, payload]);
+  const tagHeader = Buffer.alloc(10);
+  tagHeader.write("ID3", 0, "ascii");
+  tagHeader[3] = 3;
+  tagHeader[6] = (frame.length >>> 21) & 0x7f;
+  tagHeader[7] = (frame.length >>> 14) & 0x7f;
+  tagHeader[8] = (frame.length >>> 7) & 0x7f;
+  tagHeader[9] = frame.length & 0x7f;
+  return Buffer.concat([tagHeader, frame]);
+}
+
 test("matches the Figma sound-panel geometry", async ({ page }) => {
   test.skip(
     (page.viewportSize()?.width ?? 0) <= 960,
@@ -1853,12 +1932,58 @@ test("matches the Figma sound-panel geometry", async ({ page }) => {
     x: 16,
     y: 70,
   });
+  await expectBounds(".sound-file-thumbnail", {
+    height: 33,
+    width: 33,
+    x: 22,
+    y: 78,
+  });
   await expectBounds(".sound-preview-row", {
     height: 13,
     width: 183,
     x: 121,
-    y: 87,
+    y: 85,
   });
+  await expectBounds(".sound-preview-track", {
+    height: 13,
+    width: 163,
+    x: 141,
+    y: 85,
+  });
+  await expectBounds(".sound-upload-copy > span", {
+    height: 10,
+    width: 55,
+    x: 61,
+    y: 98,
+  });
+  await expectBounds(".sound-preview-time", {
+    height: 10,
+    width: 54,
+    x: 263,
+    y: 98,
+  });
+  const [cardBounds, trackBounds, metadataBounds, timeBounds] =
+    await Promise.all([
+      panel.locator(".sound-upload-card").boundingBox(),
+      panel.locator(".sound-preview-track").boundingBox(),
+      panel.locator(".sound-upload-copy > span").boundingBox(),
+      panel.locator(".sound-preview-time").boundingBox(),
+    ]);
+  if (!cardBounds || !trackBounds || !metadataBounds || !timeBounds) {
+    throw new Error("Background music card bounds are unavailable");
+  }
+  expect(
+    cardBounds.x + cardBounds.width - trackBounds.x - trackBounds.width,
+  ).toBeCloseTo(20, 1);
+  expect(
+    timeBounds.y - (trackBounds.y + Math.floor(trackBounds.height / 2) + 1),
+  ).toBeCloseTo(6, 1);
+  expect(
+    cardBounds.y + cardBounds.height - metadataBounds.y - metadataBounds.height,
+  ).toBeCloseTo(10, 1);
+  expect(
+    cardBounds.y + cardBounds.height - timeBounds.y - timeBounds.height,
+  ).toBeCloseTo(10, 1);
   await expectBounds(".sound-slider", {
     height: 7,
     width: 164,
@@ -1873,9 +1998,15 @@ test("matches the Figma sound-panel geometry", async ({ page }) => {
   });
   await expectBounds(".sound-stepper-field", {
     height: 22,
-    width: 72,
+    width: 80,
     x: 111,
     y: 151,
+  });
+  await expectBounds(".sound-stepper-unit", {
+    height: 7,
+    width: 4,
+    x: 195,
+    y: 158.5,
   });
   await expectBounds(".sound-playback-select", {
     height: 22,
@@ -1883,34 +2014,442 @@ test("matches the Figma sound-panel geometry", async ({ page }) => {
     x: 111,
     y: 232,
   });
-  await expectBounds(".sound-add-button", {
-    height: 22,
-    width: 72,
-    x: 252,
-    y: 278,
-  });
-  await expectBounds(".sound-interaction-row", {
-    height: 22,
-    width: 308,
-    x: 16,
-    y: 305,
-  });
-  await expectBounds(
-    ".sound-interaction-row",
-    { height: 134, width: 308, x: 16, y: 331 },
-    1,
-  );
-  await expect(panel.locator(".sound-preview-track > *")).toHaveCount(0);
+  await expect(panel.locator(".sound-preview-waveform")).toHaveCount(1);
   await expect(panel.locator(".sound-bgm-collapse")).toHaveAttribute(
-    "src",
-    /Group%20263\.svg$/,
+    "aria-expanded",
+    "true",
   );
-  await expect(panel.locator(".sound-stepper-field > span").first()).toHaveCSS(
+  await expect(panel.locator(".sound-stepper-unit").first()).toHaveCSS(
     "font-size",
     "6px",
   );
-  await expect(panel).toContainText("Hover");
-  await expect(panel).toContainText("Click");
+  await expect(
+    page.getByRole("spinbutton", { name: "Fade in duration" }),
+  ).toHaveCSS("text-align", "left");
+  await expect(page.getByLabel("Sound volume")).toHaveCSS("text-align", "left");
+  await expect(panel).not.toContainText("Interaction Sounds");
+});
+
+test("shows and expands Interaction Sounds for a selected shape", async ({
+  page,
+}) => {
+  test.skip(
+    (page.viewportSize()?.width ?? 0) <= 960,
+    "Properties panel is desktop-only",
+  );
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await waitForEditor(page);
+
+  const artboard = page.getByLabel("Artboard");
+  const artboardBox = await artboard.boundingBox();
+  if (!artboardBox) throw new Error("Artboard bounds are unavailable");
+  await page.getByRole("button", { name: "Rectangle", exact: true }).click();
+  await page.mouse.move(artboardBox.x + 100, artboardBox.y + 100);
+  await page.mouse.down();
+  await page.mouse.move(artboardBox.x + 220, artboardBox.y + 190, {
+    steps: 2,
+  });
+  await page.mouse.up();
+  await page.getByRole("tab", { name: "SOUND" }).click();
+
+  const panel = page.getByRole("tabpanel", { name: "Sound settings" });
+  const interaction = panel.getByRole("region", {
+    name: "Interaction Sounds",
+  });
+  await expect(interaction).toBeVisible();
+  await expect(panel.getByRole("button", { name: /^Add$/ })).toHaveCount(0);
+
+  const playback = panel.locator(".sound-playback-select");
+  const divider = panel.locator(".sound-interaction-divider");
+  const heading = interaction.getByRole("heading", {
+    name: "Interaction Sounds",
+  });
+  const [playbackBox, dividerBox, headingBox] = await Promise.all([
+    playback.boundingBox(),
+    divider.boundingBox(),
+    heading.boundingBox(),
+  ]);
+  if (!playbackBox || !dividerBox || !headingBox) {
+    throw new Error("Interaction sound spacing bounds are unavailable");
+  }
+  expect(dividerBox.y - (playbackBox.y + playbackBox.height)).toBeCloseTo(
+    13,
+    0,
+  );
+  expect(headingBox.y - dividerBox.y).toBeCloseTo(13, 0);
+
+  const hoverRow = panel.getByRole("group", {
+    name: "Hover interaction sound",
+  });
+  await expect(
+    panel.getByRole("group", { name: "Click interaction sound" }),
+  ).toHaveCount(0);
+  await expect(hoverRow).toHaveClass(/is-empty/);
+  await expect(
+    panel.getByRole("button", { name: "Preview Hover sound" }),
+  ).toBeDisabled();
+  await expect(panel.getByLabel("Hover sound volume")).toBeDisabled();
+  await expect(panel.getByLabel("Hover sound file name: empty")).toBeEmpty();
+  await expect(hoverRow).toHaveCSS("height", "22px");
+
+  await panel.getByRole("button", { name: "More Hover sound options" }).click();
+  await panel.getByRole("menuitem", { name: "Event Settings" }).click();
+  const details = panel.getByRole("group", { name: "Hover sound details" });
+  await expect(details).toBeVisible();
+  await expect(hoverRow).toHaveCSS("height", "261px");
+  await expect(details).toHaveCSS("width", "300px");
+  await expect(details).toHaveCSS("height", "234px");
+  const eventDivider = details.locator(".sound-event-divider");
+  expect((await eventDivider.boundingBox())?.height).toBeCloseTo(1, 1);
+  await expect(eventDivider).toHaveCSS("border-top-style", "solid");
+  await expect(details.getByText("00:00/0.0MB", { exact: true })).toHaveCSS(
+    "white-space",
+    "nowrap",
+  );
+  await expect(
+    details.getByRole("button", { name: "Remove Hover sound file 1" }),
+  ).toHaveCount(0);
+  await expect(
+    details.getByRole("button", { name: "Add Sound" }),
+  ).toBeVisible();
+  await expect(details.getByRole("button", { name: "Add Sound" })).toHaveCSS(
+    "cursor",
+    "pointer",
+  );
+
+  await details.getByRole("radio", { name: "Multiple Sounds" }).click();
+  await expect(hoverRow).toHaveCSS("height", "306px");
+  await expect(details).toHaveCSS("height", "280px");
+  await expect(details.locator(".sound-event-file-control")).toHaveCount(1);
+  await expect(
+    details.getByRole("button", { name: "Add Sound" }),
+  ).toBeVisible();
+  await details
+    .getByRole("button", { name: "Hover sound playback mode" })
+    .click();
+  const playbackModeMenu = page.getByRole("listbox", {
+    name: "Hover sound playback mode menu",
+  });
+  await expect(playbackModeMenu.getByRole("option")).toHaveText([
+    "Shuffle",
+    "Sequential",
+  ]);
+  await expect(
+    playbackModeMenu.getByText("Random", { exact: true }),
+  ).toHaveCount(0);
+});
+
+test("plays every Multiple Sounds file on the same trigger", async ({
+  page,
+}) => {
+  test.skip(
+    (page.viewportSize()?.width ?? 0) <= 960,
+    "Properties panel is desktop-only",
+  );
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await waitForEditor(page);
+
+  const artboard = page.getByLabel("Artboard");
+  const artboardBox = await artboard.boundingBox();
+  if (!artboardBox) throw new Error("Artboard bounds are unavailable");
+  await page.getByRole("button", { name: "Rectangle", exact: true }).click();
+  await page.mouse.move(artboardBox.x + 100, artboardBox.y + 100);
+  await page.mouse.down();
+  await page.mouse.move(artboardBox.x + 220, artboardBox.y + 190, {
+    steps: 2,
+  });
+  await page.mouse.up();
+  await page.getByRole("tab", { name: "SOUND" }).click();
+
+  const panel = page.getByRole("tabpanel", { name: "Sound settings" });
+  await panel.getByRole("button", { name: "More Hover sound options" }).click();
+  await panel.getByRole("menuitem", { name: "Event Settings" }).click();
+  let details = panel.getByRole("group", { name: "Hover sound details" });
+  await details.getByRole("radio", { name: "Multiple Sounds" }).click();
+
+  const [fileChooser] = await Promise.all([
+    page.waitForEvent("filechooser"),
+    details.getByRole("button", { name: "Add Sound" }).click(),
+  ]);
+  await fileChooser.setFiles([
+    "public/figma/sound/test-interaction-chime.wav",
+    "public/figma/sound/test-interaction-click.wav",
+  ]);
+  await expect(details.locator(".sound-event-file-control")).toHaveCount(2);
+
+  await details.getByRole("button", { name: "Hover sound trigger" }).click();
+  await page
+    .getByRole("listbox", { name: "Hover sound trigger menu" })
+    .getByRole("option", { name: "Click" })
+    .click();
+  details = panel.getByRole("group", { name: "Click sound details" });
+  await expect(
+    details.getByRole("button", { name: "Click sound event" }),
+  ).toHaveText("Click");
+
+  await panel.getByRole("button", { name: "More Click sound options" }).click();
+  await panel.getByRole("menuitem", { name: "Event Settings" }).click();
+  const collapsedRow = panel.getByRole("group", {
+    name: "Click interaction sound",
+  });
+  const collapsedName = collapsedRow.locator(".sound-interaction-name");
+  await expect(collapsedName).toHaveCSS("text-overflow", "ellipsis");
+  await expect(collapsedName).toHaveCSS("padding-right", "8px");
+  expect(
+    await collapsedName.evaluate((name) => name.scrollWidth > name.clientWidth),
+  ).toBe(true);
+  const [rowBox, playButtonBox] = await Promise.all([
+    collapsedRow.boundingBox(),
+    collapsedRow
+      .getByRole("button", { name: "Preview Click sound", exact: true })
+      .boundingBox(),
+  ]);
+  if (!rowBox || !playButtonBox) {
+    throw new Error("Collapsed interaction sound row bounds are unavailable");
+  }
+  expect(
+    playButtonBox.y + playButtonBox.height / 2 - (rowBox.y + rowBox.height / 2),
+  ).toBeCloseTo(1, 0);
+
+  await page.getByRole("button", { name: "Preview", exact: true }).click();
+  const preview = page.getByRole("dialog", { name: "Viewer preview" });
+  const audioChannels = preview.locator(".viewer-interaction-sound");
+  await expect(audioChannels).toHaveCount(2);
+  await audioChannels.evaluateAll((audios) => {
+    audios.forEach((audio) => {
+      audio.addEventListener(
+        "play",
+        () => audio.setAttribute("data-played", "true"),
+        { once: true },
+      );
+    });
+  });
+  await preview.locator(".viewer-preview-element").click();
+  await expect
+    .poll(() =>
+      audioChannels.evaluateAll((audios) =>
+        audios.map((audio) => audio.getAttribute("data-played")),
+      ),
+    )
+    .toEqual(["true", "true"]);
+});
+
+test("manages background music files and playback settings", async ({
+  page,
+}) => {
+  test.skip(
+    (page.viewportSize()?.width ?? 0) <= 960,
+    "Properties panel is desktop-only",
+  );
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await waitForEditor(page);
+  await page.getByRole("tab", { name: "SOUND" }).click();
+
+  const panel = page.getByRole("tabpanel", { name: "Sound settings" });
+  const content = panel.locator(".sound-bgm-content");
+  const collapseButton = panel.getByRole("button", {
+    name: "Collapse background music",
+  });
+
+  await expect(panel.getByText("No file", { exact: true })).toBeVisible();
+  await expect(
+    panel.getByRole("button", { name: "Upload background music" }),
+  ).toBeVisible();
+  await expect(
+    panel.getByRole("button", { name: "Play background music preview" }),
+  ).toBeDisabled();
+  await expect(panel.locator(".sound-file-thumbnail-icon")).toHaveCount(0);
+
+  await collapseButton.click();
+  await expect(content).toBeHidden();
+  const expandButton = panel.getByRole("button", {
+    name: "Expand background music",
+  });
+  await expect(expandButton).toHaveAttribute("aria-expanded", "false");
+  await expandButton.click();
+  await expect(content).toBeVisible();
+  await expect(collapseButton).toHaveAttribute("aria-expanded", "true");
+
+  const volumeSlider = panel.getByRole("slider", {
+    name: "Background music volume",
+  });
+  const volumeInput = panel.getByLabel("Sound volume");
+  await volumeSlider.fill("63");
+  await expect(volumeInput).toHaveValue("63");
+  await volumeInput.fill("27");
+  await volumeInput.press("Enter");
+  await expect(volumeSlider).toHaveValue("27");
+
+  const fadeIn = panel.getByRole("spinbutton", { name: "Fade in duration" });
+  const fadeOut = panel.getByRole("spinbutton", { name: "Fade out duration" });
+  await fadeIn.fill("1.2");
+  await fadeIn.press("Enter");
+  await fadeOut.fill("2.4");
+  await fadeOut.press("Enter");
+  await expect(fadeIn).toHaveValue("1.2");
+  await expect(fadeOut).toHaveValue("2.4");
+
+  const loopButton = panel.getByRole("button", { name: "Loop" });
+  await expect(loopButton).toHaveAttribute("aria-pressed", "true");
+  await loopButton.click();
+  await expect(loopButton).toHaveAttribute("aria-pressed", "false");
+
+  const startPlayback = panel.getByRole("button", {
+    name: "Start playback",
+  });
+  await expect(startPlayback).toContainText("On Page Enter");
+  await startPlayback.click();
+  const playbackMenu = panel.getByRole("listbox", {
+    name: "Start playback menu",
+  });
+  await expect(playbackMenu.getByRole("option")).toHaveText([
+    "On Page Enter",
+    "After Delay",
+    "On Interaction",
+    "Manual",
+  ]);
+  await playbackMenu.getByRole("option", { name: "After Delay" }).click();
+  const playbackDelay = panel.getByRole("spinbutton", {
+    name: "Playback delay",
+  });
+  await expect(playbackDelay).toBeVisible();
+  await playbackDelay.fill("1.5");
+  await playbackDelay.press("Enter");
+  await expect(playbackDelay).toHaveValue("1.5");
+  await startPlayback.click();
+  await panel
+    .getByRole("listbox", { name: "Start playback menu" })
+    .getByRole("option", { name: "Manual" })
+    .click();
+  await expect(
+    panel.getByRole("spinbutton", { name: "Playback delay" }),
+  ).toHaveCount(0);
+
+  const fileInput = panel.getByLabel("Choose background music file");
+  await fileInput.setInputFiles({
+    buffer: createTestWavBuffer(),
+    mimeType: "audio/wav",
+    name: "gallery-ambient.wav",
+  });
+
+  await expect(
+    panel.getByText("gallery-ambient.wav", { exact: true }),
+  ).toBeVisible();
+  await expect(panel.getByText("No file", { exact: true })).toHaveCount(0);
+  await expect(
+    panel.getByRole("button", { name: "Play background music preview" }),
+  ).toBeEnabled();
+  await expect(panel.locator(".sound-file-thumbnail-icon")).toBeVisible();
+  await expect(panel.locator(".sound-file-thumbnail-artwork")).toHaveCount(0);
+  const [loadedCardBounds, loadedTrackBounds] = await Promise.all([
+    panel.locator(".sound-upload-card").boundingBox(),
+    panel.locator(".sound-preview-track").boundingBox(),
+  ]);
+  if (!loadedCardBounds || !loadedTrackBounds) {
+    throw new Error("Loaded background music card bounds are unavailable");
+  }
+  expect(
+    loadedCardBounds.x +
+      loadedCardBounds.width -
+      loadedTrackBounds.x -
+      loadedTrackBounds.width,
+  ).toBeCloseTo(20, 1);
+  const playPreview = panel.getByRole("button", {
+    name: "Play background music preview",
+  });
+  const playIconBounds = await playPreview.locator("img").boundingBox();
+  if (!playIconBounds) throw new Error("Play icon bounds are unavailable");
+  await playPreview.click();
+  const pausePreview = panel.getByRole("button", {
+    name: "Pause background music preview",
+  });
+  await expect(pausePreview).toBeVisible();
+  const pauseIcon = pausePreview.locator(".sound-pause-icon");
+  await expect(pauseIcon).toHaveAttribute("viewBox", "0 0 13 13");
+  const pauseIconBounds = await pauseIcon.boundingBox();
+  if (!pauseIconBounds) throw new Error("Pause icon bounds are unavailable");
+  expect(pauseIconBounds.width).toBeCloseTo(playIconBounds.width, 1);
+  expect(pauseIconBounds.height).toBeCloseTo(playIconBounds.height, 1);
+  await expect
+    .poll(async () =>
+      panel.locator(".sound-preview-waveform").evaluate((element) => {
+        const canvas = element as HTMLCanvasElement;
+        const context = canvas.getContext("2d");
+        if (!context) return 0;
+        const pixels = context.getImageData(0, 0, canvas.width, canvas.height);
+        const center = Math.floor(canvas.height / 2);
+        let activePixels = 0;
+        for (let y = 0; y < canvas.height; y += 1) {
+          if (Math.abs(y - center) <= 1) continue;
+          for (let x = 0; x < canvas.width; x += 1) {
+            if (pixels.data[(y * canvas.width + x) * 4 + 3] > 0) {
+              activePixels += 1;
+            }
+          }
+        }
+        return activePixels;
+      }),
+    )
+    .toBeGreaterThan(0);
+  await pausePreview.click();
+  await expect(
+    panel.getByRole("button", { name: "Play background music preview" }),
+  ).toBeVisible();
+  const fileOptions = panel.getByRole("button", {
+    name: "Background music file options",
+  });
+  await fileOptions.click();
+  const fileMenu = panel.getByRole("menu", {
+    name: "Background music file options menu",
+  });
+  await expect(fileMenu.getByRole("menuitem")).toHaveText([
+    "Change File",
+    "Delete File",
+  ]);
+  await fileMenu.getByRole("menuitem", { name: "Delete File" }).click();
+
+  await expect(panel.getByText("No file", { exact: true })).toBeVisible();
+  await expect(
+    panel.getByRole("button", { name: "Upload background music" }),
+  ).toBeVisible();
+  await expect(fileOptions).toHaveCount(0);
+});
+
+test("shows embedded audio cover art and uses an icon when no cover exists", async ({
+  page,
+}) => {
+  test.skip(
+    (page.viewportSize()?.width ?? 0) <= 960,
+    "Properties panel is desktop-only",
+  );
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await waitForEditor(page);
+  await page.getByRole("tab", { name: "SOUND" }).click();
+
+  const panel = page.getByRole("tabpanel", { name: "Sound settings" });
+  const fileInput = panel.getByLabel("Choose background music file");
+  await fileInput.setInputFiles({
+    buffer: createTestMp3WithCoverBuffer(),
+    mimeType: "audio/mpeg",
+    name: "music-with-cover.mp3",
+  });
+
+  const artwork = panel.locator(".sound-file-thumbnail-artwork");
+  await expect(artwork).toBeVisible();
+  await expect
+    .poll(() =>
+      artwork.evaluate((image) => (image as HTMLImageElement).naturalWidth),
+    )
+    .toBe(1);
+  await expect(panel.locator(".sound-file-thumbnail-icon")).toHaveCount(0);
+
+  await fileInput.setInputFiles({
+    buffer: createTestWavBuffer(),
+    mimeType: "audio/wav",
+    name: "music-without-cover.wav",
+  });
+  await expect(panel.locator(".sound-file-thumbnail-icon")).toBeVisible();
+  await expect(artwork).toHaveCount(0);
 });
 
 test("applies page type and viewport sizing in the audience preview", async ({
@@ -3013,13 +3552,15 @@ test("draws a line along the drag direction and shows it in the scene preview", 
   };
   await expectLineEndpointsAligned();
 
-  const lineBox = await line.boundingBox();
-  if (!lineBox) throw new Error("Line bounds are unavailable");
+  await page.locator(".zoom-menu").click();
+  await page.getByRole("menuitem", { name: /Actual Size/ }).click();
+  const zoomAnchorBox = await endHandle.boundingBox();
+  if (!zoomAnchorBox) throw new Error("Line end handle bounds are unavailable");
   const canvas = page.getByLabel("Exhibition canvas");
   for (let step = 0; step < 40; step += 1) {
     await canvas.dispatchEvent("wheel", {
-      clientX: lineBox.x + lineBox.width / 2,
-      clientY: lineBox.y + lineBox.height / 2,
+      clientX: zoomAnchorBox.x + zoomAnchorBox.width / 2,
+      clientY: zoomAnchorBox.y + zoomAnchorBox.height / 2,
       ctrlKey: true,
       deltaX: 0,
       deltaY: -100,

@@ -97,12 +97,91 @@ export type CanvasElement = {
   points?: PathPoint[];
   closed?: boolean;
   vectorPaths?: VectorPath[];
+  interactionSounds?: InteractionSoundSettings[];
+};
+
+export type InteractionSoundTrigger =
+  "hover" | "click" | "press" | "drag" | "scroll";
+export type InteractionSoundEvent =
+  | "enter"
+  | "while-hovering"
+  | "leave"
+  | "click"
+  | "double-click"
+  | "press-start"
+  | "while-pressing"
+  | "release"
+  | "drag-start"
+  | "while-dragging"
+  | "drop"
+  | "while-scrolling"
+  | "reach-point";
+export type InteractionSoundSource = "single" | "multiple";
+export type InteractionSoundPlaybackMode = "shuffle" | "sequential";
+
+export type InteractionSoundSettings = {
+  assets: BackgroundMusicAsset[];
+  avoidRepeating: boolean;
+  event: InteractionSoundEvent;
+  fadeInSeconds: number;
+  fadeOutSeconds: number;
+  id: string;
+  playbackMode: InteractionSoundPlaybackMode;
+  soundSource: InteractionSoundSource;
+  trigger: InteractionSoundTrigger;
+  volume: number;
+};
+
+export type BackgroundMusicStartMode =
+  "on-page-enter" | "after-delay" | "on-interaction" | "manual";
+
+export type BackgroundMusicAsset = {
+  artworkSrc?: string;
+  durationSeconds: number;
+  mimeType: string;
+  name: string;
+  sizeBytes: number;
+  src: string;
+};
+
+export type BackgroundMusicSettings = {
+  asset: BackgroundMusicAsset | null;
+  delaySeconds: number;
+  fadeInSeconds: number;
+  fadeOutSeconds: number;
+  loop: boolean;
+  startPlayback: BackgroundMusicStartMode;
+  volume: number;
+};
+
+export const defaultInteractionSoundSettings: InteractionSoundSettings = {
+  assets: [],
+  avoidRepeating: true,
+  event: "enter",
+  fadeInSeconds: 0,
+  fadeOutSeconds: 0,
+  id: "interaction-sound-primary",
+  playbackMode: "shuffle",
+  soundSource: "single",
+  trigger: "hover",
+  volume: 100,
+};
+
+export const defaultBackgroundMusicSettings: BackgroundMusicSettings = {
+  asset: null,
+  delaySeconds: 1,
+  fadeInSeconds: 0,
+  fadeOutSeconds: 0,
+  loop: true,
+  startPlayback: "on-page-enter",
+  volume: 100,
 };
 
 export type EditorPage = {
   id: string;
   name: string;
   elements: CanvasElement[];
+  backgroundMusic?: BackgroundMusicSettings;
 };
 
 export type ArtboardSettings = {
@@ -164,6 +243,12 @@ type EditorState = {
   setSelectedElementIds: (ids: string[]) => void;
   setZoom: (zoom: number) => void;
   updateArtboard: (updates: Partial<ArtboardSettings>) => void;
+  updateBackgroundMusic: (updates: Partial<BackgroundMusicSettings>) => void;
+  setBackgroundMusicArtwork: (
+    pageId: string,
+    assetSrc: string,
+    artworkSrc: string,
+  ) => void;
   addPage: () => void;
   removePage: () => void;
   renamePage: (pageId: string, name: string) => void;
@@ -192,7 +277,7 @@ type EditorState = {
 const initialArtboard: ArtboardSettings = {
   width: 1920,
   height: 1080,
-  background: "#ffffff",
+  background: "#d9d9d9",
   cornerRadius: 10,
   pageAspectRatio: "16:9",
   pageType: "screen",
@@ -229,6 +314,14 @@ function createId(prefix: string) {
 function clonePages(pages: EditorPage[]) {
   return pages.map((page) => ({
     ...page,
+    backgroundMusic: page.backgroundMusic
+      ? {
+          ...page.backgroundMusic,
+          asset: page.backgroundMusic.asset
+            ? { ...page.backgroundMusic.asset }
+            : null,
+        }
+      : undefined,
     elements: page.elements.map((element) => ({
       ...element,
       points: element.points?.map((point) => ({
@@ -262,8 +355,45 @@ function clonePages(pages: EditorPage[]) {
             ),
           }
         : undefined,
+      interactionSounds: element.interactionSounds?.map((sound) => ({
+        ...sound,
+        assets: sound.assets.map((asset) => ({ ...asset })),
+      })),
     })),
   }));
+}
+
+function addBackgroundMusicArtwork(
+  pages: EditorPage[],
+  pageId: string,
+  assetSrc: string,
+  artworkSrc: string,
+) {
+  let changed = false;
+  const updatedPages = pages.map((page) => {
+    const backgroundMusic = page.backgroundMusic;
+    const asset = backgroundMusic?.asset;
+    if (
+      !backgroundMusic ||
+      page.id !== pageId ||
+      asset?.src !== assetSrc ||
+      asset.artworkSrc === artworkSrc
+    ) {
+      return page;
+    }
+    changed = true;
+    return {
+      ...page,
+      backgroundMusic: {
+        ...backgroundMusic,
+        asset: {
+          ...asset,
+          artworkSrc,
+        },
+      },
+    };
+  });
+  return changed ? updatedPages : pages;
 }
 
 function cloneArtboard(artboard: ArtboardSettings): ArtboardSettings {
@@ -350,6 +480,48 @@ export const useEditorStore = create<EditorState>((set) => ({
         future: [],
       };
     }),
+  updateBackgroundMusic: (updates) =>
+    set((state) => ({
+      pages: state.pages.map((page) =>
+        page.id === state.activePageId
+          ? {
+              ...page,
+              backgroundMusic: {
+                ...defaultBackgroundMusicSettings,
+                ...page.backgroundMusic,
+                ...updates,
+              },
+            }
+          : page,
+      ),
+    })),
+  setBackgroundMusicArtwork: (pageId, assetSrc, artworkSrc) =>
+    set((state) => ({
+      pages: addBackgroundMusicArtwork(
+        state.pages,
+        pageId,
+        assetSrc,
+        artworkSrc,
+      ),
+      past: state.past.map((snapshot) => {
+        const pages = addBackgroundMusicArtwork(
+          snapshot.pages,
+          pageId,
+          assetSrc,
+          artworkSrc,
+        );
+        return pages === snapshot.pages ? snapshot : { ...snapshot, pages };
+      }),
+      future: state.future.map((snapshot) => {
+        const pages = addBackgroundMusicArtwork(
+          snapshot.pages,
+          pageId,
+          assetSrc,
+          artworkSrc,
+        );
+        return pages === snapshot.pages ? snapshot : { ...snapshot, pages };
+      }),
+    })),
   addPage: () =>
     set((state) => {
       const pageNumber = state.pages.length + 1;

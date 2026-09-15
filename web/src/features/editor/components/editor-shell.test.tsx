@@ -5,14 +5,38 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { useEditorStore } from "../store/editor-store";
-import type { CanvasElement } from "../store/editor-store";
-import { EditorShell } from "./editor-shell";
+import { INTERFACE_SCALE_STORAGE_KEY } from "../lib/interface-scale";
+import {
+  defaultInteractionSoundSettings,
+  useEditorStore,
+} from "../store/editor-store";
+import type {
+  CanvasElement,
+  InteractionSoundSettings,
+} from "../store/editor-store";
+import {
+  calculateCanvasFitZoom,
+  calculateInteractionSoundVolume,
+  EditorShell,
+} from "./editor-shell";
 
 beforeEach(() => {
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
+  vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
+  vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
+  Object.defineProperty(URL, "createObjectURL", {
+    configurable: true,
+    value: vi.fn(() => "blob:background-music-test"),
+  });
+  Object.defineProperty(URL, "revokeObjectURL", {
+    configurable: true,
+    value: vi.fn(),
+  });
+  window.localStorage.clear();
   useEditorStore.setState({
     activePageId: "page-1",
     activeTool: "selection",
@@ -32,7 +56,181 @@ beforeEach(() => {
   });
 });
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
+
+function setTestBackgroundMusic(
+  startPlayback: "on-page-enter" | "after-delay" | "on-interaction" | "manual",
+  delaySeconds = 0,
+) {
+  useEditorStore.setState((state) => ({
+    pages: state.pages.map((page) =>
+      page.id === state.activePageId
+        ? {
+            ...page,
+            backgroundMusic: {
+              asset: {
+                durationSeconds: 1,
+                mimeType: "audio/wav",
+                name: "viewer-test.wav",
+                sizeBytes: 1024,
+                src: "blob:viewer-background-music-test",
+              },
+              delaySeconds,
+              fadeInSeconds: 0,
+              fadeOutSeconds: 0,
+              loop: false,
+              startPlayback,
+              volume: 100,
+            },
+          }
+        : page,
+    ),
+  }));
+}
+
+function testInteractionSound(
+  overrides: Partial<InteractionSoundSettings> = {},
+): InteractionSoundSettings {
+  return {
+    ...defaultInteractionSoundSettings,
+    id: "test-interaction-sound",
+    ...overrides,
+    assets: overrides.assets
+      ? overrides.assets.map((asset) => ({ ...asset }))
+      : [],
+  };
+}
+
+function testSoundAsset(name: string) {
+  return {
+    durationSeconds: 1,
+    mimeType: "audio/wav",
+    name: `${name}.wav`,
+    sizeBytes: 128,
+    src: `blob:${name}`,
+  };
+}
+
+function testSoundShape(
+  id: string,
+  x: number,
+  interactionSounds?: InteractionSoundSettings[],
+): CanvasElement {
+  return {
+    cornerRadius: 0,
+    fill: "#ffffff",
+    height: 80,
+    id,
+    interactionSounds,
+    locked: false,
+    name: id,
+    opacity: 100,
+    rotation: 0,
+    stroke: "#000000",
+    strokeWidth: 0,
+    type: "rectangle",
+    visible: true,
+    width: 100,
+    x,
+    y: 100,
+  };
+}
+
+function createMp3WithEmbeddedPng() {
+  const ascii = (value: string) =>
+    Uint8Array.from(value, (character) => character.charCodeAt(0));
+  const concat = (...parts: Uint8Array[]) => {
+    const result = new Uint8Array(
+      parts.reduce((total, part) => total + part.length, 0),
+    );
+    let offset = 0;
+    parts.forEach((part) => {
+      result.set(part, offset);
+      offset += part.length;
+    });
+    return result;
+  };
+  const uint32 = (value: number) =>
+    Uint8Array.of(
+      (value >>> 24) & 0xff,
+      (value >>> 16) & 0xff,
+      (value >>> 8) & 0xff,
+      value & 0xff,
+    );
+  const syncSafe = (value: number) =>
+    Uint8Array.of(
+      (value >>> 21) & 0x7f,
+      (value >>> 14) & 0x7f,
+      (value >>> 7) & 0x7f,
+      value & 0x7f,
+    );
+  const png = Uint8Array.from(
+    atob(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+    ),
+    (character) => character.charCodeAt(0),
+  );
+  const payload = concat(
+    Uint8Array.of(0),
+    ascii("image/png"),
+    Uint8Array.of(0, 3, 0),
+    png,
+  );
+  const frame = concat(
+    ascii("APIC"),
+    uint32(payload.length),
+    Uint8Array.of(0, 0),
+    payload,
+  );
+  const tag = concat(
+    ascii("ID3"),
+    Uint8Array.of(3, 0, 0),
+    syncSafe(frame.length),
+    frame,
+  );
+  return new File([tag], "covered.mp3", { type: "audio/mpeg" });
+}
+
+describe("canvas fit zoom", () => {
+  it("fits to the available canvas without using device pixel ratio", () => {
+    expect(calculateCanvasFitZoom(1200, 900, 1920, 1080)).toBe(60.62);
+    expect(calculateCanvasFitZoom(3000, 2000, 1920, 1080)).toBe(154.38);
+  });
+
+  it("clamps invalid and extreme fit values", () => {
+    expect(calculateCanvasFitZoom(0, 0, 1920, 1080)).toBe(100);
+    expect(calculateCanvasFitZoom(10, 10, 1920, 1080)).toBe(5);
+    expect(calculateCanvasFitZoom(20000, 20000, 100, 100)).toBe(500);
+  });
+});
+
+describe("interaction sound fades", () => {
+  const settings = {
+    fadeInSeconds: 1,
+    fadeOutSeconds: 1,
+    volume: 80,
+  };
+
+  it("applies fade-in and natural fade-out without fading every loop", () => {
+    expect(calculateInteractionSoundVolume(settings, 0, 0, 10, false)).toBe(0);
+    expect(
+      calculateInteractionSoundVolume(settings, 0.5, 0.5, 10, false),
+    ).toBeCloseTo(0.4, 5);
+    expect(calculateInteractionSoundVolume(settings, 2, 5, 10, false)).toBe(
+      0.8,
+    );
+    expect(
+      calculateInteractionSoundVolume(settings, 2, 9.5, 10, false),
+    ).toBeCloseTo(0.4, 5);
+    expect(calculateInteractionSoundVolume(settings, 2, 9.5, 10, true)).toBe(
+      0.8,
+    );
+  });
+});
 
 describe("EditorShell", () => {
   it("starts with one empty page and no fabricated layers", () => {
@@ -44,6 +242,77 @@ describe("EditorShell", () => {
     expect(screen.getByLabelText("Properties")).toBeInTheDocument();
     expect(screen.getByText("Intro")).toBeInTheDocument();
     expect(screen.getByLabelText("Layers")).toBeEmptyDOMElement();
+  });
+
+  it("scales the editor chrome without changing the canvas zoom", async () => {
+    render(<EditorShell />);
+
+    fireEvent.click(screen.getByRole("button", { name: "100 %" }));
+    expect(
+      screen.getByRole("menu", { name: "View and interface scale" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("menuitemradio", { name: "Auto (100%)" }),
+    ).toHaveAttribute("aria-checked", "true");
+
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "125%" }));
+
+    await waitFor(() =>
+      expect(document.querySelector(".editor-shell")).toHaveAttribute(
+        "data-interface-scale",
+        "125",
+      ),
+    );
+    expect(document.querySelector(".editor-shell")).toHaveStyle(
+      "--interface-scale: 1.25",
+    );
+    expect(window.localStorage.getItem(INTERFACE_SCALE_STORAGE_KEY)).toBe(
+      "125",
+    );
+    expect(useEditorStore.getState().zoom).toBe(100);
+    expect(screen.getByLabelText("Exhibition canvas")).not.toHaveStyle(
+      "zoom: 1.25",
+    );
+    expect(document.querySelectorAll(".interface-scale-surface")).toHaveLength(
+      5,
+    );
+    expect(screen.getByLabelText("Creation tools")).toHaveClass(
+      "interface-scale-surface",
+    );
+    expect(screen.getByLabelText("Project panels")).toHaveClass(
+      "interface-scale-surface",
+    );
+    expect(screen.getByLabelText("Properties")).toHaveClass(
+      "interface-scale-surface",
+    );
+  });
+
+  it("offers Zoom to Fit independently from interface scale", async () => {
+    render(<EditorShell />);
+    const canvas = screen.getByLabelText("Exhibition canvas");
+    Object.defineProperty(canvas, "getBoundingClientRect", {
+      configurable: true,
+      value: () => ({
+        bottom: 900,
+        height: 900,
+        left: 0,
+        right: 1200,
+        toJSON: () => ({}),
+        top: 0,
+        width: 1200,
+        x: 0,
+        y: 0,
+      }),
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "100 %" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /Zoom to Fit/ }));
+
+    await waitFor(() => expect(useEditorStore.getState().zoom).toBe(96.36));
+
+    act(() => useEditorStore.getState().setZoom(200));
+    fireEvent.keyDown(window, { code: "Digit1", key: "!", shiftKey: true });
+    expect(useEditorStore.getState().zoom).toBe(96.36);
   });
 
   it("renders gradient and image backgrounds in the SCENES thumbnail", () => {
@@ -161,16 +430,1027 @@ describe("EditorShell", () => {
       "true",
     );
     expect(screen.getByText("Background Music (BGM)")).toBeInTheDocument();
-    expect(screen.getByText("Interaction Sounds")).toBeInTheDocument();
+    expect(screen.queryByText("Interaction Sounds")).not.toBeInTheDocument();
+    expect(screen.getByText("No file")).toBeInTheDocument();
+    expect(
+      document.querySelector(".sound-file-thumbnail-icon"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Upload background music" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Play background music preview" }),
+    ).toBeDisabled();
     expect(screen.getByText("00:00 / 0.0MB")).toBeInTheDocument();
-    expect(screen.getAllByText("효과음 이름.wav")).toHaveLength(2);
-    expect(screen.getByLabelText("Sound volume")).toHaveValue("100");
-    expect(screen.getByRole("button", { name: "Loop" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
+    expect(screen.getByLabelText("Sound volume")).toHaveValue(100);
+    expect(screen.getByLabelText("Fade in duration")).toHaveValue(0);
+    expect(screen.getByLabelText("Fade out duration")).toHaveValue(0);
+    const loopButton = screen.getByRole("button", { name: "Loop" });
+    expect(loopButton).toHaveAttribute("aria-pressed", "true");
+    expect(loopButton).toHaveClass("is-active");
+    expect(
+      document.querySelector<HTMLAudioElement>(".sound-upload-card audio"),
+    ).toHaveProperty("loop", true);
+    expect(
+      screen.getByRole("button", { name: "Start playback" }),
+    ).toHaveTextContent("On Page Enter");
     expect(screen.getByRole("tab", { name: "DESIGN" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "SCENES" })).toBeInTheDocument();
+  });
+
+  it("only shows Interaction Sounds for selected shapes", () => {
+    const rectangle: CanvasElement = {
+      cornerRadius: 0,
+      fill: "#ffffff",
+      height: 80,
+      id: "sound-rectangle",
+      locked: false,
+      name: "Sound Rectangle",
+      opacity: 100,
+      rotation: 0,
+      stroke: "#000000",
+      strokeWidth: 0,
+      type: "rectangle",
+      visible: true,
+      width: 100,
+      x: 100,
+      y: 100,
+    };
+    const circle: CanvasElement = {
+      ...rectangle,
+      id: "sound-circle",
+      name: "Sound Circle",
+      type: "circle",
+      x: 240,
+    };
+    const text: CanvasElement = {
+      ...rectangle,
+      fontFamily: "Inter",
+      fontSize: 24,
+      fontWeight: "400",
+      id: "sound-text",
+      name: "Sound Text",
+      text: "Text",
+      type: "text",
+      x: 380,
+    };
+    useEditorStore.setState({
+      pages: [
+        {
+          elements: [rectangle, circle, text],
+          id: "page-1",
+          name: "Intro",
+        },
+      ],
+      selectedElementIds: [rectangle.id],
+    });
+
+    render(<EditorShell />);
+    fireEvent.click(screen.getByRole("tab", { name: "SOUND" }));
+
+    expect(
+      screen.getByRole("region", { name: "Interaction Sounds" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /^Add$/ }),
+    ).not.toBeInTheDocument();
+
+    act(() =>
+      useEditorStore.setState({
+        selectedElementIds: [rectangle.id, circle.id],
+      }),
+    );
+    expect(screen.getByRole("button", { name: /^Add$/ })).toBeInTheDocument();
+
+    act(() => useEditorStore.setState({ selectedElementIds: [text.id] }));
+    expect(
+      screen.queryByRole("region", { name: "Interaction Sounds" }),
+    ).not.toBeInTheDocument();
+
+    act(() =>
+      useEditorStore.setState({
+        selectedElementIds: [rectangle.id, text.id],
+      }),
+    );
+    expect(
+      screen.queryByRole("region", { name: "Interaction Sounds" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("disables empty interaction audio and opens its Event Settings", () => {
+    const rectangle: CanvasElement = {
+      cornerRadius: 0,
+      fill: "#ffffff",
+      height: 80,
+      id: "interaction-sound-rectangle",
+      locked: false,
+      name: "Interaction Sound Rectangle",
+      opacity: 100,
+      rotation: 0,
+      stroke: "#000000",
+      strokeWidth: 0,
+      type: "rectangle",
+      visible: true,
+      width: 100,
+      x: 100,
+      y: 100,
+    };
+    useEditorStore.setState({
+      pages: [{ elements: [rectangle], id: "page-1", name: "Intro" }],
+      selectedElementIds: [rectangle.id],
+    });
+
+    render(<EditorShell />);
+    fireEvent.click(screen.getByRole("tab", { name: "SOUND" }));
+
+    const hoverRow = screen.getByRole("group", {
+      name: "Hover interaction sound",
+    });
+    expect(hoverRow).toHaveClass("is-empty");
+    expect(
+      screen.queryByRole("group", { name: "Click interaction sound" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByLabelText("Hover sound file name: empty"),
+    ).toBeEmptyDOMElement();
+    expect(
+      screen.getByRole("button", { name: "Preview Hover sound" }),
+    ).toBeDisabled();
+    expect(screen.getByLabelText("Hover sound volume")).toBeDisabled();
+    expect(within(hoverRow).getByText("100 %")).toHaveClass(
+      "sound-interaction-volume",
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "More Hover sound options" }),
+    );
+    expect(
+      screen.getByRole("menu", { name: "Hover sound options menu" }),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Event Settings" }));
+
+    expect(hoverRow).toHaveClass("is-expanded");
+    const details = screen.getByRole("group", {
+      name: "Hover sound details",
+    });
+    expect(within(details).getByText("Event Settings")).toBeInTheDocument();
+    expect(within(details).getByText("Trigger")).toBeInTheDocument();
+    expect(within(details).getByText("Event")).toBeInTheDocument();
+    expect(within(details).getByText("Sound Source")).toBeInTheDocument();
+    expect(
+      within(details).getByRole("radio", { name: "Single Sound" }),
+    ).toHaveAttribute("aria-checked", "true");
+    expect(within(details).getByText("Sound File")).toBeInTheDocument();
+    expect(
+      within(details).getByRole("button", { name: "Add Sound" }),
+    ).toBeInTheDocument();
+    expect(within(details).queryByText("Change Sound")).not.toBeInTheDocument();
+    expect(within(details).getByText("00:00/0.0MB")).toBeInTheDocument();
+    expect(
+      within(details).queryByRole("button", {
+        name: "Remove Hover sound file 1",
+      }),
+    ).not.toBeInTheDocument();
+    expect(within(details).getByText("Fade In")).toBeInTheDocument();
+    expect(within(details).getByText("Fade Out")).toBeInTheDocument();
+
+    fireEvent.click(
+      within(details).getByRole("radio", { name: "Multiple Sounds" }),
+    );
+    expect(details).toHaveClass("is-multiple");
+    expect(details.querySelectorAll(".sound-event-file-control")).toHaveLength(
+      1,
+    );
+    expect(
+      within(details).getByRole("button", { name: "Add Sound" }),
+    ).toBeInTheDocument();
+    expect(within(details).getByText("Playback Mode")).toBeInTheDocument();
+    expect(
+      within(details).getByText("Avoid repeating the same sound"),
+    ).toBeInTheDocument();
+
+    fireEvent.click(
+      within(details).getByRole("button", {
+        name: "Hover sound playback mode",
+      }),
+    );
+    const playbackMenu = screen.getByRole("listbox", {
+      name: "Hover sound playback mode menu",
+    });
+    expect(
+      within(playbackMenu)
+        .getAllByRole("option")
+        .map((option) => option.textContent),
+    ).toEqual(["Shuffle", "Sequential"]);
+    expect(within(playbackMenu).queryByText("Random")).not.toBeInTheDocument();
+  });
+
+  it("shows the exact Event choices for each interaction sound Trigger", () => {
+    const rectangle = testSoundShape("trigger-event-rectangle", 100);
+    useEditorStore.setState({
+      pages: [{ elements: [rectangle], id: "page-1", name: "Intro" }],
+      selectedElementIds: [rectangle.id],
+    });
+
+    render(<EditorShell />);
+    fireEvent.click(screen.getByRole("tab", { name: "SOUND" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "More Hover sound options" }),
+    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Event Settings" }));
+
+    const expected = [
+      {
+        events: ["Enter", "While Hovering", "Leave"],
+        label: "Hover",
+        value: "hover",
+      },
+      {
+        events: ["Click", "Double Click"],
+        label: "Click",
+        value: "click",
+      },
+      {
+        events: ["Press Start", "While Pressing", "Release"],
+        label: "Press",
+        value: "press",
+      },
+      {
+        events: ["Drag Start", "While Dragging", "Drop"],
+        label: "Drag",
+        value: "drag",
+      },
+      {
+        events: ["While Scrolling", "Reach Point"],
+        label: "Scroll",
+        value: "scroll",
+      },
+    ] as const;
+    let currentLabel = "Hover";
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Hover sound trigger" }),
+    );
+    const triggerMenu = screen.getByRole("listbox", {
+      name: "Hover sound trigger menu",
+    });
+    expect(
+      within(triggerMenu)
+        .getAllByRole("option")
+        .map((option) => option.textContent),
+    ).toEqual(expected.map(({ label }) => label));
+    fireEvent.click(within(triggerMenu).getByRole("option", { name: "Hover" }));
+
+    expected.forEach(({ events, label, value }) => {
+      if (label !== currentLabel) {
+        fireEvent.click(
+          screen.getByRole("button", {
+            name: `${currentLabel} sound trigger`,
+          }),
+        );
+        fireEvent.click(
+          within(
+            screen.getByRole("listbox", {
+              name: `${currentLabel} sound trigger menu`,
+            }),
+          ).getByRole("option", { name: label }),
+        );
+        currentLabel = label;
+      }
+
+      const details = screen.getByRole("group", {
+        name: `${label} sound details`,
+      });
+      const eventButton = within(details).getByRole("button", {
+        name: `${label} sound event`,
+      });
+      expect(eventButton).toHaveTextContent(events[0]);
+      fireEvent.click(eventButton);
+      const eventMenu = screen.getByRole("listbox", {
+        name: `${label} sound event menu`,
+      });
+      expect(
+        within(eventMenu)
+          .getAllByRole("option")
+          .map((option) => option.textContent),
+      ).toEqual([...events]);
+      fireEvent.click(
+        within(eventMenu).getByRole("option", { name: events[0] }),
+      );
+
+      const stored =
+        useEditorStore.getState().pages[0].elements[0].interactionSounds?.[0];
+      expect(stored?.trigger).toBe(value);
+      expect(stored?.event).toBe(
+        value === "hover"
+          ? "enter"
+          : value === "click"
+            ? "click"
+            : value === "press"
+              ? "press-start"
+              : value === "drag"
+                ? "drag-start"
+                : "while-scrolling",
+      );
+    });
+  });
+
+  it("uploads one or multiple interaction sounds and uses the supplied steppers", () => {
+    const rectangle = testSoundShape("upload-sound-rectangle", 100);
+    vi.mocked(URL.createObjectURL).mockImplementation(
+      (blob) => `blob:${blob instanceof File ? blob.name : "audio"}`,
+    );
+    useEditorStore.setState({
+      pages: [{ elements: [rectangle], id: "page-1", name: "Intro" }],
+      selectedElementIds: [rectangle.id],
+    });
+
+    render(<EditorShell />);
+    fireEvent.click(screen.getByRole("tab", { name: "SOUND" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "More Hover sound options" }),
+    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Event Settings" }));
+
+    let details = screen.getByRole("group", { name: "Hover sound details" });
+    const increaseFade = within(details).getByRole("button", {
+      name: "Increase Hover sound fade in duration",
+    });
+    const decreaseFade = within(details).getByRole("button", {
+      name: "Decrease Hover sound fade in duration",
+    });
+    expect(increaseFade.querySelector("img")?.getAttribute("src")).toContain(
+      "/figma/sound/stepper-up.svg",
+    );
+    expect(decreaseFade.querySelector("img")?.getAttribute("src")).toContain(
+      "/figma/sound/stepper-down.svg",
+    );
+    fireEvent.click(increaseFade);
+    expect(
+      within(details).getByLabelText("Hover sound fade in duration"),
+    ).toHaveValue(0.1);
+
+    fireEvent.click(within(details).getByRole("button", { name: "Add Sound" }));
+    fireEvent.change(screen.getByLabelText("Choose interaction sound file"), {
+      target: {
+        files: [new File(["first"], "first.wav", { type: "audio/wav" })],
+      },
+    });
+    details = screen.getByRole("group", { name: "Hover sound details" });
+    expect(
+      within(details).getByRole("button", { name: "Change Sound" }),
+    ).toBeInTheDocument();
+    expect(
+      within(details).getByRole("button", {
+        name: "Remove Hover sound file 1",
+      }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Preview Hover sound" }),
+    ).toBeEnabled();
+    expect(screen.getByLabelText("Hover sound volume")).toBeEnabled();
+
+    fireEvent.click(
+      within(details).getByRole("radio", { name: "Multiple Sounds" }),
+    );
+    details = screen.getByRole("group", { name: "Hover sound details" });
+    expect(details.querySelectorAll(".sound-event-file-control")).toHaveLength(
+      1,
+    );
+    fireEvent.click(within(details).getByRole("button", { name: "Add Sound" }));
+    fireEvent.change(screen.getByLabelText("Choose interaction sound file"), {
+      target: {
+        files: [new File(["second"], "second.wav", { type: "audio/wav" })],
+      },
+    });
+    details = screen.getByRole("group", { name: "Hover sound details" });
+    expect(details.querySelectorAll(".sound-event-file-control")).toHaveLength(
+      2,
+    );
+    expect(within(details).getByText("first.wav")).toBeInTheDocument();
+    expect(within(details).getByText("second.wav")).toBeInTheDocument();
+    expect(
+      useEditorStore.getState().pages[0].elements[0].interactionSounds?.[0]
+        .assets,
+    ).toHaveLength(2);
+  });
+
+  it("collapses the background music section and edits its playback settings", () => {
+    render(<EditorShell />);
+    fireEvent.click(screen.getByRole("tab", { name: "SOUND" }));
+
+    const collapseButton = screen.getByRole("button", {
+      name: "Collapse background music",
+    });
+    const content = document.querySelector<HTMLElement>(".sound-bgm-content")!;
+    expect(collapseButton).toHaveAttribute("aria-expanded", "true");
+    expect(collapseButton).toHaveClass("is-expanded");
+    expect(content).not.toHaveAttribute("hidden");
+
+    fireEvent.click(collapseButton);
+    expect(
+      screen.getByRole("button", { name: "Expand background music" }),
+    ).toHaveAttribute("aria-expanded", "false");
+    expect(content).toHaveAttribute("hidden");
+    fireEvent.click(
+      screen.getByRole("button", { name: "Expand background music" }),
+    );
+
+    fireEvent.change(screen.getByLabelText("Background music volume"), {
+      target: { value: "62" },
+    });
+    expect(screen.getByLabelText("Sound volume")).toHaveValue(62);
+    fireEvent.change(screen.getByLabelText("Fade in duration"), {
+      target: { value: "1.5" },
+    });
+    fireEvent.change(screen.getByLabelText("Fade out duration"), {
+      target: { value: "2.25" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Loop" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Start playback" }));
+    expect(
+      screen.getByRole("option", { name: "On Page Enter" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("option", { name: "After Delay" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("option", { name: "On Interaction" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Manual" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("option", { name: "After Delay" }));
+    fireEvent.change(screen.getByLabelText("Playback delay"), {
+      target: { value: "3.5" },
+    });
+
+    expect(screen.getByRole("button", { name: "Loop" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+    expect(screen.getByLabelText("Playback delay")).toHaveValue(3.5);
+    expect(useEditorStore.getState().pages[0].backgroundMusic).toMatchObject({
+      delaySeconds: 3.5,
+      fadeInSeconds: 1.5,
+      fadeOutSeconds: 2.25,
+      loop: false,
+      startPlayback: "after-delay",
+      volume: 62,
+    });
+
+    fireEvent.click(screen.getByRole("tab", { name: "DESIGN" }));
+    fireEvent.click(screen.getByRole("tab", { name: "SOUND" }));
+    expect(screen.getByLabelText("Sound volume")).toHaveValue(62);
+    expect(
+      screen.getByRole("button", { name: "Start playback" }),
+    ).toHaveTextContent("After Delay");
+  });
+
+  it("uploads, changes, and deletes the background music file", () => {
+    render(<EditorShell />);
+    fireEvent.click(screen.getByRole("tab", { name: "SOUND" }));
+
+    const input = screen.getByLabelText("Choose background music file");
+    fireEvent.change(input, {
+      target: {
+        files: [
+          new File([new Uint8Array([82, 73, 70, 70])], "ambient.wav", {
+            type: "audio/wav",
+          }),
+        ],
+      },
+    });
+
+    expect(screen.getByText("ambient.wav")).toBeInTheDocument();
+    expect(screen.queryByText("No file")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Upload background music" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Play background music preview" }),
+    ).toBeEnabled();
+    expect(
+      document.querySelector(".sound-file-thumbnail-icon"),
+    ).toBeInTheDocument();
+    expect(
+      document.querySelector(".sound-file-thumbnail-artwork"),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Background music file options" }),
+    );
+    expect(
+      screen.getByRole("menuitem", { name: "Change File" }),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Delete File" }));
+
+    expect(screen.getByText("No file")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Upload background music" }),
+    ).toBeInTheDocument();
+    expect(
+      useEditorStore.getState().pages[0].backgroundMusic?.asset,
+    ).toBeNull();
+  });
+
+  it("shows embedded cover art and falls back to the audio icon if it cannot render", async () => {
+    vi.mocked(URL.createObjectURL)
+      .mockReturnValueOnce("blob:covered-audio-test")
+      .mockReturnValueOnce("blob:embedded-cover-test");
+    render(<EditorShell />);
+    fireEvent.click(screen.getByRole("tab", { name: "SOUND" }));
+
+    fireEvent.change(screen.getByLabelText("Choose background music file"), {
+      target: { files: [createMp3WithEmbeddedPng()] },
+    });
+
+    const artwork = await waitFor(() => {
+      const image = document.querySelector<HTMLImageElement>(
+        ".sound-file-thumbnail-artwork",
+      );
+      expect(image).toHaveAttribute("src", "blob:embedded-cover-test");
+      return image!;
+    });
+    expect(
+      document.querySelector(".sound-file-thumbnail-icon"),
+    ).not.toBeInTheDocument();
+    expect(
+      useEditorStore.getState().pages[0].backgroundMusic?.asset?.artworkSrc,
+    ).toBe("blob:embedded-cover-test");
+
+    fireEvent.error(artwork);
+    expect(
+      document.querySelector(".sound-file-thumbnail-artwork"),
+    ).not.toBeInTheDocument();
+    expect(
+      document.querySelector(".sound-file-thumbnail-icon"),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps asynchronously discovered artwork in an undo snapshot", () => {
+    const asset = {
+      durationSeconds: 0,
+      mimeType: "audio/mpeg",
+      name: "history-cover.mp3",
+      sizeBytes: 128,
+      src: "blob:history-audio-test",
+    };
+    useEditorStore.setState((state) => ({
+      pages: state.pages.map((page) => ({
+        ...page,
+        backgroundMusic: {
+          asset,
+          delaySeconds: 1,
+          fadeInSeconds: 0,
+          fadeOutSeconds: 0,
+          loop: true,
+          startPlayback: "on-page-enter" as const,
+          volume: 100,
+        },
+      })),
+    }));
+    act(() => useEditorStore.getState().checkpoint());
+    useEditorStore.setState((state) => ({
+      pages: state.pages.map((page) => ({
+        ...page,
+        backgroundMusic: undefined,
+      })),
+    }));
+
+    act(() =>
+      useEditorStore
+        .getState()
+        .setBackgroundMusicArtwork(
+          "page-1",
+          asset.src,
+          "blob:history-cover-test",
+        ),
+    );
+    expect(
+      useEditorStore.getState().past[0].pages[0].backgroundMusic?.asset
+        ?.artworkSrc,
+    ).toBe("blob:history-cover-test");
+
+    act(() => useEditorStore.getState().undo());
+    expect(
+      useEditorStore.getState().pages[0].backgroundMusic?.asset?.artworkSrc,
+    ).toBe("blob:history-cover-test");
+  });
+
+  it("starts viewer background music on page entry and after a delay", async () => {
+    const play = vi.mocked(HTMLMediaElement.prototype.play);
+    setTestBackgroundMusic("on-page-enter");
+    const firstRender = render(<EditorShell />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Preview" }));
+    await waitFor(() => expect(play).toHaveBeenCalledTimes(1));
+    firstRender.unmount();
+
+    play.mockClear();
+    setTestBackgroundMusic("after-delay", 0.01);
+    render(<EditorShell />);
+    fireEvent.click(screen.getByRole("button", { name: "Preview" }));
+    await waitFor(() => expect(play).toHaveBeenCalledTimes(1));
+  });
+
+  it("waits for viewer interaction and leaves manual playback idle", async () => {
+    const play = vi.mocked(HTMLMediaElement.prototype.play);
+    setTestBackgroundMusic("manual");
+    const manualRender = render(<EditorShell />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Preview" }));
+    expect(
+      screen.getByRole("dialog", { name: "Viewer preview" }),
+    ).toBeVisible();
+    expect(play).not.toHaveBeenCalled();
+    manualRender.unmount();
+
+    setTestBackgroundMusic("on-interaction");
+    render(<EditorShell />);
+    fireEvent.click(screen.getByRole("button", { name: "Preview" }));
+    expect(play).not.toHaveBeenCalled();
+    fireEvent.pointerDown(document.querySelector(".viewer-preview-viewport")!);
+    await waitFor(() => expect(play).toHaveBeenCalledTimes(1));
+  });
+
+  it("plays configured Preview triggers exclusively and preserves the current sound for an unconfigured shape", () => {
+    const soundAsset = (name: string) => ({
+      durationSeconds: 1,
+      mimeType: "audio/wav",
+      name: `${name}.wav`,
+      sizeBytes: 128,
+      src: `blob:${name}`,
+    });
+    const hoverShape = testSoundShape("preview-hover", 20, [
+      testInteractionSound({
+        assets: [soundAsset("hover")],
+        event: "enter",
+        id: "hover-setting",
+        trigger: "hover",
+      }),
+    ]);
+    const clickShape = testSoundShape("preview-click", 140, [
+      testInteractionSound({
+        assets: [soundAsset("click")],
+        event: "click",
+        id: "click-setting",
+        trigger: "click",
+      }),
+    ]);
+    const pressShape = testSoundShape("preview-press", 260, [
+      testInteractionSound({
+        assets: [soundAsset("press")],
+        event: "press-start",
+        id: "press-setting",
+        trigger: "press",
+      }),
+    ]);
+    const dragShape = testSoundShape("preview-drag", 380, [
+      testInteractionSound({
+        assets: [soundAsset("drag")],
+        event: "drag-start",
+        id: "drag-setting",
+        trigger: "drag",
+      }),
+    ]);
+    const scrollShape = testSoundShape("preview-scroll", 500, [
+      testInteractionSound({
+        assets: [soundAsset("scroll")],
+        event: "while-scrolling",
+        id: "scroll-setting",
+        trigger: "scroll",
+      }),
+    ]);
+    const emptyShape = testSoundShape("preview-empty", 620);
+    useEditorStore.setState({
+      pages: [
+        {
+          elements: [
+            hoverShape,
+            clickShape,
+            pressShape,
+            dragShape,
+            scrollShape,
+            emptyShape,
+          ],
+          id: "page-1",
+          name: "Intro",
+        },
+      ],
+    });
+
+    render(<EditorShell />);
+    fireEvent.click(screen.getByRole("button", { name: "Preview" }));
+    const preview = screen.getByRole("dialog", { name: "Viewer preview" });
+    const interactionAudio = preview.querySelector<HTMLAudioElement>(
+      ".viewer-interaction-sound",
+    )!;
+    const element = (id: string) =>
+      preview.querySelector<HTMLElement>(`[data-element-id="${id}"]`)!;
+    const play = vi.mocked(HTMLMediaElement.prototype.play);
+    const pause = vi.mocked(HTMLMediaElement.prototype.pause);
+
+    fireEvent.pointerEnter(element(hoverShape.id));
+    expect(interactionAudio.src).toBe("blob:hover");
+    expect(play).toHaveBeenCalledTimes(1);
+
+    const pausesBeforeEmpty = pause.mock.calls.length;
+    fireEvent.click(element(emptyShape.id));
+    expect(interactionAudio.src).toBe("blob:hover");
+    expect(pause).toHaveBeenCalledTimes(pausesBeforeEmpty);
+    expect(play).toHaveBeenCalledTimes(1);
+
+    fireEvent.pointerEnter(element(clickShape.id));
+    expect(interactionAudio.src).toBe("blob:hover");
+    fireEvent.click(element(clickShape.id));
+    expect(interactionAudio.src).toBe("blob:click");
+    expect(play).toHaveBeenCalledTimes(2);
+
+    fireEvent.pointerDown(element(pressShape.id), {
+      clientX: 0,
+      clientY: 0,
+      pointerId: 1,
+    });
+    expect(interactionAudio.src).toBe("blob:press");
+    expect(play).toHaveBeenCalledTimes(3);
+
+    fireEvent.pointerDown(element(dragShape.id), {
+      clientX: 0,
+      clientY: 0,
+      pointerId: 2,
+    });
+    fireEvent.pointerMove(element(dragShape.id), {
+      clientX: 5,
+      clientY: 0,
+      pointerId: 2,
+    });
+    expect(interactionAudio.src).toBe("blob:drag");
+    expect(play).toHaveBeenCalledTimes(4);
+
+    fireEvent.wheel(element(scrollShape.id));
+    expect(interactionAudio.src).toBe("blob:scroll");
+    expect(interactionAudio.loop).toBe(true);
+    expect(play).toHaveBeenCalledTimes(5);
+  });
+
+  it("plays and fades every Multiple Sounds file at the same time", async () => {
+    vi.useFakeTimers();
+    const pausedByMedia = new WeakMap<HTMLMediaElement, boolean>();
+    vi.spyOn(HTMLMediaElement.prototype, "paused", "get").mockImplementation(
+      function (this: HTMLMediaElement) {
+        return pausedByMedia.get(this) ?? true;
+      },
+    );
+    const play = vi
+      .mocked(HTMLMediaElement.prototype.play)
+      .mockImplementation(function (this: HTMLMediaElement) {
+        pausedByMedia.set(this, false);
+        return Promise.resolve();
+      });
+    const pause = vi
+      .mocked(HTMLMediaElement.prototype.pause)
+      .mockImplementation(function (this: HTMLMediaElement) {
+        pausedByMedia.set(this, true);
+      });
+    const hoverShape = testSoundShape("preview-hover-multiple", 20, [
+      testInteractionSound({
+        assets: [testSoundAsset("first"), testSoundAsset("second")],
+        event: "while-hovering",
+        fadeInSeconds: 0.2,
+        fadeOutSeconds: 0.2,
+        id: "hover-multiple-setting",
+        playbackMode: "sequential",
+        soundSource: "multiple",
+        trigger: "hover",
+        volume: 60,
+      }),
+    ]);
+    useEditorStore.setState({
+      pages: [
+        {
+          elements: [hoverShape],
+          id: "page-1",
+          name: "Intro",
+        },
+      ],
+    });
+
+    render(<EditorShell />);
+    fireEvent.click(screen.getByRole("button", { name: "Preview" }));
+    const preview = screen.getByRole("dialog", { name: "Viewer preview" });
+    const previewElement = preview.querySelector<HTMLElement>(
+      `[data-element-id="${hoverShape.id}"]`,
+    )!;
+    const interactionAudios = Array.from(
+      preview.querySelectorAll<HTMLAudioElement>(".viewer-interaction-sound"),
+    );
+    expect(interactionAudios).toHaveLength(2);
+
+    fireEvent.pointerEnter(previewElement);
+    await act(async () => Promise.resolve());
+    expect(play).toHaveBeenCalledTimes(2);
+    expect(interactionAudios.map((audio) => audio.src)).toEqual([
+      "blob:first",
+      "blob:second",
+    ]);
+    interactionAudios.forEach((audio) => {
+      expect(audio.loop).toBe(true);
+      expect(audio.volume).toBe(0);
+    });
+
+    act(() => vi.advanceTimersByTime(112));
+    interactionAudios.forEach((audio) => {
+      expect(audio.volume).toBeGreaterThan(0);
+      expect(audio.volume).toBeLessThan(0.6);
+    });
+    expect(interactionAudios[0].volume).toBeCloseTo(
+      interactionAudios[1].volume,
+      5,
+    );
+
+    act(() => vi.advanceTimersByTime(150));
+    interactionAudios.forEach((audio) =>
+      expect(audio.volume).toBeCloseTo(0.6, 5),
+    );
+
+    const pausesBeforeLeave = pause.mock.calls.length;
+    fireEvent.pointerLeave(previewElement);
+    expect(pause).toHaveBeenCalledTimes(pausesBeforeLeave);
+    act(() => vi.advanceTimersByTime(112));
+    interactionAudios.forEach((audio) => {
+      expect(audio.volume).toBeGreaterThan(0);
+      expect(audio.volume).toBeLessThan(0.6);
+    });
+    expect(interactionAudios[0].volume).toBeCloseTo(
+      interactionAudios[1].volume,
+      5,
+    );
+
+    act(() => vi.advanceTimersByTime(150));
+    expect(pause).toHaveBeenCalledTimes(pausesBeforeLeave + 2);
+    interactionAudios.forEach((audio) => {
+      expect(audio.loop).toBe(false);
+      expect(pausedByMedia.get(audio)).toBe(true);
+    });
+  });
+
+  it("replaces a simultaneous sound group only for a configured trigger", async () => {
+    const pausedByMedia = new WeakMap<HTMLMediaElement, boolean>();
+    vi.spyOn(HTMLMediaElement.prototype, "paused", "get").mockImplementation(
+      function (this: HTMLMediaElement) {
+        return pausedByMedia.get(this) ?? true;
+      },
+    );
+    const play = vi
+      .mocked(HTMLMediaElement.prototype.play)
+      .mockImplementation(function (this: HTMLMediaElement) {
+        pausedByMedia.set(this, false);
+        return Promise.resolve();
+      });
+    const pause = vi
+      .mocked(HTMLMediaElement.prototype.pause)
+      .mockImplementation(function (this: HTMLMediaElement) {
+        pausedByMedia.set(this, true);
+      });
+    const hoverShape = testSoundShape("preview-group-hover", 20, [
+      testInteractionSound({
+        assets: [testSoundAsset("first"), testSoundAsset("second")],
+        event: "while-hovering",
+        id: "hover-group-setting",
+        soundSource: "multiple",
+        trigger: "hover",
+      }),
+    ]);
+    const emptyShape = testSoundShape("preview-group-empty", 160);
+    const clickShape = testSoundShape("preview-group-click", 300, [
+      testInteractionSound({
+        assets: [testSoundAsset("third"), testSoundAsset("fourth")],
+        event: "click",
+        id: "click-group-setting",
+        soundSource: "multiple",
+        trigger: "click",
+      }),
+    ]);
+    useEditorStore.setState({
+      pages: [
+        {
+          elements: [hoverShape, emptyShape, clickShape],
+          id: "page-1",
+          name: "Intro",
+        },
+      ],
+    });
+
+    render(<EditorShell />);
+    fireEvent.click(screen.getByRole("button", { name: "Preview" }));
+    const preview = screen.getByRole("dialog", { name: "Viewer preview" });
+    const element = (id: string) =>
+      preview.querySelector<HTMLElement>(`[data-element-id="${id}"]`)!;
+    const interactionAudios = Array.from(
+      preview.querySelectorAll<HTMLAudioElement>(".viewer-interaction-sound"),
+    );
+
+    fireEvent.pointerEnter(element(hoverShape.id));
+    await act(async () => Promise.resolve());
+    expect(play).toHaveBeenCalledTimes(2);
+    expect(interactionAudios.map((audio) => audio.src)).toEqual([
+      "blob:first",
+      "blob:second",
+    ]);
+
+    fireEvent.click(element(emptyShape.id));
+    expect(play).toHaveBeenCalledTimes(2);
+    expect(pause).not.toHaveBeenCalled();
+    interactionAudios.forEach((audio) =>
+      expect(pausedByMedia.get(audio)).toBe(false),
+    );
+
+    fireEvent.click(element(clickShape.id));
+    await act(async () => Promise.resolve());
+    expect(pause).toHaveBeenCalledTimes(2);
+    expect(play).toHaveBeenCalledTimes(4);
+    expect(interactionAudios.map((audio) => audio.src)).toEqual([
+      "blob:third",
+      "blob:fourth",
+    ]);
+    interactionAudios.forEach((audio) =>
+      expect(pausedByMedia.get(audio)).toBe(false),
+    );
+  });
+
+  it("fades a continuous interaction sound before stopping it", async () => {
+    vi.useFakeTimers();
+    let paused = true;
+    vi.spyOn(HTMLMediaElement.prototype, "paused", "get").mockImplementation(
+      () => paused,
+    );
+    const play = vi
+      .mocked(HTMLMediaElement.prototype.play)
+      .mockImplementation(() => {
+        paused = false;
+        return Promise.resolve();
+      });
+    const pause = vi
+      .mocked(HTMLMediaElement.prototype.pause)
+      .mockImplementation(() => {
+        paused = true;
+      });
+    const hoverShape = testSoundShape("preview-hover-fade", 20, [
+      testInteractionSound({
+        assets: [
+          {
+            durationSeconds: 1,
+            mimeType: "audio/wav",
+            name: "hover-fade.wav",
+            sizeBytes: 128,
+            src: "blob:hover-fade",
+          },
+        ],
+        event: "while-hovering",
+        fadeInSeconds: 0,
+        fadeOutSeconds: 0.2,
+        id: "hover-fade-setting",
+        trigger: "hover",
+      }),
+    ]);
+    useEditorStore.setState({
+      pages: [
+        {
+          elements: [hoverShape],
+          id: "page-1",
+          name: "Intro",
+        },
+      ],
+    });
+
+    render(<EditorShell />);
+    fireEvent.click(screen.getByRole("button", { name: "Preview" }));
+    const preview = screen.getByRole("dialog", { name: "Viewer preview" });
+    const previewElement = preview.querySelector<HTMLElement>(
+      `[data-element-id="${hoverShape.id}"]`,
+    )!;
+    const interactionAudio = preview.querySelector<HTMLAudioElement>(
+      ".viewer-interaction-sound",
+    )!;
+
+    fireEvent.pointerEnter(previewElement);
+    await act(async () => Promise.resolve());
+    expect(play).toHaveBeenCalledTimes(1);
+    expect(interactionAudio.volume).toBe(1);
+    expect(interactionAudio.loop).toBe(true);
+
+    const pausesBeforeLeave = pause.mock.calls.length;
+    fireEvent.pointerLeave(previewElement);
+    expect(pause).toHaveBeenCalledTimes(pausesBeforeLeave);
+
+    act(() => vi.advanceTimersByTime(100));
+    expect(interactionAudio.volume).toBeGreaterThan(0);
+    expect(interactionAudio.volume).toBeLessThan(1);
+    expect(pause).toHaveBeenCalledTimes(pausesBeforeLeave);
+
+    act(() => vi.advanceTimersByTime(150));
+    expect(pause).toHaveBeenCalledTimes(pausesBeforeLeave + 1);
+    expect(interactionAudio.loop).toBe(false);
   });
 
   it("keeps element dragging enabled while the SCENES panel is open", () => {

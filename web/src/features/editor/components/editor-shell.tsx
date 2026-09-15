@@ -4,6 +4,7 @@
 /* eslint-disable react-hooks/refs */
 
 import {
+  Check,
   ChevronDown,
   Eye,
   EyeOff,
@@ -12,6 +13,7 @@ import {
   Monitor,
   MoreVertical,
   MousePointer2,
+  Music2,
   Plus,
   Redo2,
   Smartphone,
@@ -44,15 +46,34 @@ import {
 } from "react";
 
 import {
+  INTERFACE_SCALE_OPTIONS,
+  INTERFACE_SCALE_STORAGE_KEY,
+  LEGACY_INTERFACE_SCALE_STORAGE_KEY,
+  type InterfaceScaleMode,
+  interfaceScaleFactor,
+  migrateInterfaceScaleMode,
+  resolveInterfaceScale,
+} from "@/features/editor/lib/interface-scale";
+import { extractEmbeddedAudioArtwork } from "@/features/editor/lib/audio-artwork";
+import {
+  type BackgroundMusicSettings,
+  type BackgroundMusicStartMode,
+  type BackgroundMusicAsset,
   type CanvasElement,
   type EditorTool,
   type ArtboardSettings,
   type ImageCrop,
+  type InteractionSoundEvent,
+  type InteractionSoundPlaybackMode,
+  type InteractionSoundSettings,
+  type InteractionSoundTrigger,
   type PathfinderData,
   type PathfinderOperation,
   type PathPoint,
   type ShapeType,
   type VectorPath,
+  defaultBackgroundMusicSettings,
+  defaultInteractionSoundSettings,
   useEditorStore,
 } from "@/features/editor/store/editor-store";
 import { assetPath } from "@/lib/asset-path";
@@ -168,7 +189,8 @@ const fontWeightOptions = [
 const fontFamilyStacks: Record<string, string> = {
   Arial: "Arial, Helvetica, sans-serif",
   Georgia: 'Georgia, "Times New Roman", serif',
-  Inter: 'var(--design-inter), Inter, "Segoe UI", Arial, sans-serif',
+  Inter:
+    'var(--design-inter), "Malgun Gothic", "Apple SD Gothic Neo", "Segoe UI", Arial, sans-serif',
   "Times New Roman": '"Times New Roman", Times, serif',
 };
 
@@ -389,6 +411,36 @@ type Gesture =
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
+}
+
+export function calculateCanvasFitZoom(
+  canvasWidth: number,
+  canvasHeight: number,
+  artboardWidth: number,
+  artboardHeight: number,
+) {
+  if (
+    canvasWidth <= 0 ||
+    canvasHeight <= 0 ||
+    artboardWidth <= 0 ||
+    artboardHeight <= 0
+  ) {
+    return 100;
+  }
+
+  const availableWidth = Math.max(1, canvasWidth - 36);
+  const availableHeight = Math.max(1, canvasHeight - 96);
+  return Number(
+    clamp(
+      100 *
+        Math.min(
+          availableWidth / artboardWidth,
+          availableHeight / artboardHeight,
+        ),
+      5,
+      500,
+    ).toFixed(2),
+  );
 }
 
 function dragPointerSample(event: {
@@ -2351,7 +2403,8 @@ function prepareRulerCanvas(
   context.strokeStyle = "#8c8c8c";
   context.fillStyle = "#666666";
   context.lineWidth = 1;
-  context.font = '9px Inter, "Segoe UI", Arial, sans-serif';
+  context.font =
+    '500 9px "Inter Variable", "Malgun Gothic", "Apple SD Gothic Neo", "Segoe UI", Arial, sans-serif';
   return context;
 }
 
@@ -3288,6 +3341,7 @@ function DesignRange({
   disabled = false,
   max,
   min,
+  onBegin,
   onChange,
   value,
 }: {
@@ -3296,6 +3350,7 @@ function DesignRange({
   disabled?: boolean;
   max: number;
   min: number;
+  onBegin?: () => void;
   onChange: (value: number) => void;
   value: number;
 }) {
@@ -3316,6 +3371,23 @@ function DesignRange({
         max={max}
         min={min}
         onChange={(event) => onChange(Number(event.target.value))}
+        onKeyDown={(event) => {
+          if (
+            [
+              "ArrowDown",
+              "ArrowLeft",
+              "ArrowRight",
+              "ArrowUp",
+              "End",
+              "Home",
+              "PageDown",
+              "PageUp",
+            ].includes(event.key)
+          ) {
+            onBegin?.();
+          }
+        }}
+        onPointerDown={onBegin}
         type="range"
         value={value}
       />
@@ -4213,9 +4285,169 @@ function ScenePanel({
   );
 }
 
-function SoundMoreButton({ label }: { label: string }) {
+const backgroundMusicStartOptions = [
+  { label: "On Page Enter", value: "on-page-enter" },
+  { label: "After Delay", value: "after-delay" },
+  { label: "On Interaction", value: "on-interaction" },
+  { label: "Manual", value: "manual" },
+] as const;
+
+function isBackgroundMusicStartMode(
+  value: string,
+): value is BackgroundMusicStartMode {
+  return backgroundMusicStartOptions.some((option) => option.value === value);
+}
+
+function formatAudioTime(seconds: number) {
+  const safeSeconds = Number.isFinite(seconds) ? Math.max(0, seconds) : 0;
+  const wholeSeconds = Math.floor(safeSeconds);
+  const minutes = Math.floor(wholeSeconds / 60);
+  const remainder = wholeSeconds % 60;
+  return `${String(minutes).padStart(2, "0")}:${String(remainder).padStart(2, "0")}`;
+}
+
+function formatAudioSize(sizeBytes: number) {
+  if (!Number.isFinite(sizeBytes) || sizeBytes <= 0) return "0.0MB";
+  return `${(sizeBytes / (1024 * 1024)).toFixed(1)}MB`;
+}
+
+function effectiveBackgroundMusicVolume(
+  settings: BackgroundMusicSettings,
+  currentTime: number,
+  duration: number,
+) {
+  let envelope = 1;
+  if (settings.fadeInSeconds > 0) {
+    envelope = Math.min(envelope, currentTime / settings.fadeInSeconds);
+  }
+  if (settings.fadeOutSeconds > 0 && Number.isFinite(duration)) {
+    envelope = Math.min(
+      envelope,
+      Math.max(0, duration - currentTime) / settings.fadeOutSeconds,
+    );
+  }
+  return clamp((settings.volume / 100) * envelope, 0, 1);
+}
+
+type InteractionSoundEnvelopeSettings = Pick<
+  InteractionSoundSettings,
+  "fadeInSeconds" | "fadeOutSeconds" | "volume"
+>;
+
+export function calculateInteractionSoundVolume(
+  settings: InteractionSoundEnvelopeSettings,
+  elapsedSeconds: number,
+  currentTime: number,
+  duration: number,
+  continuous: boolean,
+) {
+  let envelope = 1;
+  if (settings.fadeInSeconds > 0) {
+    envelope = Math.min(
+      envelope,
+      Math.max(0, elapsedSeconds) / settings.fadeInSeconds,
+    );
+  }
+  if (
+    !continuous &&
+    settings.fadeOutSeconds > 0 &&
+    Number.isFinite(duration) &&
+    duration > 0
+  ) {
+    envelope = Math.min(
+      envelope,
+      Math.max(0, duration - currentTime) / settings.fadeOutSeconds,
+    );
+  }
+  return clamp((settings.volume / 100) * envelope, 0, 1);
+}
+
+function startInteractionSoundEnvelope(
+  audio: HTMLAudioElement,
+  getSettings: () => InteractionSoundEnvelopeSettings,
+  continuous: boolean,
+) {
+  let animationFrame = 0;
+  let cancelled = false;
+  const startedAt = window.performance.now();
+
+  const render = (timestamp: number) => {
+    if (cancelled) return;
+    audio.volume = calculateInteractionSoundVolume(
+      getSettings(),
+      (timestamp - startedAt) / 1000,
+      audio.currentTime,
+      audio.duration,
+      continuous,
+    );
+    if (!audio.paused && !audio.ended) {
+      animationFrame = window.requestAnimationFrame(render);
+    }
+  };
+
+  animationFrame = window.requestAnimationFrame(render);
+  return () => {
+    cancelled = true;
+    window.cancelAnimationFrame(animationFrame);
+  };
+}
+
+function fadeInteractionSoundToSilence(
+  audio: HTMLAudioElement,
+  durationSeconds: number,
+  onComplete: () => void,
+) {
+  if (durationSeconds <= 0) {
+    onComplete();
+    return () => {};
+  }
+
+  let animationFrame = 0;
+  let cancelled = false;
+  const initialVolume = audio.volume;
+  const startedAt = window.performance.now();
+  const render = (timestamp: number) => {
+    if (cancelled) return;
+    const progress = clamp(
+      (timestamp - startedAt) / (durationSeconds * 1000),
+      0,
+      1,
+    );
+    audio.volume = initialVolume * (1 - progress);
+    if (progress >= 1) {
+      onComplete();
+      return;
+    }
+    animationFrame = window.requestAnimationFrame(render);
+  };
+  animationFrame = window.requestAnimationFrame(render);
+  return () => {
+    cancelled = true;
+    window.cancelAnimationFrame(animationFrame);
+  };
+}
+
+function SoundMoreButton({
+  controls,
+  expanded,
+  label,
+  onClick,
+}: {
+  controls?: string;
+  expanded?: boolean;
+  label: string;
+  onClick?: () => void;
+}) {
   return (
-    <button aria-label={label} className="sound-more-button" type="button">
+    <button
+      aria-controls={controls}
+      aria-expanded={expanded}
+      aria-haspopup="menu"
+      aria-label={label}
+      className="sound-more-button"
+      onClick={onClick}
+      type="button"
+    >
       <Image
         alt=""
         aria-hidden="true"
@@ -4227,43 +4459,1302 @@ function SoundMoreButton({ label }: { label: string }) {
   );
 }
 
-function SoundPlayButton({ label }: { label: string }) {
+function SoundPlayButton({
+  disabled,
+  isPlaying,
+  label,
+  onClick,
+}: {
+  disabled?: boolean;
+  isPlaying?: boolean;
+  label: string;
+  onClick?: () => void;
+}) {
   return (
-    <button aria-label={label} className="sound-play-button" type="button">
-      <Image
-        alt=""
-        aria-hidden="true"
-        height={13}
-        src={assetPath("/figma/sound/Group%20273.svg")}
-        width={13}
-      />
+    <button
+      aria-label={label}
+      className="sound-play-button"
+      disabled={disabled}
+      onClick={onClick}
+      type="button"
+    >
+      {isPlaying ? (
+        <svg
+          aria-hidden="true"
+          className="sound-pause-icon"
+          height="13"
+          viewBox="0 0 13 13"
+          width="13"
+        >
+          <circle cx="6.5" cy="6.5" fill="none" r="6" stroke="currentColor" />
+          <rect fill="currentColor" height="5" width="1" x="5" y="4" />
+          <rect fill="currentColor" height="5" width="1" x="7" y="4" />
+        </svg>
+      ) : (
+        <Image
+          alt=""
+          aria-hidden="true"
+          height={13}
+          src={assetPath("/figma/sound/Group%20273.svg")}
+          width={13}
+        />
+      )}
     </button>
+  );
+}
+
+function SoundNumberInput({
+  ariaLabel,
+  max,
+  min,
+  onBegin,
+  onChange,
+  precision,
+  value,
+}: {
+  ariaLabel: string;
+  max?: number;
+  min: number;
+  onBegin: () => void;
+  onChange: (value: number) => void;
+  precision: number;
+  value: number;
+}) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const cancelCommitRef = useRef(false);
+  const normalize = (next: number) =>
+    clamp(next, min, max === undefined ? Number.MAX_SAFE_INTEGER : max);
+
+  const commit = (rawValue: string) => {
+    const next = Number(rawValue);
+    onChange(Number.isFinite(next) ? normalize(next) : min);
+    setDraft(null);
+  };
+
+  return (
+    <input
+      aria-label={ariaLabel}
+      max={max}
+      min={min}
+      onBlur={(event) => {
+        if (cancelCommitRef.current) {
+          cancelCommitRef.current = false;
+          setDraft(null);
+          return;
+        }
+        commit(event.currentTarget.value);
+      }}
+      onChange={(event) => {
+        const nextDraft = event.currentTarget.value;
+        setDraft(nextDraft);
+        if (!nextDraft.trim()) return;
+        const next = Number(nextDraft);
+        if (Number.isFinite(next)) onChange(normalize(next));
+      }}
+      onFocus={(event) => {
+        cancelCommitRef.current = false;
+        onBegin();
+        setDraft(event.currentTarget.value);
+        event.currentTarget.select();
+      }}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") event.currentTarget.blur();
+        if (event.key === "Escape") {
+          cancelCommitRef.current = true;
+          setDraft(null);
+          event.currentTarget.blur();
+        }
+      }}
+      step={10 ** -precision}
+      type="number"
+      value={draft ?? value.toFixed(precision)}
+    />
   );
 }
 
 function SoundStepperField({
   ariaLabel,
+  onBegin,
+  onChange,
   value,
 }: {
   ariaLabel: string;
-  value: string;
+  onBegin: () => void;
+  onChange: (value: number) => void;
+  value: number;
+}) {
+  const updateByStep = (delta: number) => {
+    onBegin();
+    onChange(Math.max(0, Math.round((value + delta) * 10) / 10));
+  };
+
+  return (
+    <div className="sound-stepper-control">
+      <span className="sound-stepper-field">
+        <SoundNumberInput
+          ariaLabel={ariaLabel}
+          min={0}
+          onBegin={onBegin}
+          onChange={onChange}
+          precision={1}
+          value={value}
+        />
+        <span className="sound-stepper-buttons">
+          <button
+            aria-label={`Increase ${ariaLabel}`}
+            onClick={() => updateByStep(0.1)}
+            type="button"
+          >
+            <Image
+              alt=""
+              aria-hidden="true"
+              height={4}
+              src={assetPath("/figma/sound/stepper-up.svg")}
+              width={5}
+            />
+          </button>
+          <button
+            aria-label={`Decrease ${ariaLabel}`}
+            onClick={() => updateByStep(-0.1)}
+            type="button"
+          >
+            <Image
+              alt=""
+              aria-hidden="true"
+              height={4}
+              src={assetPath("/figma/sound/stepper-down.svg")}
+              width={5}
+            />
+          </button>
+        </span>
+      </span>
+      <span className="sound-stepper-unit">s</span>
+    </div>
+  );
+}
+
+function SoundPercentField({
+  onBegin,
+  onChange,
+  value,
+}: {
+  onBegin: () => void;
+  onChange: (value: number) => void;
+  value: number;
 }) {
   return (
-    <label className="sound-stepper-field">
-      <input aria-label={ariaLabel} readOnly value={value} />
-      <span>s</span>
-      <Image
-        alt=""
-        aria-hidden="true"
-        height={11}
-        src={assetPath("/figma/sound/Group%20270.svg")}
-        width={6}
+    <label className="sound-percent-field">
+      <SoundNumberInput
+        ariaLabel="Sound volume"
+        max={100}
+        min={0}
+        onBegin={onBegin}
+        onChange={onChange}
+        precision={0}
+        value={value}
       />
+      <span>%</span>
     </label>
   );
 }
 
-function SoundPanel() {
+const interactionSoundTriggerOptions: {
+  label: string;
+  value: InteractionSoundTrigger;
+}[] = [
+  { label: "Hover", value: "hover" },
+  { label: "Click", value: "click" },
+  { label: "Press", value: "press" },
+  { label: "Drag", value: "drag" },
+  { label: "Scroll", value: "scroll" },
+];
+
+const interactionSoundEvents: Record<
+  InteractionSoundTrigger,
+  { label: string; value: InteractionSoundEvent }[]
+> = {
+  click: [
+    { label: "Click", value: "click" },
+    { label: "Double Click", value: "double-click" },
+  ],
+  drag: [
+    { label: "Drag Start", value: "drag-start" },
+    { label: "While Dragging", value: "while-dragging" },
+    { label: "Drop", value: "drop" },
+  ],
+  hover: [
+    { label: "Enter", value: "enter" },
+    { label: "While Hovering", value: "while-hovering" },
+    { label: "Leave", value: "leave" },
+  ],
+  press: [
+    { label: "Press Start", value: "press-start" },
+    { label: "While Pressing", value: "while-pressing" },
+    { label: "Release", value: "release" },
+  ],
+  scroll: [
+    { label: "While Scrolling", value: "while-scrolling" },
+    { label: "Reach Point", value: "reach-point" },
+  ],
+};
+
+const interactionSoundPlaybackOptions: {
+  label: string;
+  value: InteractionSoundPlaybackMode;
+}[] = [
+  { label: "Shuffle", value: "shuffle" },
+  { label: "Sequential", value: "sequential" },
+];
+
+function normalizedInteractionSound(
+  settings?: InteractionSoundSettings,
+): InteractionSoundSettings {
+  return {
+    ...defaultInteractionSoundSettings,
+    ...settings,
+    assets: settings?.assets ? [...settings.assets] : [],
+  };
+}
+
+type InteractionSoundUploadRequest =
+  { index: number; mode: "replace" } | { mode: "append" };
+
+function InteractionSoundFileField({
+  asset,
+  isPlaying,
+  label,
+  onPreview,
+  onRemove,
+}: {
+  asset: BackgroundMusicAsset | null;
+  isPlaying: boolean;
+  label: string;
+  onPreview: () => void;
+  onRemove: () => void;
+}) {
+  return (
+    <div
+      aria-label={
+        asset ? `${label}: ${asset.name}` : `${label}: no file selected`
+      }
+      className={
+        asset ? "sound-event-file-control" : "sound-event-file-control is-empty"
+      }
+    >
+      <SoundPlayButton
+        disabled={!asset}
+        isPlaying={isPlaying}
+        label={isPlaying ? `Pause ${label}` : `Preview ${label}`}
+        onClick={onPreview}
+      />
+      <span className="sound-event-file-name" title={asset?.name}>
+        {asset?.name ?? ""}
+      </span>
+      <span className="sound-event-file-meta">
+        {asset
+          ? `${formatAudioTime(asset.durationSeconds)}/${formatAudioSize(asset.sizeBytes)}`
+          : "00:00/0.0MB"}
+      </span>
+      {asset ? (
+        <button
+          aria-label={`Remove ${label}`}
+          className="sound-event-file-remove"
+          onClick={onRemove}
+          type="button"
+        >
+          <X aria-hidden="true" size={9} strokeWidth={1.25} />
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+function InteractionSoundDetails({
+  onChange,
+  onCheckpoint,
+  onPreview,
+  onRequestUpload,
+  playingSource,
+  settings,
+}: {
+  onChange: (updates: Partial<InteractionSoundSettings>) => void;
+  onCheckpoint: () => void;
+  onPreview: (asset: BackgroundMusicAsset) => void;
+  onRequestUpload: (request: InteractionSoundUploadRequest) => void;
+  playingSource: string | null;
+  settings: InteractionSoundSettings;
+}) {
+  const eventOptions = interactionSoundEvents[settings.trigger];
+  const multiple = settings.soundSource === "multiple";
+  const displayedAssets: (BackgroundMusicAsset | null)[] = settings.assets
+    .length
+    ? multiple
+      ? settings.assets
+      : [settings.assets[0]]
+    : [null];
+  const extraFileRows = multiple ? Math.max(0, displayedAssets.length - 1) : 0;
+  const detailsHeight = multiple ? 280 + extraFileRows * 25 : 234;
+  const label =
+    interactionSoundTriggerOptions.find(
+      (option) => option.value === settings.trigger,
+    )?.label ?? settings.trigger;
+
+  return (
+    <div
+      aria-label={`${label} sound details`}
+      className={
+        multiple ? "sound-event-settings is-multiple" : "sound-event-settings"
+      }
+      role="group"
+      style={
+        {
+          "--sound-event-file-offset": `${extraFileRows * 25}px`,
+          height: `${detailsHeight}px`,
+        } as CSSProperties
+      }
+    >
+      <h3>Event Settings</h3>
+
+      <div className="sound-event-field sound-event-trigger-field">
+        <span>Trigger</span>
+        <DesignDropdown
+          ariaLabel={`${label} sound trigger`}
+          className="sound-event-select"
+          noScroll
+          onChange={(value) => {
+            const trigger = interactionSoundTriggerOptions.find(
+              (option) => option.value === value,
+            )?.value;
+            if (!trigger) return;
+            onCheckpoint();
+            onChange({
+              event: interactionSoundEvents[trigger][0].value,
+              trigger,
+            });
+          }}
+          options={interactionSoundTriggerOptions}
+          value={settings.trigger}
+        />
+      </div>
+
+      <div className="sound-event-field sound-event-event-field">
+        <span>Event</span>
+        <DesignDropdown
+          ariaLabel={`${label} sound event`}
+          className="sound-event-select"
+          noScroll
+          onChange={(value) => {
+            const event = eventOptions.find(
+              (option) => option.value === value,
+            )?.value;
+            if (!event) return;
+            onCheckpoint();
+            onChange({ event });
+          }}
+          options={eventOptions}
+          value={settings.event}
+        />
+      </div>
+
+      <span aria-hidden="true" className="sound-event-divider" />
+
+      <div
+        aria-label={`${label} sound source`}
+        className="sound-event-source"
+        role="radiogroup"
+      >
+        <span>Sound Source</span>
+        <button
+          aria-checked={settings.soundSource === "single"}
+          className="sound-event-radio"
+          onClick={() => {
+            onCheckpoint();
+            onChange({
+              assets: settings.assets.slice(0, 1),
+              soundSource: "single",
+            });
+          }}
+          role="radio"
+          type="button"
+        >
+          <span aria-hidden="true" />
+          Single Sound
+        </button>
+        <button
+          aria-checked={settings.soundSource === "multiple"}
+          className="sound-event-radio"
+          onClick={() => {
+            onCheckpoint();
+            onChange({ soundSource: "multiple" });
+          }}
+          role="radio"
+          type="button"
+        >
+          <span aria-hidden="true" />
+          Multiple Sounds
+        </button>
+      </div>
+
+      <span className="sound-event-file-label">Sound File</span>
+      <div className="sound-event-files">
+        {displayedAssets.map((asset, index) => (
+          <InteractionSoundFileField
+            asset={asset}
+            isPlaying={Boolean(asset && playingSource === asset.src)}
+            key={`${asset?.src ?? "empty"}-${index}`}
+            label={`${label} sound file ${index + 1}`}
+            onPreview={() => {
+              if (asset) onPreview(asset);
+            }}
+            onRemove={() => {
+              onCheckpoint();
+              onChange({
+                assets: settings.assets.filter(
+                  (_asset, assetIndex) => assetIndex !== index,
+                ),
+              });
+            }}
+          />
+        ))}
+      </div>
+
+      {!multiple ? (
+        <button
+          className="sound-event-action sound-event-change"
+          onClick={() => onRequestUpload({ index: 0, mode: "replace" })}
+          type="button"
+        >
+          {settings.assets[0] ? "Change Sound" : "Add Sound"}
+        </button>
+      ) : null}
+
+      {multiple ? (
+        <>
+          <button
+            className="sound-event-action sound-event-add"
+            onClick={() => onRequestUpload({ mode: "append" })}
+            type="button"
+          >
+            Add Sound
+          </button>
+          <div className="sound-event-field sound-event-playback-field">
+            <span>Playback Mode</span>
+            <DesignDropdown
+              ariaLabel={`${label} sound playback mode`}
+              className="sound-event-select"
+              noScroll
+              onChange={(value) => {
+                const playbackMode = interactionSoundPlaybackOptions.find(
+                  (option) => option.value === value,
+                )?.value;
+                if (!playbackMode) return;
+                onCheckpoint();
+                onChange({ playbackMode });
+              }}
+              options={interactionSoundPlaybackOptions}
+              value={settings.playbackMode}
+            />
+          </div>
+          <label className="sound-event-checkbox">
+            <input
+              checked={settings.avoidRepeating}
+              onChange={(changeEvent) => {
+                onCheckpoint();
+                onChange({ avoidRepeating: changeEvent.target.checked });
+              }}
+              type="checkbox"
+            />
+            <span aria-hidden="true">
+              <Check size={11} strokeWidth={2} />
+            </span>
+            Avoid repeating the same sound
+          </label>
+        </>
+      ) : null}
+
+      <div className="sound-event-volume-row">
+        <span>Volume</span>
+        <DesignRange
+          ariaLabel={`${label} sound detail volume`}
+          className="sound-event-volume-slider"
+          disabled={!settings.assets.length}
+          max={100}
+          min={0}
+          onBegin={onCheckpoint}
+          onChange={(volume) =>
+            onChange({ volume: clamp(Math.round(volume), 0, 100) })
+          }
+          value={settings.volume}
+        />
+        <span className="sound-event-volume-value">{settings.volume} %</span>
+      </div>
+
+      <div className="sound-event-field sound-event-fade-in-field">
+        <span>Fade In</span>
+        <SoundStepperField
+          ariaLabel={`${label} sound fade in duration`}
+          onBegin={onCheckpoint}
+          onChange={(fadeInSeconds) => onChange({ fadeInSeconds })}
+          value={settings.fadeInSeconds}
+        />
+      </div>
+
+      <div className="sound-event-field sound-event-fade-out-field">
+        <span>Fade Out</span>
+        <SoundStepperField
+          ariaLabel={`${label} sound fade out duration`}
+          onBegin={onCheckpoint}
+          onChange={(fadeOutSeconds) => onChange({ fadeOutSeconds })}
+          value={settings.fadeOutSeconds}
+        />
+      </div>
+    </div>
+  );
+}
+
+function InteractionSoundRow({
+  expanded,
+  menuOpen,
+  onChange,
+  onCheckpoint,
+  onExpandedChange,
+  onMenuOpenChange,
+  onPreview,
+  onRequestUpload,
+  playingSource,
+  settings,
+}: {
+  expanded: boolean;
+  menuOpen: boolean;
+  onChange: (updates: Partial<InteractionSoundSettings>) => void;
+  onCheckpoint: () => void;
+  onExpandedChange: (expanded: boolean) => void;
+  onMenuOpenChange: (open: boolean) => void;
+  onPreview: (asset: BackgroundMusicAsset) => void;
+  onRequestUpload: (request: InteractionSoundUploadRequest) => void;
+  playingSource: string | null;
+  settings: InteractionSoundSettings;
+}) {
+  const menuRef = useRef<HTMLDivElement>(null);
+  const label =
+    interactionSoundTriggerOptions.find(
+      (option) => option.value === settings.trigger,
+    )?.label ?? settings.trigger;
+  const rowId = settings.id;
+  const menuId = `${rowId}-menu`;
+  const primaryAsset = settings.assets[0] ?? null;
+  const extraFileRows =
+    settings.soundSource === "multiple"
+      ? Math.max(0, settings.assets.length - 1)
+      : 0;
+  const expandedHeight =
+    settings.soundSource === "multiple" ? 306 + extraFileRows * 25 : 261;
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const frame = window.requestAnimationFrame(() => {
+      menuRef.current?.querySelector("button")?.focus();
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [menuOpen]);
+
+  return (
+    <div
+      className={
+        menuOpen
+          ? "sound-interaction-item is-menu-open"
+          : "sound-interaction-item"
+      }
+      onBlur={(blurEvent) => {
+        if (
+          !blurEvent.currentTarget.contains(
+            blurEvent.relatedTarget as Node | null,
+          )
+        ) {
+          onMenuOpenChange(false);
+        }
+      }}
+      onKeyDown={(keyEvent) => {
+        if (keyEvent.key === "Escape") onMenuOpenChange(false);
+      }}
+    >
+      <div
+        aria-label={`${label} interaction sound`}
+        className={[
+          "sound-interaction-row",
+          primaryAsset ? "" : "is-empty",
+          expanded ? "is-expanded" : "",
+          expanded && settings.soundSource === "multiple" ? "is-multiple" : "",
+        ]
+          .filter(Boolean)
+          .join(" ")}
+        role="group"
+        style={expanded ? { height: `${expandedHeight}px` } : undefined}
+      >
+        <div className="sound-interaction-row-header">
+          <span className="sound-interaction-trigger">{label}</span>
+          <SoundPlayButton
+            disabled={!primaryAsset}
+            isPlaying={Boolean(
+              primaryAsset && playingSource === primaryAsset.src,
+            )}
+            label={
+              playingSource === primaryAsset?.src
+                ? `Pause ${label} sound`
+                : `Preview ${label} sound`
+            }
+            onClick={() => {
+              if (primaryAsset) onPreview(primaryAsset);
+            }}
+          />
+          <span
+            aria-label={
+              primaryAsset
+                ? `${label} sound file name: ${primaryAsset.name}`
+                : `${label} sound file name: empty`
+            }
+            className="sound-interaction-name"
+            title={primaryAsset?.name}
+          >
+            {primaryAsset?.name ?? ""}
+          </span>
+          <span className="sound-interaction-volume">{settings.volume} %</span>
+          <DesignRange
+            ariaLabel={`${label} sound volume`}
+            className="sound-mini-slider"
+            disabled={!primaryAsset}
+            max={100}
+            min={0}
+            onBegin={onCheckpoint}
+            onChange={(volume) =>
+              onChange({ volume: clamp(Math.round(volume), 0, 100) })
+            }
+            value={settings.volume}
+          />
+          <SoundMoreButton
+            controls={menuId}
+            expanded={menuOpen}
+            label={`More ${label} sound options`}
+            onClick={() => onMenuOpenChange(!menuOpen)}
+          />
+        </div>
+
+        {expanded ? (
+          <InteractionSoundDetails
+            onChange={onChange}
+            onCheckpoint={onCheckpoint}
+            onPreview={onPreview}
+            onRequestUpload={onRequestUpload}
+            playingSource={playingSource}
+            settings={settings}
+          />
+        ) : null}
+      </div>
+
+      {menuOpen ? (
+        <div
+          aria-label={`${label} sound options menu`}
+          className="sound-file-menu sound-interaction-menu"
+          id={menuId}
+          onKeyDown={(event) => {
+            if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+              event.preventDefault();
+              menuRef.current?.querySelector("button")?.focus();
+            }
+          }}
+          ref={menuRef}
+          role="menu"
+        >
+          <button
+            onClick={() => {
+              onMenuOpenChange(false);
+              onExpandedChange(!expanded);
+            }}
+            role="menuitem"
+            type="button"
+          >
+            Event Settings
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function InteractionSoundsSection({
+  onChange,
+  onCheckpoint,
+  onCreateObjectUrl,
+  settings,
+  showAdd,
+}: {
+  onChange: (updates: Partial<InteractionSoundSettings>) => void;
+  onCheckpoint: () => void;
+  onCreateObjectUrl: (file: Blob) => string;
+  settings: InteractionSoundSettings;
+  showAdd: boolean;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [playingSource, setPlayingSource] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const previewAudioRef = useRef<HTMLAudioElement>(null);
+  const previewActiveRef = useRef<{
+    assetSrc: string;
+    fadeOutSeconds: number;
+    stopping: boolean;
+  } | null>(null);
+  const previewEnvelopeCancelRef = useRef<(() => void) | null>(null);
+  const previewFadeCancelRef = useRef<(() => void) | null>(null);
+  const previewRequestRef = useRef(0);
+  const previewSettingsRef = useRef(settings);
+  const uploadRequestRef = useRef<InteractionSoundUploadRequest | null>(null);
+  previewSettingsRef.current = settings;
+
+  const requestUpload = (request: InteractionSoundUploadRequest) => {
+    uploadRequestRef.current = request;
+    fileInputRef.current?.click();
+  };
+
+  const cancelPreviewAnimations = useCallback(() => {
+    previewEnvelopeCancelRef.current?.();
+    previewFadeCancelRef.current?.();
+    previewEnvelopeCancelRef.current = null;
+    previewFadeCancelRef.current = null;
+  }, []);
+
+  const finishPreviewStop = useCallback(() => {
+    cancelPreviewAnimations();
+    const audio = previewAudioRef.current;
+    if (audio) {
+      if (!audio.paused) audio.pause();
+      audio.currentTime = 0;
+      audio.loop = false;
+    }
+    previewActiveRef.current = null;
+    setPlayingSource(null);
+  }, [cancelPreviewAnimations]);
+
+  const stopPreview = useCallback(
+    (withFadeOut: boolean) => {
+      previewRequestRef.current += 1;
+      previewEnvelopeCancelRef.current?.();
+      previewEnvelopeCancelRef.current = null;
+      const audio = previewAudioRef.current;
+      const active = previewActiveRef.current;
+      if (!audio || !active || active.stopping) {
+        finishPreviewStop();
+        return;
+      }
+      previewFadeCancelRef.current?.();
+      previewFadeCancelRef.current = null;
+      if (withFadeOut && active.fadeOutSeconds > 0 && !audio.paused) {
+        active.stopping = true;
+        const expectedActive = active;
+        previewFadeCancelRef.current = fadeInteractionSoundToSilence(
+          audio,
+          active.fadeOutSeconds,
+          () => {
+            previewFadeCancelRef.current = null;
+            if (previewActiveRef.current !== expectedActive) return;
+            if (!audio.paused) audio.pause();
+            audio.currentTime = 0;
+            audio.loop = false;
+            previewActiveRef.current = null;
+            setPlayingSource(null);
+          },
+        );
+        return;
+      }
+      finishPreviewStop();
+    },
+    [finishPreviewStop],
+  );
+
+  const togglePreview = useCallback(
+    async (asset: BackgroundMusicAsset) => {
+      const audio = previewAudioRef.current;
+      if (!audio) return;
+      if (previewActiveRef.current?.assetSrc === asset.src) {
+        stopPreview(true);
+        return;
+      }
+      stopPreview(false);
+      const request = ++previewRequestRef.current;
+      const currentSettings = previewSettingsRef.current;
+      const active = {
+        assetSrc: asset.src,
+        fadeOutSeconds: currentSettings.fadeOutSeconds,
+        stopping: false,
+      };
+      previewActiveRef.current = active;
+      audio.src = asset.src;
+      audio.loop = false;
+      audio.volume = calculateInteractionSoundVolume(
+        currentSettings,
+        0,
+        0,
+        Number.NaN,
+        false,
+      );
+      try {
+        const playResult = audio.play();
+        if (playResult) await playResult;
+        if (
+          previewRequestRef.current !== request ||
+          previewActiveRef.current !== active
+        ) {
+          return;
+        }
+        setPlayingSource(asset.src);
+        previewEnvelopeCancelRef.current = startInteractionSoundEnvelope(
+          audio,
+          () => previewSettingsRef.current,
+          false,
+        );
+      } catch {
+        if (previewActiveRef.current !== active) return;
+        previewActiveRef.current = null;
+        setPlayingSource(null);
+      }
+    },
+    [stopPreview],
+  );
+
+  useEffect(() => {
+    const audio = previewAudioRef.current;
+    if (audio && !previewActiveRef.current) {
+      audio.volume = clamp(settings.volume / 100, 0, 1);
+    }
+  }, [settings.volume]);
+
+  useEffect(
+    () => () => {
+      previewRequestRef.current += 1;
+      cancelPreviewAnimations();
+      const audio = previewAudioRef.current;
+      if (audio && !audio.paused) audio.pause();
+      previewActiveRef.current = null;
+    },
+    [cancelPreviewAnimations],
+  );
+
+  const handlePreviewEnded = () => {
+    cancelPreviewAnimations();
+    previewActiveRef.current = null;
+    setPlayingSource(null);
+  };
+
+  const updateSettings = (updates: Partial<InteractionSoundSettings>) => {
+    const activeSource = previewActiveRef.current?.assetSrc;
+    if (
+      updates.assets &&
+      activeSource &&
+      !updates.assets.some((asset) => asset.src === activeSource)
+    ) {
+      stopPreview(false);
+    }
+    onChange(updates);
+  };
+
+  const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const request = uploadRequestRef.current;
+    const selectedFiles = Array.from(event.currentTarget.files ?? []);
+    event.currentTarget.value = "";
+    uploadRequestRef.current = null;
+    if (!request || selectedFiles.length === 0) return;
+
+    const files =
+      request.mode === "append" ? selectedFiles : selectedFiles.slice(0, 1);
+    const assets = files.map((file) => ({
+      durationSeconds: 0,
+      mimeType: file.type,
+      name: file.name,
+      sizeBytes: file.size,
+      src: onCreateObjectUrl(file),
+    }));
+    const nextAssets = [...settings.assets];
+    if (request.mode === "append") nextAssets.push(...assets);
+    else nextAssets[request.index] = assets[0];
+    onCheckpoint();
+    onChange({ assets: nextAssets });
+  };
+
+  return (
+    <>
+      <div aria-hidden="true" className="sound-interaction-divider" />
+      <section
+        aria-label="Interaction Sounds"
+        className="sound-interaction-section"
+      >
+        <div className="sound-section-heading">
+          <h2>Interaction Sounds</h2>
+          {showAdd ? (
+            <button
+              className="sound-add-button"
+              onClick={() => requestUpload({ index: 0, mode: "replace" })}
+              type="button"
+            >
+              <span aria-hidden="true">+</span> Add
+            </button>
+          ) : null}
+        </div>
+
+        <input
+          accept="audio/*,.mp3,.wav,.ogg,.m4a,.aac,.flac"
+          aria-label="Choose interaction sound file"
+          className="sound-file-input"
+          multiple
+          onChange={handleFileChange}
+          ref={fileInputRef}
+          type="file"
+        />
+        <InteractionSoundRow
+          expanded={expanded}
+          menuOpen={menuOpen}
+          onChange={updateSettings}
+          onCheckpoint={onCheckpoint}
+          onExpandedChange={setExpanded}
+          onMenuOpenChange={setMenuOpen}
+          onPreview={(asset) => void togglePreview(asset)}
+          onRequestUpload={requestUpload}
+          playingSource={playingSource}
+          settings={settings}
+        />
+        <audio
+          aria-hidden="true"
+          className="sound-interaction-preview"
+          onEnded={handlePreviewEnded}
+          preload="metadata"
+          ref={previewAudioRef}
+        />
+      </section>
+    </>
+  );
+}
+
+function SoundPanel({
+  onAttachArtwork,
+  onCheckpoint,
+  onCreateObjectUrl,
+  onUpdate,
+  onUpdateInteractionSound,
+  pageId,
+  selectedElements,
+  settings,
+}: {
+  onAttachArtwork: (pageId: string, assetSrc: string, artwork: Blob) => void;
+  onCheckpoint: () => void;
+  onCreateObjectUrl: (file: Blob) => string;
+  onUpdate: (updates: Partial<BackgroundMusicSettings>) => void;
+  onUpdateInteractionSound: (
+    elementIds: string[],
+    settings: InteractionSoundSettings,
+  ) => void;
+  pageId: string;
+  selectedElements: CanvasElement[];
+  settings: BackgroundMusicSettings;
+}) {
+  const [expanded, setExpanded] = useState(true);
+  const [fileMenuOpen, setFileMenuOpen] = useState(false);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [failedArtworkSource, setFailedArtworkSource] = useState<string | null>(
+    null,
+  );
+  const [audioErrorState, setAudioErrorState] = useState<{
+    message: string;
+    source: string;
+  } | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const fileMenuRef = useRef<HTMLDivElement>(null);
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const waveformRef = useRef<HTMLCanvasElement>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const audioSourceRef = useRef<MediaElementAudioSourceNode | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const gainNodeRef = useRef<GainNode | null>(null);
+  const lastTimeRenderRef = useRef(0);
+  const previewRequestRef = useRef(0);
+  const asset = settings.asset;
+  const audioError =
+    audioErrorState && audioErrorState.source === asset?.src
+      ? audioErrorState.message
+      : null;
+  const assetSourceRef = useRef(asset?.src);
+  assetSourceRef.current = asset?.src;
+  const visibleArtworkSource =
+    asset?.artworkSrc && asset.artworkSrc !== failedArtworkSource
+      ? asset.artworkSrc
+      : null;
+  const hasShapeSelection =
+    selectedElements.length > 0 &&
+    selectedElements.every((element) =>
+      ["rectangle", "circle", "triangle", "star", "line", "pen"].includes(
+        element.type,
+      ),
+    );
+  const selectedShapeKey = selectedElements
+    .map((element) => element.id)
+    .sort()
+    .join(":");
+  const interactionSoundSettings = normalizedInteractionSound(
+    selectedElements[0]?.interactionSounds?.[0],
+  );
+  const interactionSignature = `${interactionSoundSettings.trigger}:${interactionSoundSettings.event}`;
+  const hasCommonInteraction = selectedElements.every((element) => {
+    const sound = normalizedInteractionSound(element.interactionSounds?.[0]);
+    return `${sound.trigger}:${sound.event}` === interactionSignature;
+  });
+  const updateInteractionSound = (
+    updates: Partial<InteractionSoundSettings>,
+  ) => {
+    onUpdateInteractionSound(
+      selectedElements.map((element) => element.id),
+      { ...interactionSoundSettings, ...updates },
+    );
+  };
+
+  const drawWaveform = useCallback((frequencyData?: Uint8Array) => {
+    const canvas = waveformRef.current;
+    if (!canvas) return;
+    const width = Math.max(1, canvas.clientWidth || 163);
+    const height = Math.max(1, canvas.clientHeight || 13);
+    const pixelRatio = Math.max(1, window.devicePixelRatio || 1);
+    const renderWidth = Math.round(width * pixelRatio);
+    const renderHeight = Math.round(height * pixelRatio);
+    if (canvas.width !== renderWidth || canvas.height !== renderHeight) {
+      canvas.width = renderWidth;
+      canvas.height = renderHeight;
+    }
+    const context = canvas.getContext("2d");
+    if (!context) return;
+    context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+    context.clearRect(0, 0, width, height);
+    context.fillStyle = "#ab51f0";
+
+    if (!frequencyData?.length) {
+      context.fillRect(0, Math.floor(height / 2), width, 1);
+      return;
+    }
+
+    const barCount = Math.max(1, Math.floor(width / 3));
+    const centerY = height / 2;
+    for (let index = 0; index < barCount; index += 1) {
+      const sourceIndex = Math.min(
+        frequencyData.length - 1,
+        Math.floor((index / barCount) ** 1.7 * frequencyData.length),
+      );
+      const strength = frequencyData[sourceIndex] / 255;
+      const barHeight = Math.max(1, Math.round(strength * height));
+      const x = Math.round((index / Math.max(1, barCount - 1)) * (width - 1));
+      context.globalAlpha = 0.42 + strength * 0.58;
+      context.fillRect(x, Math.round(centerY - barHeight / 2), 1, barHeight);
+    }
+    context.globalAlpha = 1;
+  }, []);
+
+  const applyPreviewVolume = useCallback(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    const volume = effectiveBackgroundMusicVolume(
+      settings,
+      audio.currentTime,
+      audio.duration,
+    );
+    if (gainNodeRef.current) {
+      audio.volume = 1;
+      gainNodeRef.current.gain.value = volume;
+    } else {
+      audio.volume = volume;
+    }
+  }, [settings]);
+
+  const prepareAudioGraph = useCallback(async () => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    const AudioContextConstructor =
+      window.AudioContext ??
+      (window as typeof window & { webkitAudioContext?: typeof AudioContext })
+        .webkitAudioContext;
+    if (!AudioContextConstructor) return;
+
+    if (!audioContextRef.current) {
+      const context = new AudioContextConstructor();
+      const source = context.createMediaElementSource(audio);
+      const analyser = context.createAnalyser();
+      const gain = context.createGain();
+      analyser.fftSize = 256;
+      analyser.smoothingTimeConstant = 0.8;
+      source.connect(analyser);
+      analyser.connect(gain);
+      gain.connect(context.destination);
+      audioContextRef.current = context;
+      audioSourceRef.current = source;
+      analyserRef.current = analyser;
+      gainNodeRef.current = gain;
+    }
+    if (audioContextRef.current.state === "suspended") {
+      await audioContextRef.current.resume();
+    }
+  }, []);
+
+  const suspendAudioGraph = useCallback(() => {
+    const context = audioContextRef.current;
+    if (context?.state === "running") {
+      void context.suspend().catch(() => {
+        // The context may already be closing while the panel unmounts.
+      });
+    }
+  }, []);
+
+  const stopPreview = useCallback(
+    (reset = false) => {
+      previewRequestRef.current += 1;
+      const audio = audioRef.current;
+      if (!audio) return;
+      if (!audio.paused) audio.pause();
+      if (reset) audio.currentTime = 0;
+      setCurrentTime(reset ? 0 : audio.currentTime);
+      setIsPlaying(false);
+      suspendAudioGraph();
+    },
+    [suspendAudioGraph],
+  );
+
+  const togglePreview = async () => {
+    const audio = audioRef.current;
+    if (!audio || !asset) return;
+    if (!audio.paused && !audio.ended) {
+      stopPreview();
+      return;
+    }
+    if (audio.ended) audio.currentTime = 0;
+    const source = asset.src;
+    const request = previewRequestRef.current + 1;
+    previewRequestRef.current = request;
+    try {
+      await prepareAudioGraph();
+      if (
+        previewRequestRef.current !== request ||
+        audioRef.current !== audio ||
+        assetSourceRef.current !== source
+      ) {
+        suspendAudioGraph();
+        return;
+      }
+      applyPreviewVolume();
+      const playResult = audio.play();
+      if (playResult) await playResult;
+      if (
+        previewRequestRef.current !== request ||
+        audioRef.current !== audio ||
+        assetSourceRef.current !== source
+      ) {
+        if (!audio.paused) audio.pause();
+        suspendAudioGraph();
+        return;
+      }
+      setAudioErrorState(null);
+      setIsPlaying(true);
+    } catch {
+      if (previewRequestRef.current === request) {
+        setAudioErrorState({
+          message: "Unable to play audio",
+          source,
+        });
+        setIsPlaying(false);
+        suspendAudioGraph();
+      }
+    }
+  };
+
+  useEffect(() => {
+    stopPreview(true);
+    drawWaveform();
+  }, [asset?.src, drawWaveform, stopPreview]);
+
+  useEffect(() => {
+    applyPreviewVolume();
+  }, [applyPreviewVolume]);
+
+  useEffect(() => {
+    if (!fileMenuOpen) return;
+    const animationFrame = window.requestAnimationFrame(() => {
+      fileMenuRef.current?.querySelector("button")?.focus();
+    });
+    return () => window.cancelAnimationFrame(animationFrame);
+  }, [fileMenuOpen]);
+
+  useEffect(() => {
+    if (!isPlaying) {
+      drawWaveform();
+      return;
+    }
+    const analyser = analyserRef.current;
+    const frequencyData = analyser
+      ? new Uint8Array(analyser.frequencyBinCount)
+      : undefined;
+    let animationFrame = 0;
+    const render = (timestamp: number) => {
+      const audio = audioRef.current;
+      if (!audio) return;
+      if (analyser && frequencyData) {
+        analyser.getByteFrequencyData(frequencyData);
+        drawWaveform(frequencyData);
+      } else {
+        drawWaveform();
+      }
+      applyPreviewVolume();
+      if (timestamp - lastTimeRenderRef.current >= 100) {
+        lastTimeRenderRef.current = timestamp;
+        setCurrentTime(audio.currentTime);
+      }
+      animationFrame = window.requestAnimationFrame(render);
+    };
+    animationFrame = window.requestAnimationFrame(render);
+    return () => window.cancelAnimationFrame(animationFrame);
+  }, [applyPreviewVolume, drawWaveform, isPlaying]);
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    return () => {
+      previewRequestRef.current += 1;
+      if (audio && !audio.paused) audio.pause();
+      if (audio) audio.currentTime = 0;
+      audioSourceRef.current?.disconnect();
+      analyserRef.current?.disconnect();
+      gainNodeRef.current?.disconnect();
+      void audioContextRef.current?.close();
+    };
+  }, []);
+
+  const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.currentTarget.files?.[0];
+    event.currentTarget.value = "";
+    if (!file) return;
+    const src = onCreateObjectUrl(file);
+    setAudioErrorState(null);
+    stopPreview(true);
+    onCheckpoint();
+    onUpdate({
+      asset: {
+        durationSeconds: 0,
+        mimeType: file.type,
+        name: file.name,
+        sizeBytes: file.size,
+        src,
+      },
+    });
+    setFileMenuOpen(false);
+    void extractEmbeddedAudioArtwork(file).then((artwork) => {
+      if (artwork) onAttachArtwork(pageId, src, artwork.blob);
+    });
+  };
+
+  const updateVolume = (volume: number) =>
+    onUpdate({ volume: clamp(Math.round(volume), 0, 100) });
+
   return (
     <section
       aria-label="Sound settings"
@@ -4282,112 +5773,314 @@ function SoundPanel() {
       <section className="sound-bgm-section">
         <div className="sound-section-heading">
           <h2>Background Music (BGM)</h2>
-          <Image
-            alt=""
-            aria-hidden="true"
-            className="sound-bgm-collapse"
-            height={9}
-            src={assetPath("/figma/sound/Group%20263.svg")}
-            width={9}
-          />
-        </div>
-
-        <div className="sound-upload-card">
-          <div aria-hidden="true" className="sound-file-thumbnail" />
-          <div className="sound-upload-copy">
-            <strong>파일명</strong>
-            <span>00:00 / 0.0MB</span>
-          </div>
-          <div className="sound-preview-row">
-            <SoundPlayButton label="Preview background music" />
-            <span aria-hidden="true" className="sound-preview-track" />
-          </div>
-          <span className="sound-preview-time">00:00 / 00:00</span>
-          <SoundMoreButton label="More background music options" />
-        </div>
-
-        <div className="sound-control-row sound-volume-row">
-          <span className="sound-control-label">Volume</span>
-          <span aria-hidden="true" className="sound-slider is-full">
-            <span />
-          </span>
-          <label className="sound-percent-field">
-            <input aria-label="Sound volume" readOnly value="100" />
-            <span>%</span>
-          </label>
-        </div>
-
-        <div className="sound-control-row">
-          <span className="sound-control-label">Fade In</span>
-          <SoundStepperField ariaLabel="Fade in duration" value="0.0" />
-        </div>
-
-        <div className="sound-control-row">
-          <span className="sound-control-label">Fade Out</span>
-          <SoundStepperField ariaLabel="Fade out duration" value="0.0" />
-        </div>
-
-        <div className="sound-control-row">
-          <span className="sound-control-label">Loop</span>
           <button
-            aria-label="Loop"
-            aria-pressed="true"
-            className="sound-toggle is-active"
+            aria-expanded={expanded}
+            aria-label={
+              expanded ? "Collapse background music" : "Expand background music"
+            }
+            className={
+              expanded ? "sound-bgm-collapse is-expanded" : "sound-bgm-collapse"
+            }
+            onClick={() => setExpanded((current) => !current)}
             type="button"
           >
-            <span />
+            <Image
+              alt=""
+              aria-hidden="true"
+              height={9}
+              src={assetPath("/figma/sound/Group%20263.svg")}
+              width={9}
+            />
           </button>
         </div>
 
-        <div className="sound-control-row">
-          <span className="sound-control-label">Start Playback</span>
-          <button className="sound-playback-select" type="button">
-            <span>On Page Enter</span>
-            <span aria-hidden="true">▼</span>
-          </button>
+        <div className="sound-bgm-content" hidden={!expanded}>
+          <div className="sound-upload-card">
+            <div aria-hidden="true" className="sound-file-thumbnail">
+              {asset ? (
+                visibleArtworkSource ? (
+                  <Image
+                    alt=""
+                    className="sound-file-thumbnail-artwork"
+                    fill
+                    onError={() => setFailedArtworkSource(visibleArtworkSource)}
+                    sizes="33px"
+                    src={visibleArtworkSource}
+                    unoptimized
+                  />
+                ) : (
+                  <Music2
+                    aria-hidden="true"
+                    className="sound-file-thumbnail-icon"
+                    size={16}
+                    strokeWidth={1.5}
+                  />
+                )
+              ) : null}
+            </div>
+            <div className="sound-upload-copy">
+              <strong title={asset?.name}>{asset?.name ?? "No file"}</strong>
+              <span
+                aria-live="polite"
+                className={audioError ? "is-error" : undefined}
+              >
+                {audioError ?? (
+                  <>
+                    {formatAudioTime(asset?.durationSeconds ?? 0)} /{" "}
+                    {formatAudioSize(asset?.sizeBytes ?? 0)}
+                  </>
+                )}
+              </span>
+            </div>
+            <div className="sound-preview-row">
+              <SoundPlayButton
+                disabled={!asset || Boolean(audioError)}
+                isPlaying={isPlaying}
+                label={
+                  isPlaying
+                    ? "Pause background music preview"
+                    : "Play background music preview"
+                }
+                onClick={() => void togglePreview()}
+              />
+              <span aria-hidden="true" className="sound-preview-track">
+                <canvas className="sound-preview-waveform" ref={waveformRef} />
+              </span>
+            </div>
+            <span className="sound-preview-time">
+              {formatAudioTime(currentTime)} /{" "}
+              {formatAudioTime(asset?.durationSeconds ?? 0)}
+            </span>
+            <div
+              className="sound-file-actions"
+              onBlur={(event) => {
+                if (
+                  !event.currentTarget.contains(
+                    event.relatedTarget as Node | null,
+                  )
+                ) {
+                  setFileMenuOpen(false);
+                }
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") setFileMenuOpen(false);
+              }}
+            >
+              <input
+                accept="audio/*,.mp3,.wav,.ogg,.m4a,.aac,.flac"
+                aria-label="Choose background music file"
+                className="sound-file-input"
+                onChange={handleFileChange}
+                ref={fileInputRef}
+                type="file"
+              />
+              {asset ? (
+                <SoundMoreButton
+                  controls="background-music-file-menu"
+                  expanded={fileMenuOpen}
+                  label="Background music file options"
+                  onClick={() => setFileMenuOpen((current) => !current)}
+                />
+              ) : (
+                <button
+                  aria-label="Upload background music"
+                  className="sound-upload-button"
+                  onClick={() => fileInputRef.current?.click()}
+                  type="button"
+                >
+                  <Image
+                    alt=""
+                    aria-hidden="true"
+                    height={15}
+                    src={assetPath("/figma/upload.svg")}
+                    width={18}
+                  />
+                </button>
+              )}
+              {asset && fileMenuOpen ? (
+                <div
+                  aria-label="Background music file options menu"
+                  className="sound-file-menu"
+                  id="background-music-file-menu"
+                  onKeyDown={(event) => {
+                    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") {
+                      return;
+                    }
+                    event.preventDefault();
+                    const items = Array.from(
+                      event.currentTarget.querySelectorAll("button"),
+                    );
+                    const currentIndex = items.indexOf(
+                      document.activeElement as HTMLButtonElement,
+                    );
+                    const direction = event.key === "ArrowDown" ? 1 : -1;
+                    const nextIndex =
+                      (currentIndex + direction + items.length) % items.length;
+                    items[nextIndex]?.focus();
+                  }}
+                  ref={fileMenuRef}
+                  role="menu"
+                >
+                  <button
+                    onClick={() => {
+                      setFileMenuOpen(false);
+                      fileInputRef.current?.click();
+                    }}
+                    role="menuitem"
+                    type="button"
+                  >
+                    Change File
+                  </button>
+                  <button
+                    onClick={() => {
+                      stopPreview(true);
+                      onCheckpoint();
+                      onUpdate({ asset: null });
+                      setFileMenuOpen(false);
+                    }}
+                    role="menuitem"
+                    type="button"
+                  >
+                    Delete File
+                  </button>
+                </div>
+              ) : null}
+            </div>
+            <audio
+              loop={settings.loop}
+              onEnded={() => {
+                setCurrentTime(audioRef.current?.duration ?? 0);
+                setIsPlaying(false);
+                suspendAudioGraph();
+              }}
+              onCanPlay={() => setAudioErrorState(null)}
+              onError={() => {
+                stopPreview(true);
+                if (asset) {
+                  setAudioErrorState({
+                    message: "Unsupported audio",
+                    source: asset.src,
+                  });
+                }
+              }}
+              onLoadedMetadata={(event) => {
+                if (!asset) return;
+                setAudioErrorState(null);
+                const durationSeconds = Number.isFinite(
+                  event.currentTarget.duration,
+                )
+                  ? event.currentTarget.duration
+                  : 0;
+                if (Math.abs(durationSeconds - asset.durationSeconds) > 0.01) {
+                  onUpdate({ asset: { ...asset, durationSeconds } });
+                }
+              }}
+              onPause={() => setIsPlaying(false)}
+              onTimeUpdate={(event) => {
+                setCurrentTime(event.currentTarget.currentTime);
+                applyPreviewVolume();
+              }}
+              preload="metadata"
+              ref={audioRef}
+              src={asset?.src}
+            />
+          </div>
+
+          <div className="sound-control-row sound-volume-row">
+            <span className="sound-control-label">Volume</span>
+            <DesignRange
+              ariaLabel="Background music volume"
+              className="sound-slider"
+              max={100}
+              min={0}
+              onBegin={onCheckpoint}
+              onChange={updateVolume}
+              value={settings.volume}
+            />
+            <SoundPercentField
+              onBegin={onCheckpoint}
+              onChange={updateVolume}
+              value={settings.volume}
+            />
+          </div>
+
+          <div className="sound-control-row">
+            <span className="sound-control-label">Fade In</span>
+            <SoundStepperField
+              ariaLabel="Fade in duration"
+              onBegin={onCheckpoint}
+              onChange={(fadeInSeconds) => onUpdate({ fadeInSeconds })}
+              value={settings.fadeInSeconds}
+            />
+          </div>
+
+          <div className="sound-control-row">
+            <span className="sound-control-label">Fade Out</span>
+            <SoundStepperField
+              ariaLabel="Fade out duration"
+              onBegin={onCheckpoint}
+              onChange={(fadeOutSeconds) => onUpdate({ fadeOutSeconds })}
+              value={settings.fadeOutSeconds}
+            />
+          </div>
+
+          <div className="sound-control-row">
+            <span className="sound-control-label">Loop</span>
+            <button
+              aria-label="Loop"
+              aria-pressed={settings.loop}
+              className={
+                settings.loop ? "sound-toggle is-active" : "sound-toggle"
+              }
+              onClick={() => {
+                onCheckpoint();
+                onUpdate({ loop: !settings.loop });
+              }}
+              type="button"
+            >
+              <span />
+            </button>
+          </div>
+
+          <div className="sound-control-row">
+            <span className="sound-control-label">Start Playback</span>
+            <DesignDropdown
+              ariaLabel="Start playback"
+              className="sound-playback-select"
+              noScroll
+              onChange={(startPlayback) => {
+                if (!isBackgroundMusicStartMode(startPlayback)) return;
+                onCheckpoint();
+                onUpdate({ startPlayback });
+              }}
+              options={backgroundMusicStartOptions}
+              value={settings.startPlayback}
+            />
+          </div>
+
+          {settings.startPlayback === "after-delay" ? (
+            <div className="sound-control-row sound-delay-row">
+              <span className="sound-control-label">Delay</span>
+              <SoundStepperField
+                ariaLabel="Playback delay"
+                onBegin={onCheckpoint}
+                onChange={(delaySeconds) => onUpdate({ delaySeconds })}
+                value={settings.delaySeconds}
+              />
+            </div>
+          ) : null}
         </div>
       </section>
-
-      <section className="sound-interaction-section">
-        <div className="sound-section-heading">
-          <h2>Interaction Sounds</h2>
-          <button className="sound-add-button" type="button">
-            +&nbsp;&nbsp;Add Sound
-          </button>
-        </div>
-
-        <div className="sound-interaction-row">
-          <div className="sound-interaction-row-header">
-            <button className="sound-interaction-trigger" type="button">
-              Hover
-              <span aria-hidden="true">▼</span>
-            </button>
-            <SoundPlayButton label="Preview hover sound" />
-            <span className="sound-interaction-name">효과음 이름.wav</span>
-            <span className="sound-interaction-volume">100 %</span>
-            <span aria-hidden="true" className="sound-mini-slider is-full">
-              <span />
-            </span>
-            <SoundMoreButton label="More hover sound options" />
-          </div>
-        </div>
-
-        <div className="sound-interaction-row is-expanded">
-          <div className="sound-interaction-row-header">
-            <button className="sound-interaction-trigger" type="button">
-              Click
-              <span aria-hidden="true">▼</span>
-            </button>
-            <SoundPlayButton label="Preview click sound" />
-            <span className="sound-interaction-name">효과음 이름.wav</span>
-            <span className="sound-interaction-volume">50 %</span>
-            <span aria-hidden="true" className="sound-mini-slider is-half">
-              <span />
-            </span>
-            <SoundMoreButton label="More click sound options" />
-          </div>
-        </div>
-      </section>
+      {hasShapeSelection ? (
+        <InteractionSoundsSection
+          key={selectedShapeKey}
+          onChange={updateInteractionSound}
+          onCheckpoint={onCheckpoint}
+          onCreateObjectUrl={onCreateObjectUrl}
+          settings={interactionSoundSettings}
+          showAdd={selectedElements.length > 1 && hasCommonInteraction}
+        />
+      ) : null}
     </section>
   );
 }
@@ -6227,12 +7920,158 @@ function viewerPreviewLayout(
   };
 }
 
+function ViewerBackgroundMusic({
+  settings,
+}: {
+  settings: BackgroundMusicSettings;
+}) {
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const settingsRef = useRef(settings);
+  settingsRef.current = settings;
+  const source = settings.asset?.src;
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio || !source) return;
+    let animationFrame = 0;
+    let delayTimer = 0;
+    let started = false;
+    let interactionListenersActive = false;
+    let disposed = false;
+    const interactionTarget = document.querySelector(
+      ".viewer-preview-viewport",
+    );
+
+    const updateVolume = () => {
+      const currentSettings = settingsRef.current;
+      audio.volume = effectiveBackgroundMusicVolume(
+        currentSettings,
+        audio.currentTime,
+        audio.duration,
+      );
+    };
+
+    const render = () => {
+      updateVolume();
+      if (!audio.paused && !audio.ended) {
+        animationFrame = window.requestAnimationFrame(render);
+      }
+    };
+
+    const removeInteractionListeners = () => {
+      interactionTarget?.removeEventListener("pointerdown", startFromEvent);
+      window.removeEventListener("keydown", startFromEvent);
+      interactionListenersActive = false;
+    };
+
+    const addInteractionListeners = () => {
+      if (interactionListenersActive || disposed) return;
+      interactionTarget?.addEventListener("pointerdown", startFromEvent);
+      window.addEventListener("keydown", startFromEvent);
+      interactionListenersActive = true;
+    };
+
+    const startPlayback = () => {
+      if (started) return;
+      started = true;
+      removeInteractionListeners();
+      audio.currentTime = 0;
+      audio.loop = settingsRef.current.loop;
+      updateVolume();
+      const playResult = audio.play();
+      const beginRendering = () => {
+        if (disposed) return;
+        window.cancelAnimationFrame(animationFrame);
+        animationFrame = window.requestAnimationFrame(render);
+      };
+      if (playResult) {
+        void playResult.then(beginRendering).catch(() => {
+          started = false;
+          window.cancelAnimationFrame(animationFrame);
+          addInteractionListeners();
+        });
+      } else {
+        beginRendering();
+      }
+    };
+
+    function startFromEvent() {
+      startPlayback();
+    }
+
+    switch (settings.startPlayback) {
+      case "on-page-enter":
+        startPlayback();
+        break;
+      case "after-delay":
+        delayTimer = window.setTimeout(
+          startPlayback,
+          Math.max(0, settings.delaySeconds) * 1000,
+        );
+        break;
+      case "on-interaction":
+        addInteractionListeners();
+        break;
+      case "manual":
+        break;
+    }
+
+    return () => {
+      disposed = true;
+      removeInteractionListeners();
+      window.clearTimeout(delayTimer);
+      window.cancelAnimationFrame(animationFrame);
+      if (!audio.paused) audio.pause();
+      audio.currentTime = 0;
+    };
+  }, [settings.delaySeconds, settings.startPlayback, source]);
+
+  if (!source) return null;
+  return (
+    <audio
+      aria-hidden="true"
+      className="viewer-background-music"
+      loop={settings.loop}
+      preload="auto"
+      ref={audioRef}
+      src={source}
+    />
+  );
+}
+
+type ViewerInteractionPointerSession = {
+  dragging: boolean;
+  elementId: string;
+  startX: number;
+  startY: number;
+};
+
+type ViewerInteractionAudioChannel = {
+  audio: HTMLAudioElement;
+  ended: boolean;
+  envelopeCancel: (() => void) | null;
+  fadeCancel: (() => void) | null;
+};
+
+type ViewerActiveInteractionSound = {
+  channels: ViewerInteractionAudioChannel[];
+  continuous: boolean;
+  elementId: string;
+  fadeOutSeconds: number;
+  settingId: string;
+  stopping: boolean;
+  targetVolume: number;
+  trigger: InteractionSoundTrigger;
+};
+
 function ViewerPreview({
   artboard,
+  backgroundMusic,
   elements,
   onClose,
 }: {
   artboard: ArtboardSettings;
+  backgroundMusic: BackgroundMusicSettings;
   elements: CanvasElement[];
   onClose: () => void;
 }) {
@@ -6241,6 +8080,281 @@ function ViewerPreview({
       typeof window === "undefined" ? artboard.height : window.innerHeight,
     width: typeof window === "undefined" ? artboard.width : window.innerWidth,
   }));
+  const interactionChannelCount = useMemo(
+    () =>
+      Math.max(
+        1,
+        ...elements.flatMap((element) =>
+          (element.interactionSounds ?? []).map((sound) =>
+            sound.soundSource === "multiple"
+              ? sound.assets.length
+              : Math.min(1, sound.assets.length),
+          ),
+        ),
+      ),
+    [elements],
+  );
+  const interactionAudioRefs = useRef<(HTMLAudioElement | null)[]>([]);
+  const activeInteractionRef = useRef<ViewerActiveInteractionSound | null>(
+    null,
+  );
+  const pointerSessionsRef = useRef(
+    new Map<number, ViewerInteractionPointerSession>(),
+  );
+  const scrollStopTimersRef = useRef(new Map<string, number>());
+
+  const cancelInteractionAnimations = useCallback(
+    (active = activeInteractionRef.current) => {
+      active?.channels.forEach((channel) => {
+        channel.envelopeCancel?.();
+        channel.fadeCancel?.();
+        channel.envelopeCancel = null;
+        channel.fadeCancel = null;
+      });
+    },
+    [],
+  );
+
+  const stopInteractionPlaybackImmediately = useCallback(
+    (active = activeInteractionRef.current) => {
+      if (!active) return;
+      cancelInteractionAnimations(active);
+      active.channels.forEach(({ audio }) => {
+        if (!audio.paused) audio.pause();
+        audio.currentTime = 0;
+        audio.loop = false;
+      });
+      if (activeInteractionRef.current === active) {
+        activeInteractionRef.current = null;
+      }
+    },
+    [cancelInteractionAnimations],
+  );
+
+  const handleInteractionChannelEnded = useCallback(
+    (audio: HTMLAudioElement) => {
+      const active = activeInteractionRef.current;
+      const channel = active?.channels.find(
+        (candidate) => candidate.audio === audio,
+      );
+      if (!active || !channel || channel.ended) return;
+      channel.envelopeCancel?.();
+      channel.fadeCancel?.();
+      channel.envelopeCancel = null;
+      channel.fadeCancel = null;
+      channel.ended = true;
+      audio.loop = false;
+      if (active.channels.every((candidate) => candidate.ended)) {
+        activeInteractionRef.current = null;
+      }
+    },
+    [],
+  );
+
+  const markInteractionChannelFailed = useCallback(
+    (
+      active: ViewerActiveInteractionSound,
+      channel: ViewerInteractionAudioChannel,
+    ) => {
+      if (activeInteractionRef.current !== active || channel.ended) return;
+      channel.envelopeCancel?.();
+      channel.fadeCancel?.();
+      channel.envelopeCancel = null;
+      channel.fadeCancel = null;
+      channel.ended = true;
+      channel.audio.loop = false;
+      if (active.channels.every((candidate) => candidate.ended)) {
+        activeInteractionRef.current = null;
+      }
+    },
+    [],
+  );
+
+  const playInteractionEvent = useCallback(
+    (
+      element: CanvasElement,
+      trigger: InteractionSoundTrigger,
+      interactionEvent: InteractionSoundEvent,
+      continuous = false,
+    ) => {
+      const setting = element.interactionSounds?.find(
+        (sound) =>
+          sound.trigger === trigger &&
+          sound.event === interactionEvent &&
+          sound.assets.length > 0,
+      );
+      if (!setting) return false;
+
+      const active = activeInteractionRef.current;
+      if (
+        continuous &&
+        active?.continuous &&
+        active.elementId === element.id &&
+        active.settingId === setting.id
+      ) {
+        if (active.stopping) {
+          active.channels.forEach((channel) => {
+            channel.fadeCancel?.();
+            channel.fadeCancel = null;
+            channel.audio.volume = active.targetVolume;
+          });
+          active.stopping = false;
+        }
+        return true;
+      }
+
+      const assets =
+        setting.soundSource === "single"
+          ? setting.assets.slice(0, 1)
+          : setting.assets;
+      if (assets.length === 0) return false;
+
+      const audioElements = assets.map(
+        (_asset, index) => interactionAudioRefs.current[index],
+      );
+      if (audioElements.some((audio) => !audio)) return false;
+
+      stopInteractionPlaybackImmediately(active);
+      const channels: ViewerInteractionAudioChannel[] = assets.map(
+        (asset, index) => {
+          const audio = audioElements[index] as HTMLAudioElement;
+          audio.loop = continuous;
+          audio.src = asset.src;
+          audio.volume = calculateInteractionSoundVolume(
+            setting,
+            0,
+            0,
+            Number.NaN,
+            continuous,
+          );
+          return {
+            audio,
+            ended: false,
+            envelopeCancel: null,
+            fadeCancel: null,
+          };
+        },
+      );
+      const nextActive: ViewerActiveInteractionSound = {
+        channels,
+        continuous,
+        elementId: element.id,
+        fadeOutSeconds: setting.fadeOutSeconds,
+        settingId: setting.id,
+        stopping: false,
+        targetVolume: clamp(setting.volume / 100, 0, 1),
+        trigger,
+      };
+      activeInteractionRef.current = nextActive;
+
+      channels.forEach((channel) => {
+        const beginEnvelope = () => {
+          if (activeInteractionRef.current !== nextActive || channel.ended) {
+            return;
+          }
+          channel.envelopeCancel = startInteractionSoundEnvelope(
+            channel.audio,
+            () => setting,
+            continuous,
+          );
+        };
+        try {
+          const playResult = channel.audio.play();
+          if (playResult) {
+            void playResult
+              .then(beginEnvelope)
+              .catch(() => markInteractionChannelFailed(nextActive, channel));
+          } else {
+            beginEnvelope();
+          }
+        } catch {
+          markInteractionChannelFailed(nextActive, channel);
+        }
+      });
+      return true;
+    },
+    [markInteractionChannelFailed, stopInteractionPlaybackImmediately],
+  );
+
+  const stopContinuousInteraction = useCallback(
+    (elementId: string, trigger?: InteractionSoundTrigger) => {
+      const active = activeInteractionRef.current;
+      if (
+        !active?.continuous ||
+        active.elementId !== elementId ||
+        (trigger && active.trigger !== trigger) ||
+        active.stopping
+      ) {
+        return;
+      }
+      active.stopping = true;
+      const completedChannels = new Set<ViewerInteractionAudioChannel>();
+      const finishChannel = (channel: ViewerInteractionAudioChannel) => {
+        if (
+          activeInteractionRef.current !== active ||
+          completedChannels.has(channel)
+        ) {
+          return;
+        }
+        completedChannels.add(channel);
+        channel.fadeCancel = null;
+        channel.audio.pause();
+        channel.audio.currentTime = 0;
+        channel.audio.loop = false;
+        channel.ended = true;
+        if (completedChannels.size === active.channels.length) {
+          activeInteractionRef.current = null;
+        }
+      };
+      active.channels.forEach((channel) => {
+        channel.envelopeCancel?.();
+        channel.envelopeCancel = null;
+        if (active.fadeOutSeconds > 0 && !channel.audio.paused) {
+          channel.fadeCancel = fadeInteractionSoundToSilence(
+            channel.audio,
+            active.fadeOutSeconds,
+            () => finishChannel(channel),
+          );
+        } else {
+          finishChannel(channel);
+        }
+      });
+    },
+    [],
+  );
+
+  const endPointerInteraction = useCallback(
+    (element: CanvasElement, pointerId: number) => {
+      const session = pointerSessionsRef.current.get(pointerId);
+      pointerSessionsRef.current.delete(pointerId);
+      if (!session || session.elementId !== element.id) return;
+      stopContinuousInteraction(element.id, "press");
+      stopContinuousInteraction(element.id, "drag");
+      playInteractionEvent(element, "press", "release");
+      if (session.dragging) {
+        playInteractionEvent(element, "drag", "drop");
+      }
+    },
+    [playInteractionEvent, stopContinuousInteraction],
+  );
+
+  useEffect(() => {
+    const timers = scrollStopTimersRef.current;
+    const audioElements = [...interactionAudioRefs.current];
+    return () => {
+      timers.forEach((timer) => window.clearTimeout(timer));
+      timers.clear();
+      stopInteractionPlaybackImmediately();
+      audioElements.forEach((audio) => {
+        if (!audio) return;
+        if (!audio.paused) audio.pause();
+        audio.currentTime = 0;
+        audio.loop = false;
+        audio.removeAttribute("src");
+      });
+      activeInteractionRef.current = null;
+    };
+  }, [interactionChannelCount, stopInteractionPlaybackImmediately]);
 
   useLayoutEffect(() => {
     const measure = () => {
@@ -6273,9 +8387,25 @@ function ViewerPreview({
       className="viewer-preview"
       role="dialog"
     >
+      <ViewerBackgroundMusic settings={backgroundMusic} />
+      {Array.from({ length: interactionChannelCount }, (_, index) => (
+        <audio
+          aria-hidden="true"
+          className="viewer-interaction-sound"
+          data-channel-index={index}
+          key={index}
+          onEnded={(event) =>
+            handleInteractionChannelEnded(event.currentTarget)
+          }
+          preload="auto"
+          ref={(audio) => {
+            interactionAudioRefs.current[index] = audio;
+          }}
+        />
+      ))}
       <button
         aria-label="Close preview"
-        className="viewer-preview-close"
+        className="viewer-preview-close interface-scale-surface"
         onClick={onClose}
         type="button"
       >
@@ -6319,7 +8449,101 @@ function ViewerPreview({
                 .map((element) => (
                   <div
                     className={`viewer-preview-element element-${element.type}`}
+                    data-element-id={element.id}
                     key={element.id}
+                    onClick={() =>
+                      playInteractionEvent(element, "click", "click")
+                    }
+                    onDoubleClick={() =>
+                      playInteractionEvent(element, "click", "double-click")
+                    }
+                    onPointerCancel={(event) => {
+                      const session = pointerSessionsRef.current.get(
+                        event.pointerId,
+                      );
+                      pointerSessionsRef.current.delete(event.pointerId);
+                      if (session?.elementId === element.id) {
+                        stopContinuousInteraction(element.id, "press");
+                        stopContinuousInteraction(element.id, "drag");
+                      }
+                    }}
+                    onPointerDown={(event) => {
+                      pointerSessionsRef.current.set(event.pointerId, {
+                        dragging: false,
+                        elementId: element.id,
+                        startX: event.clientX,
+                        startY: event.clientY,
+                      });
+                      event.currentTarget.setPointerCapture?.(event.pointerId);
+                      playInteractionEvent(element, "press", "press-start");
+                      playInteractionEvent(
+                        element,
+                        "press",
+                        "while-pressing",
+                        true,
+                      );
+                    }}
+                    onPointerEnter={() => {
+                      playInteractionEvent(element, "hover", "enter");
+                      playInteractionEvent(
+                        element,
+                        "hover",
+                        "while-hovering",
+                        true,
+                      );
+                    }}
+                    onPointerLeave={() => {
+                      stopContinuousInteraction(element.id, "hover");
+                      playInteractionEvent(element, "hover", "leave");
+                    }}
+                    onPointerMove={(event) => {
+                      const session = pointerSessionsRef.current.get(
+                        event.pointerId,
+                      );
+                      if (!session || session.elementId !== element.id) return;
+                      if (!session.dragging) {
+                        const distance = Math.hypot(
+                          event.clientX - session.startX,
+                          event.clientY - session.startY,
+                        );
+                        if (distance < 3) return;
+                        session.dragging = true;
+                        playInteractionEvent(element, "drag", "drag-start");
+                      }
+                      playInteractionEvent(
+                        element,
+                        "drag",
+                        "while-dragging",
+                        true,
+                      );
+                    }}
+                    onPointerUp={(event) => {
+                      if (
+                        event.currentTarget.hasPointerCapture?.(event.pointerId)
+                      ) {
+                        event.currentTarget.releasePointerCapture?.(
+                          event.pointerId,
+                        );
+                      }
+                      endPointerInteraction(element, event.pointerId);
+                    }}
+                    onWheel={() => {
+                      playInteractionEvent(
+                        element,
+                        "scroll",
+                        "while-scrolling",
+                        true,
+                      );
+                      const previousTimer = scrollStopTimersRef.current.get(
+                        element.id,
+                      );
+                      if (previousTimer) window.clearTimeout(previousTimer);
+                      const timer = window.setTimeout(() => {
+                        scrollStopTimersRef.current.delete(element.id);
+                        stopContinuousInteraction(element.id, "scroll");
+                      }, 150);
+                      scrollStopTimersRef.current.set(element.id, timer);
+                    }}
                     style={{
                       height: element.height,
                       left: element.x,
@@ -6444,6 +8668,7 @@ function ScrollArea({
   const viewportRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{
     pointerId: number;
+    renderScale: number;
     startTop: number;
     startY: number;
     travel: number;
@@ -6491,8 +8716,10 @@ function ScrollArea({
   }, [children]);
 
   const hasOverflow = metrics.scrollHeight > metrics.clientHeight + 1;
-  const scrollbarInset =
-    className === "asset-grid" || className === "scene-list" ? 20 : 0;
+  const hasInsetTrack =
+    className === "asset-grid" || className === "scene-list";
+  const compactScrollbarTrack = hasInsetTrack && metrics.clientHeight < 60;
+  const scrollbarInset = hasInsetTrack && !compactScrollbarTrack ? 20 : 0;
   const scrollbarTrackHeight = Math.max(
     0,
     metrics.clientHeight - scrollbarInset,
@@ -6519,8 +8746,14 @@ function ScrollArea({
     event.preventDefault();
     event.stopPropagation();
     event.currentTarget.setPointerCapture(event.pointerId);
+    const renderedHeight = viewport.getBoundingClientRect().height;
+    const renderScale =
+      viewport.clientHeight > 0 && Number.isFinite(renderedHeight)
+        ? renderedHeight / viewport.clientHeight
+        : 1;
     dragRef.current = {
       pointerId: event.pointerId,
+      renderScale: renderScale > 0 ? renderScale : 1,
       scrollRange,
       startTop: thumbTop,
       startY: event.clientY,
@@ -6533,7 +8766,7 @@ function ScrollArea({
     const viewport = viewportRef.current;
     if (!drag || !viewport || drag.pointerId !== event.pointerId) return;
     const nextTop = clamp(
-      drag.startTop + event.clientY - drag.startY,
+      drag.startTop + (event.clientY - drag.startY) / drag.renderScale,
       0,
       drag.travel,
     );
@@ -6557,7 +8790,11 @@ function ScrollArea({
       {hasOverflow ? (
         <div
           aria-hidden="true"
-          className="custom-scrollbar"
+          className={
+            compactScrollbarTrack
+              ? "custom-scrollbar is-compact"
+              : "custom-scrollbar"
+          }
           data-scrollbar-for={className}
         >
           <div
@@ -6605,24 +8842,38 @@ export function EditorShell() {
     setSelectedElementIds,
     setSelectedShape,
     setZoom,
+    setBackgroundMusicArtwork,
     toggleElementLocked,
     toggleElementVisible,
     undo,
     updateArtboard,
+    updateBackgroundMusic,
     updateElement,
     updateElements,
     zoom,
   } = useEditorStore();
   const activePage = pages.find((page) => page.id === activePageId) ?? pages[0];
   const elements = useMemo(() => activePage?.elements ?? [], [activePage]);
+  const backgroundMusicSettings: BackgroundMusicSettings = {
+    ...defaultBackgroundMusicSettings,
+    ...(activePage?.backgroundMusic ?? {}),
+  };
   const selectionToolActive =
     activeTool === "selection" || activeTool === "settings";
   const [assetTab, setAssetTab] = useState<"image" | "video">("image");
   const [propertyTab, setPropertyTab] = useState<PropertyTab>("design");
   const [uploadedAssets, setUploadedAssets] = useState<string[]>([]);
+  const backgroundMusicObjectUrlsRef = useRef(new Set<string>());
+  const editorMountedRef = useRef(true);
   const [lockRatio, setLockRatio] = useState(true);
   const [pan, setPan] = useState<Point>({ x: 0, y: 0 });
-  const [fitScale, setFitScale] = useState(1);
+  const [interfaceScaleMode, setInterfaceScaleMode] =
+    useState<InterfaceScaleMode>("auto");
+  const [screenWidthCss, setScreenWidthCss] = useState(0);
+  const [viewportWidthCss, setViewportWidthCss] = useState(0);
+  const [displayPixelRatio, setDisplayPixelRatio] = useState(1);
+  const [interfaceScaleReady, setInterfaceScaleReady] = useState(false);
+  const [viewMenuOpen, setViewMenuOpen] = useState(false);
   const [previewVisible, setPreviewVisible] = useState(false);
   const [navigatorVisible, setNavigatorVisible] = useState(false);
   const [navigatorViewport, setNavigatorViewport] = useState<NavigatorViewport>(
@@ -6700,13 +8951,120 @@ export function EditorShell() {
     y: number;
   } | null>(null);
   const textEditorRefs = useRef(new Map<string, HTMLDivElement>());
+  const viewMenuRef = useRef<HTMLDivElement>(null);
 
-  const totalScale = fitScale * (zoom / 100);
+  const resolvedInterfaceScale = resolveInterfaceScale(
+    interfaceScaleMode,
+    screenWidthCss,
+    displayPixelRatio,
+  );
+  const totalScale = zoom / 100;
   const selectionUiScale = 100 / Math.max(5, zoom);
   const selectionControlScale = 1 / Math.max(Number.EPSILON, totalScale);
   const selectionOutlineWidth = selectionControlScale;
   const selectionCaptionGap = 8 * selectionUiScale;
   const selectionCaptionHeight = 20 * selectionUiScale;
+
+  const applyZoomToFit = useCallback(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return false;
+    const bounds = canvas.getBoundingClientRect();
+    if (bounds.width <= 0 || bounds.height <= 0) return false;
+
+    const nextZoom = calculateCanvasFitZoom(
+      bounds.width,
+      bounds.height,
+      artboard.width,
+      artboard.height,
+    );
+    setPan((current) =>
+      current.x === 0 && current.y === 0 ? current : { x: 0, y: 0 },
+    );
+    setZoom(nextZoom);
+    return true;
+  }, [artboard.height, artboard.width, setZoom]);
+
+  const selectInterfaceScale = useCallback((mode: InterfaceScaleMode) => {
+    setInterfaceScaleMode(mode);
+    try {
+      window.localStorage.setItem(INTERFACE_SCALE_STORAGE_KEY, mode);
+    } catch {
+      // The setting still applies for this session when storage is unavailable.
+    }
+    setViewMenuOpen(false);
+  }, []);
+
+  useEffect(() => {
+    let resolutionQuery: MediaQueryList | null = null;
+    const watchResolutionChanges = () => {
+      resolutionQuery?.removeEventListener("change", updateDisplayMetrics);
+      resolutionQuery =
+        typeof window.matchMedia === "function"
+          ? window.matchMedia(
+              `(resolution: ${Math.max(1, window.devicePixelRatio || 1)}dppx)`,
+            )
+          : null;
+      resolutionQuery?.addEventListener("change", updateDisplayMetrics);
+    };
+    const updateDisplayMetrics = () => {
+      setScreenWidthCss(window.screen?.width || window.innerWidth);
+      setViewportWidthCss(window.innerWidth);
+      setDisplayPixelRatio(Math.max(1, window.devicePixelRatio || 1));
+      watchResolutionChanges();
+    };
+    let disposed = false;
+    let frame = 0;
+    const initializeInterface = () => {
+      if (disposed) return;
+      try {
+        const screenWidth = window.screen?.width || window.innerWidth;
+        const pixelRatio = Math.max(1, window.devicePixelRatio || 1);
+        const mode = migrateInterfaceScaleMode(
+          window.localStorage.getItem(INTERFACE_SCALE_STORAGE_KEY),
+          window.localStorage.getItem(LEGACY_INTERFACE_SCALE_STORAGE_KEY),
+          screenWidth,
+          pixelRatio,
+        );
+        window.localStorage.setItem(INTERFACE_SCALE_STORAGE_KEY, mode);
+        setInterfaceScaleMode(mode);
+      } catch {
+        setInterfaceScaleMode("auto");
+      }
+      updateDisplayMetrics();
+      setInterfaceScaleReady(true);
+    };
+    const revealAfterFontLoad = () => {
+      frame = window.requestAnimationFrame(initializeInterface);
+    };
+    const fontLoad = document.fonts?.load?.(
+      '500 12px "Inter Variable"',
+      "AMOUS",
+    );
+    if (fontLoad) {
+      void fontLoad.then(revealAfterFontLoad, revealAfterFontLoad);
+    } else {
+      revealAfterFontLoad();
+    }
+    window.addEventListener("resize", updateDisplayMetrics);
+    return () => {
+      disposed = true;
+      if (frame) window.cancelAnimationFrame(frame);
+      resolutionQuery?.removeEventListener("change", updateDisplayMetrics);
+      window.removeEventListener("resize", updateDisplayMetrics);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!viewMenuOpen) return;
+    const handleOutsidePointerDown = (event: PointerEvent) => {
+      if (!viewMenuRef.current?.contains(event.target as Node | null)) {
+        setViewMenuOpen(false);
+      }
+    };
+    document.addEventListener("pointerdown", handleOutsidePointerDown);
+    return () =>
+      document.removeEventListener("pointerdown", handleOutsidePointerDown);
+  }, [viewMenuOpen]);
 
   useEffect(() => {
     if (previousZoomRef.current === zoom) return;
@@ -6862,31 +9220,6 @@ export function EditorShell() {
     ],
   );
 
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const updateScale = () => {
-      const bounds = canvas.getBoundingClientRect();
-      setFitScale(
-        Math.min(
-          1,
-          Math.max(0.08, (bounds.width - 36) / artboard.width),
-          Math.max(0.08, (bounds.height - 96) / artboard.height),
-        ),
-      );
-    };
-
-    updateScale();
-    if (typeof ResizeObserver === "undefined") {
-      window.addEventListener("resize", updateScale);
-      return () => window.removeEventListener("resize", updateScale);
-    }
-    const observer = new ResizeObserver(updateScale);
-    observer.observe(canvas);
-    return () => observer.disconnect();
-  }, [artboard.height, artboard.width]);
-
   useLayoutEffect(() => {
     const canvas = canvasRef.current;
     const artboardNode = document.getElementById("editor-artboard");
@@ -7028,6 +9361,7 @@ export function EditorShell() {
     rulersVisible,
     selectedElementIds,
     totalScale,
+    displayPixelRatio,
   ]);
 
   useEffect(() => {
@@ -7174,6 +9508,18 @@ export function EditorShell() {
         setSpacePressed(true);
       }
       if (isEditableTarget(event.target)) return;
+
+      if (
+        event.shiftKey &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        event.code === "Digit1"
+      ) {
+        event.preventDefault();
+        setViewMenuOpen(false);
+        applyZoomToFit();
+        return;
+      }
 
       if (event.key === "Alt") {
         event.preventDefault();
@@ -7566,6 +9912,7 @@ export function EditorShell() {
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
   }, [
+    applyZoomToFit,
     artboardSelected,
     checkpoint,
     copySelected,
@@ -7627,7 +9974,7 @@ export function EditorShell() {
       x: bounds.left + bounds.width / 2,
       y: bounds.top + bounds.height / 2,
     };
-    const nextScale = fitScale * (nextZoom / 100);
+    const nextScale = nextZoom / 100;
     const scaleRatio = nextScale / Math.max(0.01, totalScale);
     setPan((current) => ({
       x: current.x + (clientX - currentCenter.x) * (1 - scaleRatio),
@@ -9265,6 +11612,110 @@ export function EditorShell() {
     }));
   };
 
+  const createBackgroundMusicObjectUrl = useCallback((file: Blob) => {
+    const source = URL.createObjectURL(file);
+    backgroundMusicObjectUrlsRef.current.add(source);
+    return source;
+  }, []);
+
+  const updateInteractionSoundForElements = useCallback(
+    (elementIds: string[], settings: InteractionSoundSettings) => {
+      const currentElements = useEditorStore
+        .getState()
+        .pages.flatMap((page) => page.elements);
+      elementIds.forEach((elementId) => {
+        const existingSettings = currentElements.find(
+          (element) => element.id === elementId,
+        )?.interactionSounds;
+        updateElement(elementId, {
+          interactionSounds: [
+            {
+              ...settings,
+              assets: settings.assets.map((asset) => ({ ...asset })),
+            },
+            ...(existingSettings?.slice(1).map((sound) => ({
+              ...sound,
+              assets: sound.assets.map((asset) => ({ ...asset })),
+            })) ?? []),
+          ],
+        });
+      });
+    },
+    [updateElement],
+  );
+
+  const attachBackgroundMusicArtwork = useCallback(
+    (pageId: string, assetSrc: string, artwork: Blob) => {
+      if (!editorMountedRef.current) return;
+      const state = useEditorStore.getState();
+      const snapshots = [...state.past, ...state.future];
+      const referencedAssets = [
+        ...state.pages,
+        ...snapshots.flatMap((snapshot) => snapshot.pages),
+      ]
+        .filter((page) => page.id === pageId)
+        .map((page) => page.backgroundMusic?.asset)
+        .filter((asset) => asset?.src === assetSrc);
+      if (referencedAssets.length === 0) return;
+      const existingArtworkSrc = referencedAssets.find(
+        (asset) => asset?.artworkSrc,
+      )?.artworkSrc;
+      if (existingArtworkSrc) {
+        setBackgroundMusicArtwork(pageId, assetSrc, existingArtworkSrc);
+        return;
+      }
+      const artworkSrc = createBackgroundMusicObjectUrl(artwork);
+      setBackgroundMusicArtwork(pageId, assetSrc, artworkSrc);
+    },
+    [createBackgroundMusicObjectUrl, setBackgroundMusicArtwork],
+  );
+
+  useEffect(() => {
+    const referencedSources = new Set<string>();
+    const collectSources = (sourcePages: typeof pages) => {
+      sourcePages.forEach((page) => {
+        const asset = page.backgroundMusic?.asset;
+        if (asset) {
+          referencedSources.add(asset.src);
+          if (asset.artworkSrc) referencedSources.add(asset.artworkSrc);
+        }
+        page.elements.forEach((element) => {
+          element.interactionSounds?.forEach((sound) => {
+            sound.assets.forEach((soundAsset) =>
+              referencedSources.add(soundAsset.src),
+            );
+          });
+        });
+      });
+    };
+    collectSources(useEditorStore.getState().pages);
+    past.forEach((snapshot) => collectSources(snapshot.pages));
+    future.forEach((snapshot) => collectSources(snapshot.pages));
+    useEditorStore.getState().clipboard.forEach((element) => {
+      element.interactionSounds?.forEach((sound) => {
+        sound.assets.forEach((soundAsset) =>
+          referencedSources.add(soundAsset.src),
+        );
+      });
+    });
+    const ownedSources = backgroundMusicObjectUrlsRef.current;
+    ownedSources.forEach((source) => {
+      if (referencedSources.has(source)) return;
+      URL.revokeObjectURL(source);
+      ownedSources.delete(source);
+    });
+  }, [clipboard, future, pages, past]);
+
+  useEffect(() => {
+    editorMountedRef.current = true;
+    const ownedSources = backgroundMusicObjectUrlsRef.current;
+    return () => {
+      editorMountedRef.current = false;
+      ownedSources.forEach((source) => URL.revokeObjectURL(source));
+      ownedSources.clear();
+    };
+  }, []);
+
   const handleAssetUpload = (event: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files ?? []);
     if (!files.length) return;
@@ -9326,6 +11777,22 @@ export function EditorShell() {
     backgroundColor: "transparent",
     borderRadius: `${artboard.cornerRadius}px`,
     overflow: "visible",
+  } as CSSProperties;
+  const interfaceScale = interfaceScaleFactor(resolvedInterfaceScale);
+  const propertiesBaseWidth = viewportWidthCss >= 1600 ? 345 : 340;
+  const interfaceCompact =
+    interfaceScaleReady && viewportWidthCss <= 960 * interfaceScale;
+  const editorShellStyle = {
+    "--interface-scale": interfaceScale,
+    "--interface-zoom-pixel": `${1 / interfaceScale}px`,
+    ...(interfaceScaleReady
+      ? {
+          "--project-panel-width": `${278 * interfaceScale}px`,
+          "--properties-width": `${propertiesBaseWidth * interfaceScale}px`,
+          "--tool-rail-width": `${70 * interfaceScale}px`,
+          "--topbar-height": `${66 * interfaceScale}px`,
+        }
+      : {}),
   } as CSSProperties;
   const activeToolbarIndex = Math.max(
     0,
@@ -9473,8 +11940,15 @@ export function EditorShell() {
   };
 
   return (
-    <main className="editor-shell">
-      <header className="editor-topbar">
+    <main
+      className={`editor-shell ${interfaceCompact ? "is-interface-compact" : ""}`}
+      data-interface-compact={interfaceCompact}
+      data-interface-ready={interfaceScaleReady}
+      data-interface-scale={resolvedInterfaceScale}
+      data-interface-scale-mode={interfaceScaleMode}
+      style={editorShellStyle}
+    >
+      <header className="editor-topbar interface-scale-surface">
         <div aria-label="AMOUS" className="topbar-brand">
           <span aria-hidden="true" className="brand-placeholder" />
           <span className="visually-hidden">AMOUS</span>
@@ -9502,9 +11976,93 @@ export function EditorShell() {
             </button>
           </div>
           <span className="topbar-divider" />
-          <button className="zoom-menu" type="button">
-            {zoom} % <ChevronDown aria-hidden="true" size={10} />
-          </button>
+          <div
+            className="zoom-control"
+            onKeyDown={(event) => {
+              if (event.key !== "Escape") return;
+              event.preventDefault();
+              event.stopPropagation();
+              setViewMenuOpen(false);
+            }}
+            ref={viewMenuRef}
+          >
+            <button
+              aria-expanded={viewMenuOpen}
+              aria-haspopup="menu"
+              className="zoom-menu"
+              onClick={() => setViewMenuOpen((open) => !open)}
+              type="button"
+            >
+              {Math.round(zoom)} % <ChevronDown aria-hidden="true" size={10} />
+            </button>
+            {viewMenuOpen ? (
+              <div
+                aria-label="View and interface scale"
+                className="view-menu-popover"
+                role="menu"
+              >
+                <span className="view-menu-heading">CANVAS</span>
+                <button
+                  className="view-menu-item"
+                  onClick={() => {
+                    applyZoomToFit();
+                    setViewMenuOpen(false);
+                  }}
+                  role="menuitem"
+                  type="button"
+                >
+                  <span className="view-menu-check" />
+                  <span>Zoom to Fit</span>
+                  <span className="view-menu-shortcut">Shift 1</span>
+                </button>
+                <button
+                  className="view-menu-item"
+                  onClick={() => {
+                    zoomAtCanvasCenter(100);
+                    setViewMenuOpen(false);
+                  }}
+                  role="menuitem"
+                  type="button"
+                >
+                  <span className="view-menu-check" />
+                  <span>Actual Size</span>
+                  <span className="view-menu-meta">100%</span>
+                </button>
+                <div className="view-menu-divider" />
+                <span className="view-menu-heading">INTERFACE SCALE</span>
+                {INTERFACE_SCALE_OPTIONS.map((option) => {
+                  const selected = option.value === interfaceScaleMode;
+                  return (
+                    <button
+                      aria-checked={selected}
+                      aria-label={
+                        option.value === "auto"
+                          ? `Auto (${resolvedInterfaceScale}%)`
+                          : option.label
+                      }
+                      className="view-menu-item"
+                      key={option.value}
+                      onClick={() => selectInterfaceScale(option.value)}
+                      role="menuitemradio"
+                      type="button"
+                    >
+                      <span className="view-menu-check">
+                        {selected ? (
+                          <Check aria-hidden="true" size={12} strokeWidth={2} />
+                        ) : null}
+                      </span>
+                      <span>{option.label}</span>
+                      <span className="view-menu-meta">
+                        {option.value === "auto"
+                          ? `${resolvedInterfaceScale}%`
+                          : ""}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : null}
+          </div>
           <span className="topbar-divider" />
           <div aria-label="History" className="history-controls">
             <button
@@ -9539,7 +12097,10 @@ export function EditorShell() {
         </div>
       </header>
 
-      <aside aria-label="Creation tools" className="tool-rail">
+      <aside
+        aria-label="Creation tools"
+        className="tool-rail interface-scale-surface"
+      >
         <span
           aria-hidden="true"
           className="tool-active-indicator"
@@ -9606,7 +12167,10 @@ export function EditorShell() {
         ) : null}
       </aside>
 
-      <aside aria-label="Project panels" className="project-panel">
+      <aside
+        aria-label="Project panels"
+        className="project-panel interface-scale-surface"
+      >
         <section className="project-section scenes-section">
           <div className="project-section-heading">
             <h2>SCENES</h2>
@@ -10573,7 +13137,7 @@ export function EditorShell() {
 
         <aside
           aria-label="Navigator"
-          className={`navigator ${navigatorVisible ? "is-visible" : ""}`}
+          className={`navigator interface-scale-surface ${navigatorVisible ? "is-visible" : ""}`}
         >
           <span className="navigator-title">Navigator</span>
           <div className="navigator-preview">
@@ -10640,7 +13204,7 @@ export function EditorShell() {
             >
               <Minus size={13} />
             </button>
-            <strong>{zoom} %</strong>
+            <strong>{Math.round(zoom)} %</strong>
             <button
               aria-label="Zoom in"
               onClick={() => zoomAtCanvasCenter(zoom + 10)}
@@ -10652,18 +13216,30 @@ export function EditorShell() {
         </aside>
       </section>
 
-      <aside aria-label="Properties" className="properties-panel">
+      <aside
+        aria-label="Properties"
+        className="properties-panel interface-scale-surface"
+      >
         <div
           aria-label="Property sections"
           className="panel-tabs"
           data-active-tab={visiblePropertyTab}
           role="tablist"
         >
-          <button aria-selected="false" disabled role="tab" type="button">
+          <button
+            aria-label="INTERACTION"
+            aria-selected="false"
+            data-label="INTERACTION"
+            disabled
+            role="tab"
+            type="button"
+          >
             INTERACTION
           </button>
           <button
+            aria-label="SCENES"
             aria-selected={visiblePropertyTab === "scenes"}
+            data-label="SCENES"
             onClick={() => setPropertyTab("scenes")}
             role="tab"
             type="button"
@@ -10671,7 +13247,9 @@ export function EditorShell() {
             SCENES
           </button>
           <button
+            aria-label="DESIGN"
             aria-selected={visiblePropertyTab === "design"}
+            data-label="DESIGN"
             onClick={() => setPropertyTab("design")}
             role="tab"
             type="button"
@@ -10679,14 +13257,23 @@ export function EditorShell() {
             DESIGN
           </button>
           <button
+            aria-label="SOUND"
             aria-selected={visiblePropertyTab === "sound"}
+            data-label="SOUND"
             onClick={() => setPropertyTab("sound")}
             role="tab"
             type="button"
           >
             SOUND
           </button>
-          <button aria-selected="false" disabled role="tab" type="button">
+          <button
+            aria-label="LOGIC"
+            aria-selected="false"
+            data-label="LOGIC"
+            disabled
+            role="tab"
+            type="button"
+          >
             LOGIC
           </button>
         </div>
@@ -10700,7 +13287,16 @@ export function EditorShell() {
             onUpdateArtboard={updateArtboard}
           />
         ) : visiblePropertyTab === "sound" ? (
-          <SoundPanel />
+          <SoundPanel
+            onAttachArtwork={attachBackgroundMusicArtwork}
+            onCheckpoint={checkpoint}
+            onCreateObjectUrl={createBackgroundMusicObjectUrl}
+            onUpdate={updateBackgroundMusic}
+            onUpdateInteractionSound={updateInteractionSoundForElements}
+            pageId={activePageId}
+            selectedElements={selectedElements}
+            settings={backgroundMusicSettings}
+          />
         ) : (
           <DesignPanel
             artboard={artboard}
@@ -10723,6 +13319,7 @@ export function EditorShell() {
       {previewVisible ? (
         <ViewerPreview
           artboard={artboard}
+          backgroundMusic={backgroundMusicSettings}
           elements={elements}
           onClose={() => setPreviewVisible(false)}
         />
