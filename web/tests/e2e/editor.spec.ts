@@ -664,6 +664,12 @@ test("keeps Pathfinder artwork scaled after resizing its selection", async ({
   expect(artworkScale).toBeCloseTo(selectionScale, 1);
 });
 
+// Known timing sensitivity: after mouse.up the move gesture commits to the
+// store while the DOM preview transform is cleared on the next animation
+// frame (before paint, so it is never visible). A boundingBox() sampled in
+// that window can capture doubled geometry, and the fixed-coordinate
+// elementFromPoint poll below then misses forever. If this test fails
+// without drag-related code changes, it is this race — not a regression.
 test("draws a shape on the canvas outside the artboard", async ({ page }) => {
   test.skip(
     (page.viewportSize()?.width ?? 0) <= 960,

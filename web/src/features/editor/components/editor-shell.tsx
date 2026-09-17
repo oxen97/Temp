@@ -41,6 +41,7 @@ import { PenEditControls } from "@/features/editor/components/canvas/pen-edit-co
 import { SelectionOutlineSvg } from "@/features/editor/components/canvas/selection-outline-svg";
 import { ShapeGraphic } from "@/features/editor/components/canvas/shape-graphic";
 import { DesignPanel } from "@/features/editor/components/panels/design-panel";
+import { InteractionPanel } from "@/features/editor/components/panels/interaction-panel";
 import { ScenePanel } from "@/features/editor/components/panels/scene-panel";
 import { SoundPanel } from "@/features/editor/components/sound/sound-panel";
 import { LayerSymbol } from "@/features/editor/components/ui/layer-symbol";
@@ -4441,9 +4442,9 @@ export function EditorShell() {
         >
           <button
             aria-label="INTERACTION"
-            aria-selected="false"
+            aria-selected={visiblePropertyTab === "interaction"}
             data-label="INTERACTION"
-            disabled
+            onClick={() => setPropertyTab("interaction")}
             role="tab"
             type="button"
           >
@@ -4490,6 +4491,9 @@ export function EditorShell() {
             LOGIC
           </button>
         </div>
+        {visiblePropertyTab === "interaction" ? (
+          <InteractionPanel selectedName={selectedElements[0]?.name ?? null} />
+        ) : null}
         {visiblePropertyTab === "scenes" ? (
           <ScenePanel
             activePageId={activePageId}
@@ -4533,7 +4537,7 @@ export function EditorShell() {
             selectedElements={selectedElements}
             settings={backgroundMusicSettings}
           />
-        ) : (
+        ) : visiblePropertyTab === "design" ? (
           <DesignPanel
             artboard={artboard}
             lockRatio={lockRatio}
@@ -4543,7 +4547,7 @@ export function EditorShell() {
             onUpdateElement={updateElement}
             selectedElements={selectedElements}
           />
-        )}
+        ) : null}
         <output className="visually-hidden">
           {selectedElementIds.length
             ? `${selectedElementIds.length} selected`

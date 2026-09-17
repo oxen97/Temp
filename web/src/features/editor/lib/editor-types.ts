@@ -19,7 +19,7 @@ export type ToolDefinition = {
   };
 };
 
-export type PropertyTab = "design" | "scenes" | "sound";
+export type PropertyTab = "design" | "interaction" | "scenes" | "sound";
 
 export type Point = { x: number; y: number };
 
