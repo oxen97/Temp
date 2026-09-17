@@ -255,3 +255,83 @@ Gravity 스코프: 낙하·튕김·드롭 존까지. **쌓임(스태킹)은 제�
    the artboard"는 드래그 커밋 직후 boundingBox 샘플링 타이밍에 민감한
    기존 측정 레이스로, 번들 크기가 바뀌면 실패할 수 있음(테스트 위 주석 참고).
    런타임 회귀 아님.
+
+---
+
+## 부록 A — 컨트롤별 드롭다운 항목·표시 조건 전수표
+
+UI 동작을 구현할 때 이 표가 단일 기준이다. "표시 조건"이 없는 행은 항상 표시.
+
+### A-1. 드롭다운을 눌렀을 때 뜨는 항목 (전수)
+
+| 컨트롤 | 표시 조건 | 눌렀을 때 표시되는 항목 (순서대로) |
+|---|---|---|
+| Trigger | 항상 | 그룹 헤딩 6개(보라 소문자 캡션) 아래로: **TAP & POINTER** Click/Tap · Double Click/Double Tap · Hover · Touch Start · Touch End · Long Press / **CONTINUOUS** Pointer Move/Touch Move · Drag · Wheel/Pinch · Scroll/Swipe(scroll 페이지에서만 항목 노출) / **COLLISION** Overlap Start · While Overlapping · Overlap End · Drop On Target / **TIME** After Delay · Repeat Every… · Idle Start · Idle End / **MEDIA** Video Starts · Video Ends(비디오 요소 있을 때만) / **PAGE** Page Enter · Page Exit |
+| Trigger area | 항상 | Selected object(기본) · Entire artwork · Draw detail area… |
+| Mobile fallback | Trigger = Hover | Tap(기본) · Touch Start · Long Press |
+| Target element | Trigger ∈ COLLISION | 현재 페이지의 다른 요소 전체 목록 (요소명 + 타입, 자기 자신 제외) |
+| Detection | Trigger ∈ COLLISION | Bounding box(기본) · Precise outline |
+| Input mapping | MAPPING 섹션 표시 시 | 트리거별 가용 항목만: Drag → Drag Progress(기본) · Drag Angle · Pointer Velocity / Pointer Move → Pointer Velocity · (위치 매핑) / Scroll·Swipe → Scroll Progress / Wheel·Pinch → Wheel/Pinch Amount / COLLISION(While Overlapping) → Overlap Time |
+| Axis | Input mapping = Drag Progress | Free(기본) · X only · Y only |
+| Effect | 항상 | 요소 타입별 가용 목록만 (3. DO 표 참고). 사용 불가 항목은 숨김(회색 아님) |
+| Path | Effect = Move | Straight(기본) · Circular |
+| Reference point | Effect = Move·Scale·Rotate 등 기하 효과 | Center(기본) · Top Left · Top Right · Bottom Left · Bottom Right |
+| Behavior (Motion) | 항상 | A-2 매트릭스의 가용 항목만 |
+| Bounce off | Behavior = Gravity | Artboard edges(기본) · Artboard + obstacles…(요소 다중 선택 UI) |
+| Easing | TIMING 표시 시 | Linear · Ease In · Ease Out · Ease In Out · Custom Curve…(선택 시 커브 편집 팝업 열림) |
+| After (Reset) | 항상 | Contextual default(기본) · Keep final state · Restart when triggered again · Return when trigger ends — 현재 트리거에 무의미한 항목은 숨김 (예: Page Enter에는 Return 없음) |
+| Same property | Advanced | Replace existing(기본) · Additive · Interrupt |
+| Other property | Advanced | Run in parallel(기본) · Run in order |
+| Cursor on hover | Advanced | Default · Pointer(기본) |
+
+### A-2. Motion × 트리거/매핑 가용 매트릭스
+
+"매핑별 자동 필터"의 확정 기준. (기존 문서에서 암묵적이던 것을 여기서 확정)
+
+| 입력 상황 | Direct | Spring | Inertia | Bounce | Gravity |
+|---|---|---|---|---|---|
+| 이벤트형 트리거 (Click·Page Enter·Time·Overlap Start 등) | ✓ | ✓ (목표값까지 애니메이션) | ✓ (Initial velocity로 던지기) | ✓ | ✓ (트리거 순간 낙하 시작) |
+| Drag/Scroll/Angle/Wheel Progress (위치성 연속값) | ✓ | ✓ (입력 추종) | ✓ (놓은 뒤 관성) | ✓ (끝점 반동) | — |
+| Pointer Velocity (속도값) | ✓ | ✓ | — | — | — |
+| Overlap Time | ✓ | ✓ | — | — | — |
+
+### A-3. 트리거 선택 시 섹션·필드 노출 변화 (요약 매트릭스)
+
+| 선택한 트리거 | WHEN 추가 필드 | 2.MAPPING | 5.TIMING 모드 |
+|---|---|---|---|
+| Click/Tap · Double · Touch Start/End · Long Press | — | 숨김 | 이벤트형 (Time·Delay·Stagger·Easing) |
+| Hover | Mobile fallback | 숨김 | 이벤트형 |
+| Pointer Move · Drag · Wheel/Pinch · Scroll/Swipe | — | 표시 | 연속형 (Smoothing·Easing) |
+| Overlap Start · Overlap End · Drop On Target | Target element · Detection | 표시 (Overlap Time 등) | 이벤트형 |
+| While Overlapping | Target element · Detection | 표시 | 연속형 |
+| After Delay · Repeat Every · Idle Start/End | Time (초) | 숨김 | 이벤트형 |
+| Video Starts/Ends | — | 숨김 | 이벤트형 |
+| Page Enter/Exit | — | 숨김 | 이벤트형 |
+
+### A-4. 효과 선택 시 3.DO 내부 필드 교체
+
+| Effect | 표시 필드 |
+|---|---|
+| Move | X(px) · Y(px) · Path · Reference point |
+| Scale | X(%) · Y(%) · (Lock ratio 토글) · Reference point |
+| Rotate | 각도(°) · Axis(Z/X flip/Y flip) · Reference point |
+| Skew / Distort | 값 필드 |
+| Opacity | 목표 % (슬라이더 + 값) |
+| Color | Fill 색 · Stroke 색 (컬러 필드) |
+| Blur | 강도(px) |
+| Shadow | Elevation · Softness |
+| Show / Hide | 전환: Fade / Mask reveal → Mask reveal 선택 시 형태(Circle expand·Wipe·Wave) + "마스크 위치를 포인터에 연결" 옵션 |
+| Shake | 강도 |
+| Order | Bring to front / Send to back 선택 |
+| (Image) Particle·Pixelate·Dissolve·Trail | 각 강도/밀도 파라미터 (WebGL 레이어) |
+| (Text) Reveal·Stroke Draw·Char/Word | 방향·순서 파라미터 |
+
+### A-5. Behavior 선택 시 4.HOW 내부 필드 교체
+
+| Behavior | 표시 필드 |
+|---|---|
+| Direct | (물리 필드 없음) |
+| Spring | Strength · Mass · Damping (3칸) |
+| Inertia | Initial velocity · Friction · Deceleration |
+| Bounce | Strength · Bounce count · Damping |
+| Gravity | Bounce off · Strength · Bounciness · Direction |
