@@ -1,4 +1,4 @@
-# Interaction 탭 — 전체 기획 + 구현 현황 (2026-09-17)
+# Interaction 탭 — 전체 기획 + 구현 현황 (2026-09-18)
 
 관람객 인터랙션(클릭·호버·드래그·충돌·시간 등)에 반응하는 효과를 작가가
 코드 없이 붙이는 탭. 확정 스펙 목업: `docs/interaction-panel-final.png`
@@ -82,7 +82,7 @@
 
 ## 1. WHEN — 트리거
 
-**Trigger** 드롭다운 (6그룹 21종, 그룹 헤딩 표시):
+**Trigger** 드롭다운 (6그룹 22종, 그룹 헤딩 표시):
 
 | 그룹 | 트리거 | 의미 · 규칙 |
 |---|---|---|
@@ -90,7 +90,7 @@
 | | Double Click / Double Tap | 같은 요소에 Click도 있으면 Click은 더블클릭 판정 시간만큼 대기 후 실행 |
 | | Hover | 포인터 진입/이탈. 선택 시 Mobile fallback 행 노출 |
 | | Touch Start / Touch End | 터치 시작/끝 |
-| | Long Press | 길게 누르기. 기본 0.5초(조절 가능) |
+| | Long Press | 길게 누르기. **Hold duration** 입력칸에서 판정 시간을 설정(기본 0.5초, 최소 0.1초) |
 | Continuous | Pointer Move / Touch Move | 포인터 위치를 실시간 입력으로 사용 (연속형) |
 | | Drag | 드래그. **이 트리거가 걸리면 뷰어에서 해당 요소가 드래그 가능해진다** |
 | | Wheel / Pinch | 휠·핀치 양을 입력으로 |
@@ -105,13 +105,24 @@
 | Media | Video Starts / Video Ends | 비디오 요소 재생 시작/끝 (비디오 요소 타입 신설 선행) |
 | Page | Page Enter / Page Exit | 페이지 진입/이탈 |
 
-**Trigger area** — 행동을 감지하는 범위 (효과 적용 대상과 별개):
+**Trigger area** — 행동을 감지하는 범위 (효과 적용 대상과 별개).
+Tap & pointer·Continuous·Collision 트리거에서만 표시한다. Page·Time·Media는
+페이지 상태나 미디어 이벤트를 감지하므로 영역을 묻지 않는다:
 
 | 옵션 | 의미 |
 |---|---|
 | Selected object (기본) | 선택한 요소 위에서 감지 |
 | Entire artwork | 작품 전체에서 감지 |
 | Draw detail area… | 캔버스에 감지 영역을 직접 그림. 그린 영역은 점선 오버레이로 남아 도형처럼 계속 편집 가능 |
+
+**Source video** — Video Starts/Ends에서 Trigger area 대신 표시한다.
+현재 페이지의 비디오 요소 중 재생 이벤트를 감지할 대상을 고른다.
+비디오 요소 타입이 아직 없을 때는 선택 불가 상태와 안내 문구를 보여주며,
+존재하지 않는 비디오를 임의로 지정하지 않는다.
+
+**Hold duration** — Long Press 트리거 또는 Hover의 Mobile fallback에서
+Long Press를 선택했을 때 표시한다. 기본 0.5초, 최소 0.1초, 0.1초 단위로
+입력한다. Hover fallback의 경우 이 시간이 지나야 호버 진입으로 판정한다.
 
 **Mobile fallback** — Hover 선택 시에만 노출. 각 옵션이 호버의 진입(enter)과
 이탈(leave)을 함께 정의한다 (RESET의 "포인터 이탈 시 복귀"가 터치에서도 명확하도록):
@@ -140,22 +151,33 @@ polygon-clipping 재료 재사용 가능)
 반응시키려면 B를 선택해 인터랙션을 하나 더 만든다 (Trigger: Overlap Start,
 Target: A).
 
-## 2. MAPPING — 입력 해석 (연속형·충돌 트리거에서만 노출)
+## 2. MAPPING — 입력 해석 (연속형·While Overlapping에서만 노출)
 
-**Input mapping** 드롭다운:
+**Input mapping** 드롭다운은 트리거에 맞는 항목만 보여준다:
 
 | 매핑 | 정의 | 파라미터 |
 |---|---|---|
 | Drag Progress | 드래그 길이를 0→100%로 | **Track distance**(분모가 되는 기준 거리, px) + **Axis**(Free / X만 / Y만 — 슬라이더형 인터랙션용) |
 | Drag Angle | 원형 드래그 각도 (핸들·다이얼) | Full turn: 360° → 100% |
+| Pointer Position | Trigger area 안의 포인터 위치를 X/Y 각각 0→100%로 해석 | **Axis**: X only / Y only / Both(기본). 영역 밖 위치는 0~100%로 clamp. Both는 X/Y 값을 각각 효과의 X/Y 축에 전달 |
 | Scroll Progress | 페이지 스크롤 0→100% | (scroll 페이지 전용) |
 | Wheel / Pinch Amount | 휠 누적량·핀치 배율 | Range (예: 500px · 0.5×→2×) |
 | Pointer Velocity | 포인터 속도 | Max velocity: 100%로 해석할 상한 (예: 2000 px/s) — 속도는 무한대라 상한 필수 |
 | Overlap Time | 겹쳐 있는 시간 (충돌 트리거) | Max time: 100%로 해석할 시간 (예: 3s) |
 
 - **Input range** (min% ~ max%): min/max를 서로 바꾸면 방향 반전 (100→0).
-- **Threshold**: 값이 N%를 상향 돌파하는 순간 이벤트 1회 발동.
-  아래로 내려가면 재장전(다시 돌파하면 재발동). 예: 5 Gum 게이지 완충 연출.
+- **Response mode**: **Follow input**(기본)은 매 프레임 입력값을 효과에 연결한다.
+  **Fire at threshold**는 연속 입력을 단발 이벤트로 바꾼다. Threshold N%를
+  **아래에서 위로 통과한 순간 1회** 실행하고, 다시 N% 아래로 내려가야
+  재장전된다. 값이 위에 머무는 동안 중복 실행하지 않는다. Pointer Position의
+  Both 축에서는 임계값 판정 축(X 또는 Y)을 선택한다.
+- **Threshold** 입력칸은 Fire at threshold에서만 표시한다. 해당 모드의
+  TIMING은 연속형 Smoothing이 아니라 이벤트형 Time·Delay·Easing을 사용한다.
+  동일 트리거로 연속 반응과 임계값 이벤트를 함께 만들려면 인터랙션 두 개를
+  등록한다.
+- Order·Play·Pause·Resume·Seek처럼 즉시 실행되는 Effect를 연속 입력에
+  연결할 때는 Fire at threshold를 사용한다. Follow input으로 프레임마다
+  명령이 반복 실행되지 않도록 선택 시 모드를 자동 전환한다.
 - Click처럼 1회성 이벤트 트리거에서는 이 섹션 전체가 숨겨진다.
 - 물리적 움직임은 여기가 아니라 4. HOW에서 설정한다.
 
@@ -190,7 +212,8 @@ Target: A).
 
 ## 4. HOW — 모션
 
-**Behavior** 드롭다운 (선택한 매핑에서 가능한 것만 노출):
+**Behavior** 드롭다운 (선택한 트리거·매핑과 Effect **양쪽에서 가능한
+항목의 교집합**만 노출):
 
 | 모션 | 정의 | 파라미터 |
 |---|---|---|
@@ -204,39 +227,68 @@ Gravity 스코프: 낙하·튕김·드롭 존까지. **쌓임(스태킹)은 제�
 해석에 물리 솔버가 필요해서 이번 스코프가 아님. 지정된 장애물만 충돌
 검사하므로 성능 규칙과 정합.
 
+Effect별 허용 Behavior (A-2의 트리거·매핑 제한과 다시 교집합을 취함):
+
+| Effect | 허용 Behavior |
+|---|---|
+| Move | Direct · Spring · Inertia · Bounce · Gravity |
+| Rotate | Direct · Spring · Inertia · Bounce |
+| Scale | Direct · Spring · Bounce |
+| Skew · Distort | Direct · Spring |
+| Opacity · Color · Blur · Shadow · Show/Hide · Shake · Particle · Pixelate · Dissolve · Trail · Text Reveal · Stroke Draw · Character/Word Animation | Direct만. 이벤트형에서는 TIMING의 Time·Easing으로 시각 전환 가능 |
+| Order · Video Play/Pause/Resume/Seek | HOW 섹션 숨김(내부적으로 즉시 실행). TIMING은 Delay만 표시 |
+| Group Animation | 그룹 안에서 고른 자식 Effect의 허용 Behavior를 따름 |
+
+Effect나 매핑 변경으로 현재 Behavior가 불가능해지면 첫 가용 항목으로
+자동 조정한다. 비활성 옵션을 남겨 혼동시키지 않는다.
+
 ## 5. TIMING — 시간
 
-트리거 방식에 따라 UI가 바뀐다 (동시에 둘 다 보여주지 않음):
+트리거·Response mode·Effect에 따라 UI가 바뀐다 (서로 다른 방식을 동시에
+보여주지 않음):
 
-**이벤트형** (Click, Page Enter 등):
+**이벤트형** (Click, Page Enter, Fire at threshold 등):
 
 | 필드 | 기능 |
 |---|---|
 | Time / Delay | 재생 시간 / 시작 지연 (초, ▲▼ 스테퍼) |
-| Stagger | 그룹·다중 요소의 순차 지연 (초). 순서: forward / reverse / random |
+| Stagger | 그룹·다중 요소일 때만 표시하는 순차 지연 (초). 순서: forward / reverse / random |
 | Easing | Linear / Ease In / Ease Out / Ease In Out / **Custom Curve…**(별도 커브 편집 팝업) |
 
-**연속형** (Drag, Pointer Move 등):
+**연속형 Follow input** (Drag, Pointer Move 등):
 
 | 필드 | 기능 |
 |---|---|
 | Smoothing | 입력을 따라잡는 지연 시간 (초). 0 = 즉시 반응. (기획 초안의 "Response Speed %"를 단위 있는 값으로 교체) |
 | Easing | 위와 동일 목록 |
 
+**즉시 명령** (Order·Video Play/Pause/Resume/Seek)은 시작 지연인 Delay만
+표시한다. Time·Easing·Smoothing·HOW는 숨긴다. 연속 트리거에서 즉시 명령을
+쓰면 Fire at threshold로 단발 실행한다.
+
 ## 6. RESET — 종료 후
 
-**After** 드롭다운. 기본값 "Contextual default"는 트리거별로 자동 결정:
+**After** 드롭다운. 기본값 "Contextual default"는 다음처럼 트리거별로
+결정하고, 드롭다운에는 해당 트리거에서 의미 있는 대안만 표시한다:
 
-| 트리거 | 기본값 | 대안 |
+| 트리거 | Contextual default의 실제 동작 | 대표 대안 |
 |---|---|---|
-| Click / Tap | Keep final state (마지막 상태 유지) | Restart when triggered again (재실행 시 처음부터) |
-| Hover | Return when pointer leaves (이탈 시 복귀) | Keep final state |
-| Drag | Return when trigger ends (놓으면 복귀) | Keep final state |
-| Drop On Target | Keep final state | — |
-| Time / Idle | Keep final state | — |
-| Page Enter | 페이지 이탈 시 초기화 | — |
+| Click/Tap · Double Click · Touch Start/End · Long Press | Keep final state(마지막 상태 유지) | Restart when triggered again |
+| Hover | Return when pointer leaves. 모바일 Touch Start/Long Press 대체는 손가락을 뗄 때 복귀하고 Tap 대체는 다음 탭에서 복귀 | Keep final state |
+| Pointer Move | 포인터가 Trigger area/뷰포트를 벗어나면 복귀. 터치 이동은 손가락 해제·취소 시 복귀 | Keep final state |
+| Drag | Return when trigger ends(놓으면 복귀) | Keep final state |
+| While Overlapping | 겹침이 끝나면 복귀 | Keep final state |
+| Overlap Start/End · Drop On Target | Keep final state | Restart when triggered again |
+| Scroll/Swipe | 스크롤 진행도·역방향을 따라 효과도 되돌아감 | Keep final state |
+| Wheel/Pinch | 마지막 매핑값 유지, 페이지 이탈 시 런타임 상태 폐기 | Return when trigger ends |
+| Time(After Delay·Repeat Every·Idle Start/End) · Media(Video Starts/Ends) | Keep final state | Restart when triggered again |
+| Page Enter | 페이지 이탈까지 유지. Page Exit 시 런타임 상태 초기화 | — |
+| Page Exit | 이탈 효과를 실행한 뒤 해당 페이지의 런타임 상태를 폐기. 다음 페이지에 결과를 넘기지 않음 | — |
 
-규칙: 복귀 애니메이션은 해당 인터랙션의 Duration·Easing을 재사용.
+Fire at threshold는 발생 순간부터 단발 이벤트로 취급하되, 선택한 원래
+트리거의 복귀 의미를 유지한다(예: Drag는 놓으면 복귀, Scroll은 역방향으로
+임계값 아래로 내려갈 때 재장전). 복귀 애니메이션은 이벤트형이면 해당
+Time·Easing, Follow input이면 Smoothing·Easing을 따른다.
 어떤 선택이든 **뷰어 런타임 상태만** 바뀐다 (원본 불변 — 연보라 안내 문구로
 패널에 상시 표기).
 
@@ -287,19 +339,24 @@ UI 동작을 구현할 때 이 표가 단일 기준이다. "표시 조건"이 �
 | 컨트롤 | 표시 조건 | 눌렀을 때 표시되는 항목 (순서대로) |
 |---|---|---|
 | Trigger | 항상 | 그룹 헤딩 6개(보라 소문자 캡션) 아래로: **TAP & POINTER** Click/Tap · Double Click/Double Tap · Hover · Touch Start · Touch End · Long Press / **CONTINUOUS** Pointer Move/Touch Move · Drag · Wheel/Pinch · Scroll/Swipe(scroll 페이지에서만 항목 노출) / **COLLISION** Overlap Start · While Overlapping · Overlap End · Drop On Target / **TIME** After Delay · Repeat Every… · Idle Start · Idle End / **MEDIA** Video Starts · Video Ends(비디오 요소 있을 때만) / **PAGE** Page Enter · Page Exit |
-| Trigger area | 항상 | Selected object(기본) · Entire artwork · Draw detail area… |
+| Trigger area | Trigger ∈ TAP & POINTER · CONTINUOUS · COLLISION | Selected object(기본) · Entire artwork · Draw detail area… (Page·Time·Media에서는 행 숨김) |
+| Source video | Trigger = Video Starts/Ends | 현재 페이지의 비디오 요소 목록. 비디오가 아직 없으면 선택 불가 안내 |
 | Mobile fallback | Trigger = Hover | Tap(기본) · Touch Start · Long Press |
+| Hold duration | Trigger = Long Press 또는 Hover의 Mobile fallback = Long Press | 길게 누르기 판정 시간. 기본 0.5초, 최소 0.1초, 0.1초 단위 입력 |
 | Target element | Trigger ∈ COLLISION | 현재 페이지의 다른 요소 전체 목록 (요소명 + 타입, 자기 자신 제외) |
 | Detection | Trigger ∈ COLLISION | Bounding box(기본) · Precise outline |
-| Input mapping | MAPPING 섹션 표시 시 | 트리거별 가용 항목만: Drag → Drag Progress(기본) · Drag Angle · Pointer Velocity / Pointer Move → Pointer Velocity · (위치 매핑) / Scroll·Swipe → Scroll Progress / Wheel·Pinch → Wheel/Pinch Amount / COLLISION(While Overlapping) → Overlap Time |
+| Input mapping | MAPPING 섹션 표시 시 | 트리거별 가용 항목만: Drag → Drag Progress(기본) · Drag Angle · Pointer Velocity / Pointer Move → Pointer Position(기본) · Pointer Velocity / Scroll·Swipe → Scroll Progress / Wheel·Pinch → Wheel/Pinch Amount / While Overlapping → Overlap Time |
 | Axis | Input mapping = Drag Progress | Free(기본) · X only · Y only |
+| Position axis | Input mapping = Pointer Position | Both(기본) · X only · Y only; Both는 X/Y 각각 0~100% 정규화, 영역 밖은 clamp |
+| Response mode | MAPPING 섹션 표시 시 | Follow input(기본, 연속 반응) · Fire at threshold(상향 통과 시 단발, 하향 이탈 시 재장전) |
+| Threshold + crossing axis | Response mode = Fire at threshold | Threshold 0~100% 입력; Pointer Position + Both일 때 판정 축 X/Y 선택 |
 | Effect | 항상 | 요소 타입별 가용 목록만 (3. DO 표 참고). 사용 불가 항목은 숨김(회색 아님) |
 | Path | Effect = Move | Straight(기본) · Circular |
 | Reference point | Effect = Move·Scale·Rotate 등 기하 효과 | Center(기본) · Top Left · Top Right · Bottom Left · Bottom Right |
-| Behavior (Motion) | 항상 | A-2 매트릭스의 가용 항목만 |
+| Behavior (Motion) | 즉시 명령 Effect가 아닐 때 | A-2 트리거·매핑 매트릭스와 A-2b Effect 매트릭스의 교집합만 |
 | Bounce off | Behavior = Gravity | Artboard edges(기본) · Artboard + obstacles…(요소 다중 선택 UI) |
-| Easing | TIMING 표시 시 | Linear · Ease In · Ease Out · Ease In Out · Custom Curve…(선택 시 커브 편집 팝업 열림) |
-| After (Reset) | 항상 | Contextual default(기본) · Keep final state · Restart when triggered again · Return when trigger ends — 현재 트리거에 무의미한 항목은 숨김 (예: Page Enter에는 Return 없음) |
+| Easing | 이벤트형 또는 Follow input, 즉시 명령 제외 | Linear · Ease In · Ease Out · Ease In Out · Custom Curve…(선택 시 커브 편집 팝업 열림) |
+| After (Reset) | 항상 | Contextual default(기본)와 6.RESET 표의 해당 트리거에 의미 있는 대안만. Page Exit는 런타임 상태 폐기 안내 |
 | Same property | Advanced | Replace existing(기본) · Additive · Interrupt |
 | Other property | Advanced | Run in parallel(기본) · Run in order |
 | Cursor on hover | Advanced | Default · Pointer(기본) |
@@ -311,22 +368,42 @@ UI 동작을 구현할 때 이 표가 단일 기준이다. "표시 조건"이 �
 | 입력 상황 | Direct | Spring | Inertia | Bounce | Gravity |
 |---|---|---|---|---|---|
 | 이벤트형 트리거 (Click·Page Enter·Time·Overlap Start 등) | ✓ | ✓ (목표값까지 애니메이션) | ✓ (Initial velocity로 던지기) | ✓ | ✓ (트리거 순간 낙하 시작) |
-| Drag/Scroll/Angle/Wheel Progress (위치성 연속값) | ✓ | ✓ (입력 추종) | ✓ (놓은 뒤 관성) | ✓ (끝점 반동) | — |
+| Drag/Scroll/Angle/Wheel Progress · Pointer Position (위치성 연속값) | ✓ | ✓ (입력 추종) | ✓ (놓은 뒤 관성) | ✓ (끝점 반동) | — |
 | Pointer Velocity (속도값) | ✓ | ✓ | — | — | — |
 | Overlap Time | ✓ | ✓ | — | — | — |
+
+Fire at threshold에서는 선택한 입력을 단발 이벤트로 바꾸므로 **이벤트형
+트리거 행**을 적용한다. 그다음 아래 Effect 제한과 교집합을 취한다.
+
+### A-2b. Motion × Effect 가용 매트릭스
+
+| Effect | Direct | Spring | Inertia | Bounce | Gravity |
+|---|---|---|---|---|---|
+| Move | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Rotate | ✓ | ✓ | ✓ | ✓ | — |
+| Scale | ✓ | ✓ | — | ✓ | — |
+| Skew · Distort | ✓ | ✓ | — | — | — |
+| Opacity · Color · Blur · Shadow · Show/Hide · Shake · Particle · Pixelate · Dissolve · Trail · Text Reveal · Stroke Draw · Character/Word Animation | ✓ | — | — | — | — |
+| Order · Video Play/Pause/Resume/Seek | HOW 숨김 | — | — | — | — |
+| Group Animation | 자식 Effect의 행을 따름 | 자식 Effect의 행을 따름 | 자식 Effect의 행을 따름 | 자식 Effect의 행을 따름 | 자식 Effect의 행을 따름 |
 
 ### A-3. 트리거 선택 시 섹션·필드 노출 변화 (요약 매트릭스)
 
 | 선택한 트리거 | WHEN 추가 필드 | 2.MAPPING | 5.TIMING 모드 |
 |---|---|---|---|
-| Click/Tap · Double · Touch Start/End · Long Press | — | 숨김 | 이벤트형 (Time·Delay·Stagger·Easing) |
-| Hover | Mobile fallback | 숨김 | 이벤트형 |
-| Pointer Move · Drag · Wheel/Pinch · Scroll/Swipe | — | 표시 | 연속형 (Smoothing·Easing) |
-| Overlap Start · Overlap End · Drop On Target | Target element · Detection | 표시 (Overlap Time 등) | 이벤트형 |
-| While Overlapping | Target element · Detection | 표시 | 연속형 |
-| After Delay · Repeat Every · Idle Start/End | Time (초) | 숨김 | 이벤트형 |
-| Video Starts/Ends | — | 숨김 | 이벤트형 |
-| Page Enter/Exit | — | 숨김 | 이벤트형 |
+| Click/Tap · Double · Touch Start/End | — | 숨김 | 이벤트형 (Time·Delay·Easing) |
+| Long Press | Hold duration (기본 0.5초, 최소 0.1초) | 숨김 | 이벤트형 (Time·Delay·Easing) |
+| Hover | Mobile fallback (Long Press 선택 시 Hold duration) | 숨김 | 이벤트형 |
+| Pointer Move · Drag · Wheel/Pinch · Scroll/Swipe | 트리거에 따라 Trigger area | 표시: Follow input → Smoothing·Easing, Fire at threshold → Time·Delay·Easing |
+| Overlap Start · Overlap End · Drop On Target | Target element · Detection | 숨김 | 이벤트형 |
+| While Overlapping | Target element · Detection | 표시: Follow input → Smoothing·Easing, Fire at threshold → Time·Delay·Easing |
+| After Delay · Repeat Every · Idle Start/End | Time (초), Trigger area 숨김 | 숨김 | 이벤트형 |
+| Video Starts/Ends | Source video, Trigger area 숨김 | 숨김 | 이벤트형 |
+| Page Enter/Exit | Trigger area 숨김 | 숨김 | 이벤트형 |
+
+Stagger는 그룹·다중 선택에서만 추가한다. Order·Video Play/Pause/Resume/Seek
+즉시 명령을 선택하면 위 표의 이벤트형/연속형 구분보다 우선하여 TIMING은
+Delay만 보여주고 HOW를 숨긴다.
 
 ### A-4. 효과 선택 시 3.DO 내부 필드 교체
 

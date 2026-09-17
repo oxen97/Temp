@@ -11,6 +11,18 @@ import {
   DesignRange,
 } from "@/features/editor/components/ui/design-fields";
 import { SoundStepperField } from "@/features/editor/components/sound/sound-fields";
+import {
+  collisionInteractionTriggers,
+  continuousInteractionTriggers,
+  getEffectOptions,
+  getMappingOptions,
+  getMotionOptions,
+  getResetPolicy,
+  immediateEffects,
+  mediaInteractionTriggers,
+  pageInteractionTriggers,
+  timeInteractionTriggers,
+} from "@/features/editor/components/panels/interaction-panel-policy";
 import { assetPath } from "@/lib/asset-path";
 
 type TriggerOptionGroup = {
@@ -73,45 +85,11 @@ const triggerGroups: TriggerOptionGroup[] = [
   },
 ];
 
-const continuousTriggers = new Set([
-  "pointer-move",
-  "drag",
-  "wheel-pinch",
-  "scroll-swipe",
-]);
-const collisionTriggers = new Set([
-  "overlap-start",
-  "while-overlapping",
-  "overlap-end",
-  "drop-on-target",
-]);
-const timeTriggers = new Set([
-  "after-delay",
-  "repeat-every",
-  "idle-start",
-  "idle-end",
-]);
-
 const triggerLabels = new Map(
   triggerGroups.flatMap((group) =>
     group.options.map((option) => [option.value, option.label] as const),
   ),
 );
-
-const effectOptions = [
-  { label: "Move", value: "move" },
-  { label: "Scale", value: "scale" },
-  { label: "Rotate", value: "rotate" },
-  { label: "Skew", value: "skew" },
-  { label: "Distort", value: "distort" },
-  { label: "Opacity", value: "opacity" },
-  { label: "Color", value: "color" },
-  { label: "Blur", value: "blur" },
-  { label: "Shadow", value: "shadow" },
-  { label: "Show / Hide", value: "show-hide" },
-  { label: "Shake", value: "shake" },
-  { label: "Order", value: "order" },
-];
 
 const sampleInteractions = [
   {
@@ -247,8 +225,10 @@ function Row({ children, label }: { children: ReactNode; label: string }) {
 
 export function InteractionPanel({
   selectedName,
+  selectedTypes = [],
 }: {
   selectedName: string | null;
+  selectedTypes?: readonly string[];
 }) {
   const noop = () => {};
   const [interactions, setInteractions] = useState(sampleInteractions);
@@ -256,12 +236,16 @@ export function InteractionPanel({
 
   const [trigger, setTrigger] = useState("click-tap");
   const [triggerArea, setTriggerArea] = useState("selected-object");
+  const [sourceVideo, setSourceVideo] = useState("");
   const [fallback, setFallback] = useState("tap");
+  const [longPressSeconds, setLongPressSeconds] = useState(0.5);
   const [collisionTarget, setCollisionTarget] = useState("sauce-zone");
   const [detection, setDetection] = useState("bounding-box");
   const [timeSeconds, setTimeSeconds] = useState(5);
 
   const [mapping, setMapping] = useState("drag-progress");
+  const [pointerAxis, setPointerAxis] = useState("both");
+  const [mappingMode, setMappingMode] = useState("follow");
   const [trackDistance, setTrackDistance] = useState(300);
   const [dragAxis, setDragAxis] = useState("free");
   const [rangeMin, setRangeMin] = useState(0);
@@ -269,6 +253,7 @@ export function InteractionPanel({
   const [threshold, setThreshold] = useState(80);
 
   const [effect, setEffect] = useState("move");
+  const [groupEffect, setGroupEffect] = useState("move");
   const [moveX, setMoveX] = useState(100);
   const [moveY, setMoveY] = useState(0);
   const [movePath, setMovePath] = useState("straight");
@@ -281,7 +266,16 @@ export function InteractionPanel({
   const [springStrength, setSpringStrength] = useState(100);
   const [springMass, setSpringMass] = useState(1);
   const [springDamping, setSpringDamping] = useState(12);
+  const [initialVelocity, setInitialVelocity] = useState(100);
+  const [friction, setFriction] = useState(50);
+  const [deceleration, setDeceleration] = useState(50);
+  const [bounceStrength, setBounceStrength] = useState(100);
+  const [bounceCount, setBounceCount] = useState(2);
+  const [bounceDamping, setBounceDamping] = useState(12);
   const [bounceOff, setBounceOff] = useState("artboard");
+  const [gravityStrength, setGravityStrength] = useState(100);
+  const [bounciness, setBounciness] = useState(50);
+  const [gravityDirection, setGravityDirection] = useState("down");
 
   const [duration, setDuration] = useState(0.3);
   const [delay, setDelay] = useState(0);
@@ -300,10 +294,43 @@ export function InteractionPanel({
   const [hold, setHold] = useState(0);
   const [cursor, setCursor] = useState("pointer");
 
-  const isContinuous = continuousTriggers.has(trigger);
-  const isCollision = collisionTriggers.has(trigger);
-  const isTime = timeTriggers.has(trigger);
-  const showMapping = isContinuous || isCollision;
+  const isContinuous = continuousInteractionTriggers.has(trigger);
+  const isCollision = collisionInteractionTriggers.has(trigger);
+  const isTime = timeInteractionTriggers.has(trigger);
+  const isMedia = mediaInteractionTriggers.has(trigger);
+  const showTriggerArea =
+    !isTime && !isMedia && !pageInteractionTriggers.has(trigger);
+  const mappingChoices = getMappingOptions(trigger);
+  const showMapping = mappingChoices.length > 0;
+  const selectedMapping = mappingChoices.some(
+    (option) => option.value === mapping,
+  )
+    ? mapping
+    : (mappingChoices[0]?.value ?? "");
+  const effectChoices = getEffectOptions(selectedTypes);
+  const selectedEffect = effectChoices.some((option) => option.value === effect)
+    ? effect
+    : effectChoices[0].value;
+  const activeEffect =
+    selectedEffect === "group-animation" ? groupEffect : selectedEffect;
+  const isImmediate = immediateEffects.has(activeEffect);
+  const selectedMappingMode =
+    isImmediate && showMapping ? "threshold" : mappingMode;
+  const eventTiming = !isContinuous || selectedMappingMode === "threshold";
+  const motionChoices = getMotionOptions(
+    trigger,
+    selectedMapping,
+    activeEffect,
+  );
+  const selectedMotion = motionChoices.some((option) => option.value === motion)
+    ? motion
+    : (motionChoices[0]?.value ?? "direct");
+  const resetPolicy = getResetPolicy(trigger, fallback);
+  const selectedReset = resetPolicy.options.some(
+    (option) => option.value === resetMode,
+  )
+    ? resetMode
+    : "contextual";
 
   const groupOrder: string[] = [];
   for (const interaction of interactions) {
@@ -406,24 +433,49 @@ export function InteractionPanel({
           <GroupedDropdown
             ariaLabel="Trigger"
             groups={triggerGroups}
-            onChange={setTrigger}
+            onChange={(nextTrigger) => {
+              setTrigger(nextTrigger);
+              setMapping(getMappingOptions(nextTrigger)[0]?.value ?? "");
+              setMappingMode("follow");
+              setResetMode("contextual");
+            }}
             value={trigger}
           />
         </Row>
-        <Row label="Trigger area">
-          <DesignDropdown
-            ariaLabel="Trigger area"
-            className="interaction-dropdown"
-            noScroll
-            onChange={setTriggerArea}
-            options={[
-              { label: "Selected object", value: "selected-object" },
-              { label: "Entire artwork", value: "entire-artwork" },
-              { label: "Draw detail area…", value: "draw-detail-area" },
-            ]}
-            value={triggerArea}
-          />
-        </Row>
+        {showTriggerArea ? (
+          <Row label="Trigger area">
+            <DesignDropdown
+              ariaLabel="Trigger area"
+              className="interaction-dropdown"
+              noScroll
+              onChange={setTriggerArea}
+              options={[
+                { label: "Selected object", value: "selected-object" },
+                { label: "Entire artwork", value: "entire-artwork" },
+                { label: "Draw detail area…", value: "draw-detail-area" },
+              ]}
+              value={triggerArea}
+            />
+          </Row>
+        ) : null}
+        {isMedia ? (
+          <>
+            <Row label="Source video">
+              <DesignDropdown
+                ariaLabel="Source video"
+                className="interaction-dropdown"
+                disabled
+                noScroll
+                onChange={setSourceVideo}
+                options={[{ label: "No video on this page", value: "" }]}
+                value={sourceVideo}
+              />
+            </Row>
+            <p className="interaction-note">
+              Select a video once video elements are available in the editor.
+            </p>
+          </>
+        ) : null}
         {trigger === "hover" ? (
           <>
             <Row label="Mobile fallback">
@@ -444,6 +496,18 @@ export function InteractionPanel({
               Tap toggles · Touch Start and Long Press hover while held
             </p>
           </>
+        ) : null}
+        {trigger === "long-press" ||
+        (trigger === "hover" && fallback === "long-press") ? (
+          <Row label="Hold duration">
+            <SoundStepperField
+              ariaLabel="Long press duration"
+              min={0.1}
+              onBegin={noop}
+              onChange={setLongPressSeconds}
+              value={longPressSeconds}
+            />
+          </Row>
         ) : null}
         {isCollision ? (
           <>
@@ -496,25 +560,40 @@ export function InteractionPanel({
       </InteractionSection>
 
       {showMapping ? (
-        <InteractionSection cap="Continuous & collision" title="2. MAPPING">
+        <InteractionSection cap="Continuous input" title="2. MAPPING">
           <Row label="Input mapping">
             <DesignDropdown
               ariaLabel="Input mapping"
               className="interaction-dropdown"
               noScroll
               onChange={setMapping}
-              options={[
-                { label: "Drag Progress", value: "drag-progress" },
-                { label: "Drag Angle", value: "drag-angle" },
-                { label: "Scroll Progress", value: "scroll-progress" },
-                { label: "Wheel / Pinch Amount", value: "wheel-amount" },
-                { label: "Pointer Velocity", value: "pointer-velocity" },
-                { label: "Overlap Time", value: "overlap-time" },
-              ]}
-              value={mapping}
+              options={mappingChoices}
+              value={selectedMapping}
             />
           </Row>
-          {mapping === "drag-progress" ? (
+          {selectedMapping === "pointer-position" ? (
+            <>
+              <Row label="Axis">
+                <DesignDropdown
+                  ariaLabel="Pointer position axis"
+                  className="interaction-dropdown"
+                  noScroll
+                  onChange={setPointerAxis}
+                  options={[
+                    { label: "Both X & Y", value: "both" },
+                    { label: "X only", value: "x" },
+                    { label: "Y only", value: "y" },
+                  ]}
+                  value={pointerAxis}
+                />
+              </Row>
+              <p className="interaction-note">
+                Position is 0–100% within the trigger area; values outside are
+                clamped.
+              </p>
+            </>
+          ) : null}
+          {selectedMapping === "drag-progress" ? (
             <>
               <Row label="Track distance">
                 <DesignNumberField
@@ -547,32 +626,80 @@ export function InteractionPanel({
                 ariaLabel="Input range start"
                 label=""
                 onChange={setRangeMin}
-                unit="%"
+                unit={
+                  selectedMapping === "pointer-velocity"
+                    ? "px/s"
+                    : selectedMapping === "drag-angle"
+                      ? "°"
+                      : selectedMapping === "overlap-time"
+                        ? "s"
+                        : "%"
+                }
                 value={rangeMin}
               />
               <DesignNumberField
                 ariaLabel="Input range end"
                 label=""
                 onChange={setRangeMax}
-                unit="%"
+                unit={
+                  selectedMapping === "pointer-velocity"
+                    ? "px/s"
+                    : selectedMapping === "drag-angle"
+                      ? "°"
+                      : selectedMapping === "overlap-time"
+                        ? "s"
+                        : "%"
+                }
                 value={rangeMax}
               />
             </div>
           </Row>
-          <Row label="Threshold">
-            <DesignNumberField
-              ariaLabel="Threshold"
-              label=""
-              max={100}
-              min={0}
-              onChange={setThreshold}
-              unit="%"
-              value={threshold}
+          <Row label="Response mode">
+            <DesignDropdown
+              ariaLabel="Mapping response mode"
+              className="interaction-dropdown"
+              noScroll
+              disabled={isImmediate}
+              onChange={setMappingMode}
+              options={[
+                { label: "Follow input", value: "follow" },
+                { label: "Fire at threshold", value: "threshold" },
+              ]}
+              value={selectedMappingMode}
             />
           </Row>
-          <p className="interaction-note">
-            Threshold runs an extra event once the value crosses it
-          </p>
+          {selectedMappingMode === "threshold" ? (
+            <>
+              <Row label="Threshold">
+                <DesignNumberField
+                  ariaLabel="Threshold"
+                  label=""
+                  min={0}
+                  onChange={setThreshold}
+                  unit={
+                    selectedMapping === "pointer-velocity"
+                      ? "px/s"
+                      : selectedMapping === "drag-angle"
+                        ? "°"
+                        : selectedMapping === "overlap-time"
+                          ? "s"
+                          : "%"
+                  }
+                  value={threshold}
+                />
+              </Row>
+              <p className="interaction-note">
+                Fires once when the value crosses upward; going below re-arms
+                it.
+              </p>
+            </>
+          ) : null}
+          {isImmediate ? (
+            <p className="interaction-note">
+              Immediate actions use a threshold so they do not repeat every
+              frame.
+            </p>
+          ) : null}
         </InteractionSection>
       ) : null}
 
@@ -580,13 +707,27 @@ export function InteractionPanel({
         <Row label="Effect">
           <DesignDropdown
             ariaLabel="Effect"
-            className="interaction-dropdown"
+            className="interaction-dropdown interaction-effect-dropdown"
             onChange={setEffect}
-            options={effectOptions}
-            value={effect}
+            options={effectChoices}
+            value={selectedEffect}
           />
         </Row>
-        {effect === "move" ? (
+        {selectedEffect === "group-animation" ? (
+          <Row label="Child effect">
+            <DesignDropdown
+              ariaLabel="Group child effect"
+              className="interaction-dropdown"
+              noScroll
+              onChange={setGroupEffect}
+              options={effectChoices.filter(
+                (option) => option.value !== "group-animation",
+              )}
+              value={groupEffect}
+            />
+          </Row>
+        ) : null}
+        {activeEffect === "move" ? (
           <>
             <Row label="Move">
               <div className="interaction-field-pair">
@@ -635,7 +776,7 @@ export function InteractionPanel({
             </Row>
           </>
         ) : null}
-        {effect === "scale" ? (
+        {activeEffect === "scale" ? (
           <Row label="Scale">
             <div className="interaction-field-pair">
               <DesignNumberField
@@ -655,7 +796,7 @@ export function InteractionPanel({
             </div>
           </Row>
         ) : null}
-        {effect === "opacity" ? (
+        {activeEffect === "opacity" ? (
           <Row label="Opacity to">
             <DesignRange
               ariaLabel="Opacity target"
@@ -671,82 +812,98 @@ export function InteractionPanel({
         ) : null}
       </InteractionSection>
 
-      <InteractionSection cap="Motion" title="4. HOW">
-        <Row label="Behavior">
-          <DesignDropdown
-            ariaLabel="Motion behavior"
-            className="interaction-dropdown"
-            noScroll
-            onChange={setMotion}
-            options={[
-              { label: "Direct", value: "direct" },
-              { label: "Spring", value: "spring" },
-              { label: "Inertia", value: "inertia" },
-              { label: "Bounce", value: "bounce" },
-              { label: "Gravity", value: "gravity" },
-            ]}
-            value={motion}
-          />
-        </Row>
-        {motion === "spring" ? (
+      {!isImmediate ? (
+        <InteractionSection cap="Motion" title="4. HOW">
+          <Row label="Behavior">
+            <DesignDropdown
+              ariaLabel="Motion behavior"
+              className="interaction-dropdown"
+              noScroll
+              onChange={setMotion}
+              options={motionChoices}
+              value={selectedMotion}
+            />
+          </Row>
+          {selectedMotion === "spring" ? (
+            <>
+              <Row label="Spring">
+                <div className="interaction-field-pair is-triple">
+                  <DesignNumberField
+                    ariaLabel="Spring strength"
+                    label=""
+                    onChange={setSpringStrength}
+                    unit=""
+                    value={springStrength}
+                  />
+                  <DesignNumberField
+                    ariaLabel="Spring mass"
+                    label=""
+                    onChange={setSpringMass}
+                    unit=""
+                    value={springMass}
+                  />
+                  <DesignNumberField
+                    ariaLabel="Spring damping"
+                    label=""
+                    onChange={setSpringDamping}
+                    unit=""
+                    value={springDamping}
+                  />
+                </div>
+              </Row>
+              <p className="interaction-note">
+                Strength · Mass · Damping — fine-tune in Advanced
+              </p>
+            </>
+          ) : null}
+          {selectedMotion === "gravity" ? (
+            <>
+              <Row label="Bounce off">
+                <DesignDropdown
+                  ariaLabel="Gravity bounce targets"
+                  className="interaction-dropdown"
+                  noScroll
+                  onChange={setBounceOff}
+                  options={[
+                    { label: "Artboard edges", value: "artboard" },
+                    { label: "Artboard + obstacles…", value: "obstacles" },
+                  ]}
+                  value={bounceOff}
+                />
+              </Row>
+              <p className="interaction-note">
+                Falling, bouncing and drop zones — resting piles are not
+              </p>
+            </>
+          ) : null}
+        </InteractionSection>
+      ) : null}
+
+      <InteractionSection
+        cap={
+          isImmediate
+            ? "Immediate action"
+            : eventTiming
+              ? "Event"
+              : "Continuous input"
+        }
+        title="5. TIMING"
+      >
+        {isImmediate ? (
           <>
-            <Row label="Spring">
-              <div className="interaction-field-pair is-triple">
-                <DesignNumberField
-                  ariaLabel="Spring strength"
-                  label=""
-                  onChange={setSpringStrength}
-                  unit=""
-                  value={springStrength}
-                />
-                <DesignNumberField
-                  ariaLabel="Spring mass"
-                  label=""
-                  onChange={setSpringMass}
-                  unit=""
-                  value={springMass}
-                />
-                <DesignNumberField
-                  ariaLabel="Spring damping"
-                  label=""
-                  onChange={setSpringDamping}
-                  unit=""
-                  value={springDamping}
-                />
-              </div>
-            </Row>
-            <p className="interaction-note">
-              Strength · Mass · Damping — fine-tune in Advanced
-            </p>
-          </>
-        ) : null}
-        {motion === "gravity" ? (
-          <>
-            <Row label="Bounce off">
-              <DesignDropdown
-                ariaLabel="Gravity bounce targets"
-                className="interaction-dropdown"
-                noScroll
-                onChange={setBounceOff}
-                options={[
-                  { label: "Artboard edges", value: "artboard" },
-                  { label: "Artboard + obstacles…", value: "obstacles" },
-                ]}
-                value={bounceOff}
+            <Row label="Delay">
+              <SoundStepperField
+                ariaLabel="Delay"
+                onBegin={noop}
+                onChange={setDelay}
+                value={delay}
               />
             </Row>
             <p className="interaction-note">
-              Falling, bouncing and drop zones — resting piles are not
+              Instant actions do not use motion or animation duration.
             </p>
           </>
-        ) : null}
-      </InteractionSection>
-
-      <InteractionSection
-        cap={isContinuous ? "Continuous input" : "Event"}
-        title="5. TIMING"
-      >
-        {isContinuous ? (
+        ) : !eventTiming ? (
           <>
             <Row label="Smoothing">
               <SoundStepperField
@@ -794,18 +951,22 @@ export function InteractionPanel({
                 value={delay}
               />
             </Row>
-            <Row label="Stagger">
-              <SoundStepperField
-                ariaLabel="Stagger"
-                onBegin={noop}
-                onChange={setStagger}
-                value={stagger}
-              />
-            </Row>
-            <p className="interaction-note">
-              Sequential delay between grouped elements · forward · reverse ·
-              random
-            </p>
+            {selectedTypes.length > 1 ? (
+              <Row label="Stagger">
+                <SoundStepperField
+                  ariaLabel="Stagger"
+                  onBegin={noop}
+                  onChange={setStagger}
+                  value={stagger}
+                />
+              </Row>
+            ) : null}
+            {selectedTypes.length > 1 ? (
+              <p className="interaction-note">
+                Sequential delay between grouped elements · forward · reverse ·
+                random
+              </p>
+            ) : null}
             <Row label="Easing">
               <DesignDropdown
                 ariaLabel="Easing"
@@ -833,18 +994,11 @@ export function InteractionPanel({
             className="interaction-dropdown"
             noScroll
             onChange={setResetMode}
-            options={[
-              { label: "Contextual default", value: "contextual" },
-              { label: "Keep final state", value: "keep" },
-              { label: "Restart when triggered again", value: "restart" },
-              { label: "Return when trigger ends", value: "return" },
-            ]}
-            value={resetMode}
+            options={resetPolicy.options}
+            value={selectedReset}
           />
         </Row>
-        <p className="interaction-hint">
-          Default changes automatically for each trigger
-        </p>
+        <p className="interaction-hint">{resetPolicy.description}</p>
         <p className="interaction-hint">
           Effects apply at runtime only — authored values never change
         </p>
@@ -923,100 +1077,243 @@ export function InteractionPanel({
               ))}
             </div>
 
-            <p className="interaction-subheading">Playback</p>
-            <Row label="Repeat">
-              <DesignNumberField
-                ariaLabel="Repeat count"
-                label=""
-                min={0}
-                onChange={setRepeat}
-                unit=""
-                value={repeat}
-              />
-            </Row>
-            <p className="interaction-note">
-              ∞ allowed — ambient loops run until page exit
-            </p>
-            <Row label="Yoyo">
-              <button
-                aria-label="Yoyo"
-                aria-pressed={yoyo}
-                className={yoyo ? "sound-toggle is-active" : "sound-toggle"}
-                onClick={() => setYoyo((current) => !current)}
-                type="button"
-              >
-                <span />
-              </button>
-              <span className="interaction-value-caption">
-                play backward after completion
-              </span>
-            </Row>
-            <Row label="Hold">
-              <SoundStepperField
-                ariaLabel="Hold"
-                onBegin={noop}
-                onChange={setHold}
-                value={hold}
-              />
-            </Row>
-            <Row label="Cursor on hover">
-              <DesignDropdown
-                ariaLabel="Cursor on hover"
-                className="interaction-dropdown"
-                noScroll
-                onChange={setCursor}
-                options={[
-                  { label: "Default", value: "default" },
-                  { label: "Pointer", value: "pointer" },
-                ]}
-                value={cursor}
-              />
-            </Row>
+            {!isImmediate ? (
+              <>
+                <p className="interaction-subheading">Playback</p>
+                <Row label="Repeat">
+                  <DesignNumberField
+                    ariaLabel="Repeat count"
+                    label=""
+                    min={0}
+                    onChange={setRepeat}
+                    unit=""
+                    value={repeat}
+                  />
+                </Row>
+                <p className="interaction-note">
+                  ∞ allowed — ambient loops run until page exit
+                </p>
+                <Row label="Yoyo">
+                  <button
+                    aria-label="Yoyo"
+                    aria-pressed={yoyo}
+                    className={yoyo ? "sound-toggle is-active" : "sound-toggle"}
+                    onClick={() => setYoyo((current) => !current)}
+                    type="button"
+                  >
+                    <span />
+                  </button>
+                  <span className="interaction-value-caption">
+                    play backward after completion
+                  </span>
+                </Row>
+                <Row label="Hold">
+                  <SoundStepperField
+                    ariaLabel="Hold"
+                    onBegin={noop}
+                    onChange={setHold}
+                    value={hold}
+                  />
+                </Row>
+              </>
+            ) : null}
+            {trigger === "hover" ? (
+              <Row label="Cursor on hover">
+                <DesignDropdown
+                  ariaLabel="Cursor on hover"
+                  className="interaction-dropdown"
+                  noScroll
+                  onChange={setCursor}
+                  options={[
+                    { label: "Default", value: "default" },
+                    { label: "Pointer", value: "pointer" },
+                  ]}
+                  value={cursor}
+                />
+              </Row>
+            ) : null}
 
-            <p className="interaction-subheading">Physics details · Spring</p>
-            <Row label="Strength">
-              <DesignRange
-                ariaLabel="Spring strength detail"
-                className="sound-slider"
-                max={200}
-                min={0}
-                onBegin={noop}
-                onChange={setSpringStrength}
-                value={springStrength}
-              />
-            </Row>
-            <Row label="Mass">
-              <DesignRange
-                ariaLabel="Spring mass detail"
-                className="sound-slider"
-                max={10}
-                min={0}
-                onBegin={noop}
-                onChange={setSpringMass}
-                value={springMass}
-              />
-            </Row>
-            <Row label="Damping">
-              <DesignRange
-                ariaLabel="Spring damping detail"
-                className="sound-slider"
-                max={40}
-                min={0}
-                onBegin={noop}
-                onChange={setSpringDamping}
-                value={springDamping}
-              />
-            </Row>
+            {!isImmediate && selectedMotion !== "direct" ? (
+              <>
+                <p className="interaction-subheading">
+                  Physics details ·{" "}
+                  {
+                    motionChoices.find(
+                      (option) => option.value === selectedMotion,
+                    )?.label
+                  }
+                </p>
+                {selectedMotion === "spring" ? (
+                  <>
+                    <Row label="Strength">
+                      <DesignRange
+                        ariaLabel="Spring strength detail"
+                        className="sound-slider"
+                        max={200}
+                        min={0}
+                        onBegin={noop}
+                        onChange={setSpringStrength}
+                        value={springStrength}
+                      />
+                    </Row>
+                    <Row label="Mass">
+                      <DesignRange
+                        ariaLabel="Spring mass detail"
+                        className="sound-slider"
+                        max={10}
+                        min={0}
+                        onBegin={noop}
+                        onChange={setSpringMass}
+                        value={springMass}
+                      />
+                    </Row>
+                    <Row label="Damping">
+                      <DesignRange
+                        ariaLabel="Spring damping detail"
+                        className="sound-slider"
+                        max={40}
+                        min={0}
+                        onBegin={noop}
+                        onChange={setSpringDamping}
+                        value={springDamping}
+                      />
+                    </Row>
+                  </>
+                ) : null}
+                {selectedMotion === "inertia" ? (
+                  <>
+                    <Row label="Initial velocity">
+                      <DesignRange
+                        ariaLabel="Initial velocity detail"
+                        className="sound-slider"
+                        max={200}
+                        min={0}
+                        onBegin={noop}
+                        onChange={setInitialVelocity}
+                        value={initialVelocity}
+                      />
+                    </Row>
+                    <Row label="Friction">
+                      <DesignRange
+                        ariaLabel="Friction detail"
+                        className="sound-slider"
+                        max={100}
+                        min={0}
+                        onBegin={noop}
+                        onChange={setFriction}
+                        value={friction}
+                      />
+                    </Row>
+                    <Row label="Deceleration">
+                      <DesignRange
+                        ariaLabel="Deceleration detail"
+                        className="sound-slider"
+                        max={100}
+                        min={0}
+                        onBegin={noop}
+                        onChange={setDeceleration}
+                        value={deceleration}
+                      />
+                    </Row>
+                  </>
+                ) : null}
+                {selectedMotion === "bounce" ? (
+                  <>
+                    <Row label="Strength">
+                      <DesignRange
+                        ariaLabel="Bounce strength detail"
+                        className="sound-slider"
+                        max={200}
+                        min={0}
+                        onBegin={noop}
+                        onChange={setBounceStrength}
+                        value={bounceStrength}
+                      />
+                    </Row>
+                    <Row label="Bounce count">
+                      <DesignNumberField
+                        ariaLabel="Bounce count detail"
+                        label=""
+                        min={0}
+                        onChange={setBounceCount}
+                        value={bounceCount}
+                      />
+                    </Row>
+                    <Row label="Damping">
+                      <DesignRange
+                        ariaLabel="Bounce damping detail"
+                        className="sound-slider"
+                        max={40}
+                        min={0}
+                        onBegin={noop}
+                        onChange={setBounceDamping}
+                        value={bounceDamping}
+                      />
+                    </Row>
+                  </>
+                ) : null}
+                {selectedMotion === "gravity" ? (
+                  <>
+                    <Row label="Strength">
+                      <DesignRange
+                        ariaLabel="Gravity strength detail"
+                        className="sound-slider"
+                        max={200}
+                        min={0}
+                        onBegin={noop}
+                        onChange={setGravityStrength}
+                        value={gravityStrength}
+                      />
+                    </Row>
+                    <Row label="Bounciness">
+                      <DesignRange
+                        ariaLabel="Gravity bounciness detail"
+                        className="sound-slider"
+                        max={100}
+                        min={0}
+                        onBegin={noop}
+                        onChange={setBounciness}
+                        value={bounciness}
+                      />
+                    </Row>
+                    <Row label="Direction">
+                      <DesignDropdown
+                        ariaLabel="Gravity direction"
+                        className="interaction-dropdown"
+                        noScroll
+                        onChange={setGravityDirection}
+                        options={[
+                          { label: "Down", value: "down" },
+                          { label: "Up", value: "up" },
+                          { label: "Left", value: "left" },
+                          { label: "Right", value: "right" },
+                        ]}
+                        value={gravityDirection}
+                      />
+                    </Row>
+                  </>
+                ) : null}
+              </>
+            ) : null}
 
-            <p className="interaction-subheading">Keyframes</p>
-            <div className="interaction-keyframes">
-              <span className="interaction-keyframes-time">0 s</span>
-              <span aria-hidden="true" className="interaction-keyframes-line" />
-              <span className="interaction-keyframes-time">{duration} s</span>
-              <button className="interaction-edit-keyframes" type="button">
-                Edit keyframes…
-              </button>
-            </div>
+            {!isImmediate && eventTiming ? (
+              <>
+                <p className="interaction-subheading">Keyframes</p>
+                <div className="interaction-keyframes">
+                  <span className="interaction-keyframes-time">0 s</span>
+                  <span
+                    aria-hidden="true"
+                    className="interaction-keyframes-line"
+                  />
+                  <span className="interaction-keyframes-time">
+                    {duration} s
+                  </span>
+                  <button className="interaction-edit-keyframes" type="button">
+                    Edit keyframes…
+                  </button>
+                </div>
+              </>
+            ) : null}
           </>
         ) : null}
       </section>

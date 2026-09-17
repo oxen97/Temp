@@ -6578,6 +6578,12 @@ input[type="number"] {
   flex: 0 0 150px;
 }
 
+.interaction-effect-dropdown .design-dropdown-menu {
+  top: auto;
+  bottom: calc(100% - 1px);
+  border-radius: 2px 2px 0 0;
+}
+
 .interaction-menu-group {
   display: block;
   padding: 4px 6px 2px;

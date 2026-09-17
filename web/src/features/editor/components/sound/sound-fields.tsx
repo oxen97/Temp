@@ -151,18 +151,20 @@ export function SoundNumberInput({
 
 export function SoundStepperField({
   ariaLabel,
+  min = 0,
   onBegin,
   onChange,
   value,
 }: {
   ariaLabel: string;
+  min?: number;
   onBegin: () => void;
   onChange: (value: number) => void;
   value: number;
 }) {
   const updateByStep = (delta: number) => {
     onBegin();
-    onChange(Math.max(0, Math.round((value + delta) * 10) / 10));
+    onChange(Math.max(min, Math.round((value + delta) * 10) / 10));
   };
 
   return (
@@ -170,7 +172,7 @@ export function SoundStepperField({
       <span className="sound-stepper-field">
         <SoundNumberInput
           ariaLabel={ariaLabel}
-          min={0}
+          min={min}
           onBegin={onBegin}
           onChange={onChange}
           precision={1}

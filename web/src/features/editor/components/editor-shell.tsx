@@ -4492,7 +4492,10 @@ export function EditorShell() {
           </button>
         </div>
         {visiblePropertyTab === "interaction" ? (
-          <InteractionPanel selectedName={selectedElements[0]?.name ?? null} />
+          <InteractionPanel
+            selectedName={selectedElements[0]?.name ?? null}
+            selectedTypes={selectedElements.map((element) => element.type)}
+          />
         ) : null}
         {visiblePropertyTab === "scenes" ? (
           <ScenePanel
