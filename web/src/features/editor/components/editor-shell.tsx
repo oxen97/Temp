@@ -120,13 +120,9 @@ import {
 } from "@/features/editor/lib/image-crop";
 import {
   INTERFACE_SCALE_OPTIONS,
-  INTERFACE_SCALE_STORAGE_KEY,
   interfaceScaleFactor,
-  type InterfaceScaleMode,
-  LEGACY_INTERFACE_SCALE_STORAGE_KEY,
-  migrateInterfaceScaleMode,
-  resolveInterfaceScale,
 } from "@/features/editor/lib/interface-scale";
+import { useInterfaceScale } from "@/features/editor/hooks/use-interface-scale";
 import {
   drawRuler,
   prepareRulerCanvas,
@@ -143,7 +139,7 @@ import {
   buildGuideDistanceMeasurements,
   buildSmartSnap,
 } from "@/features/editor/lib/smart-guides";
-import { normalizedInteractionSound } from "@/features/editor/lib/sound-settings";
+import { useInteractionSoundAssets } from "@/features/editor/hooks/use-interaction-sound-assets";
 import {
   clearOrphanedVectorHandles,
   cloneVectorPaths,
@@ -158,14 +154,11 @@ import {
   vectorVisualGeometryPoints,
 } from "@/features/editor/lib/vector-path";
 import {
-  type BackgroundMusicAsset,
   type BackgroundMusicSettings,
   type CanvasElement,
   defaultBackgroundMusicSettings,
-  defaultInteractionSoundSettings,
   defaultSoundAdvancedSettings,
   defaultSoundMixerSettings,
-  type InteractionSoundSettings,
   type ShapeType,
   type SoundAdvancedSettings,
   type SoundMixerSettings,
@@ -201,7 +194,6 @@ export function EditorShell() {
     setSelectedElementIds,
     setSelectedShape,
     setZoom,
-    setBackgroundMusicArtwork,
     toggleElementLocked,
     toggleElementVisible,
     undo,
@@ -232,16 +224,16 @@ export function EditorShell() {
   const [assetTab, setAssetTab] = useState<"image" | "video">("image");
   const [propertyTab, setPropertyTab] = useState<PropertyTab>("design");
   const [uploadedAssets, setUploadedAssets] = useState<string[]>([]);
-  const backgroundMusicObjectUrlsRef = useRef(new Set<string>());
-  const editorMountedRef = useRef(true);
   const [lockRatio, setLockRatio] = useState(true);
   const [pan, setPan] = useState<Point>({ x: 0, y: 0 });
-  const [interfaceScaleMode, setInterfaceScaleMode] =
-    useState<InterfaceScaleMode>("auto");
-  const [screenWidthCss, setScreenWidthCss] = useState(0);
-  const [viewportWidthCss, setViewportWidthCss] = useState(0);
-  const [displayPixelRatio, setDisplayPixelRatio] = useState(1);
-  const [interfaceScaleReady, setInterfaceScaleReady] = useState(false);
+  const {
+    displayPixelRatio,
+    interfaceScaleMode,
+    interfaceScaleReady,
+    resolvedInterfaceScale,
+    selectInterfaceScale,
+    viewportWidthCss,
+  } = useInterfaceScale();
   const [viewMenuOpen, setViewMenuOpen] = useState(false);
   const [previewVisible, setPreviewVisible] = useState(false);
   const [navigatorVisible, setNavigatorVisible] = useState(false);
@@ -322,11 +314,6 @@ export function EditorShell() {
   const textEditorRefs = useRef(new Map<string, HTMLDivElement>());
   const viewMenuRef = useRef<HTMLDivElement>(null);
 
-  const resolvedInterfaceScale = resolveInterfaceScale(
-    interfaceScaleMode,
-    screenWidthCss,
-    displayPixelRatio,
-  );
   const totalScale = zoom / 100;
   const selectionUiScale = 100 / Math.max(5, zoom);
   const selectionControlScale = 1 / Math.max(Number.EPSILON, totalScale);
@@ -352,76 +339,6 @@ export function EditorShell() {
     setZoom(nextZoom);
     return true;
   }, [artboard.height, artboard.width, setZoom]);
-
-  const selectInterfaceScale = useCallback((mode: InterfaceScaleMode) => {
-    setInterfaceScaleMode(mode);
-    try {
-      window.localStorage.setItem(INTERFACE_SCALE_STORAGE_KEY, mode);
-    } catch {
-      // The setting still applies for this session when storage is unavailable.
-    }
-    setViewMenuOpen(false);
-  }, []);
-
-  useEffect(() => {
-    let resolutionQuery: MediaQueryList | null = null;
-    const watchResolutionChanges = () => {
-      resolutionQuery?.removeEventListener("change", updateDisplayMetrics);
-      resolutionQuery =
-        typeof window.matchMedia === "function"
-          ? window.matchMedia(
-              `(resolution: ${Math.max(1, window.devicePixelRatio || 1)}dppx)`,
-            )
-          : null;
-      resolutionQuery?.addEventListener("change", updateDisplayMetrics);
-    };
-    const updateDisplayMetrics = () => {
-      setScreenWidthCss(window.screen?.width || window.innerWidth);
-      setViewportWidthCss(window.innerWidth);
-      setDisplayPixelRatio(Math.max(1, window.devicePixelRatio || 1));
-      watchResolutionChanges();
-    };
-    let disposed = false;
-    let frame = 0;
-    const initializeInterface = () => {
-      if (disposed) return;
-      try {
-        const screenWidth = window.screen?.width || window.innerWidth;
-        const pixelRatio = Math.max(1, window.devicePixelRatio || 1);
-        const mode = migrateInterfaceScaleMode(
-          window.localStorage.getItem(INTERFACE_SCALE_STORAGE_KEY),
-          window.localStorage.getItem(LEGACY_INTERFACE_SCALE_STORAGE_KEY),
-          screenWidth,
-          pixelRatio,
-        );
-        window.localStorage.setItem(INTERFACE_SCALE_STORAGE_KEY, mode);
-        setInterfaceScaleMode(mode);
-      } catch {
-        setInterfaceScaleMode("auto");
-      }
-      updateDisplayMetrics();
-      setInterfaceScaleReady(true);
-    };
-    const revealAfterFontLoad = () => {
-      frame = window.requestAnimationFrame(initializeInterface);
-    };
-    const fontLoad = document.fonts?.load?.(
-      '500 12px "Inter Variable"',
-      "AMOUS",
-    );
-    if (fontLoad) {
-      void fontLoad.then(revealAfterFontLoad, revealAfterFontLoad);
-    } else {
-      revealAfterFontLoad();
-    }
-    window.addEventListener("resize", updateDisplayMetrics);
-    return () => {
-      disposed = true;
-      if (frame) window.cancelAnimationFrame(frame);
-      resolutionQuery?.removeEventListener("change", updateDisplayMetrics);
-      window.removeEventListener("resize", updateDisplayMetrics);
-    };
-  }, []);
 
   useEffect(() => {
     if (!viewMenuOpen) return;
@@ -2981,247 +2898,17 @@ export function EditorShell() {
     }));
   };
 
-  const createBackgroundMusicObjectUrl = useCallback((file: Blob) => {
-    const source = URL.createObjectURL(file);
-    backgroundMusicObjectUrlsRef.current.add(source);
-    return source;
-  }, []);
-
-  const updateInteractionSoundForElements = useCallback(
-    (elementIds: string[], settings: InteractionSoundSettings) => {
-      const currentElements = useEditorStore
-        .getState()
-        .pages.flatMap((page) => page.elements);
-      elementIds.forEach((elementId) => {
-        const existingSettings = currentElements.find(
-          (element) => element.id === elementId,
-        )?.interactionSounds;
-        updateElement(elementId, {
-          interactionSounds: [
-            {
-              ...settings,
-              assets: settings.assets.map((asset) => ({ ...asset })),
-            },
-            ...(existingSettings?.slice(1).map((sound) => ({
-              ...sound,
-              assets: sound.assets.map((asset) => ({ ...asset })),
-            })) ?? []),
-          ],
-        });
-      });
-    },
-    [updateElement],
-  );
-
-  const appendInteractionSoundAssetsForElements = useCallback(
-    (elementIds: string[], assets: BackgroundMusicAsset[]) => {
-      elementIds.forEach((elementId) => {
-        const currentElement = useEditorStore
-          .getState()
-          .pages.flatMap((page) => page.elements)
-          .find((element) => element.id === elementId);
-        const existingSettings = currentElement?.interactionSounds;
-        const primarySettings = normalizedInteractionSound(
-          existingSettings?.[0],
-        );
-        updateElement(elementId, {
-          interactionSounds: [
-            {
-              ...primarySettings,
-              soundSource: "multiple",
-              assets: [
-                ...primarySettings.assets.map((asset) => ({ ...asset })),
-                ...assets.map((asset) => ({ ...asset })),
-              ],
-            },
-            ...(existingSettings?.slice(1).map((sound) => ({
-              ...sound,
-              assets: sound.assets.map((asset) => ({ ...asset })),
-            })) ?? []),
-          ],
-        });
-      });
-    },
-    [updateElement],
-  );
-
-  const applyCommonInteractionSoundAssetForElements = useCallback(
-    (elementIds: string[], asset: BackgroundMusicAsset) => {
-      elementIds.forEach((elementId) => {
-        const currentElement = useEditorStore
-          .getState()
-          .pages.flatMap((page) => page.elements)
-          .find((element) => element.id === elementId);
-        const existingSettings = currentElement?.interactionSounds;
-        const primarySettings = normalizedInteractionSound(
-          existingSettings?.[0],
-        );
-        updateElement(elementId, {
-          interactionSounds: [
-            {
-              ...primarySettings,
-              assets:
-                primarySettings.soundSource === "multiple"
-                  ? [
-                      ...primarySettings.assets.map((existingAsset) => ({
-                        ...existingAsset,
-                      })),
-                      { ...asset },
-                    ]
-                  : [{ ...asset }],
-            },
-            ...(existingSettings?.slice(1).map((sound) => ({
-              ...sound,
-              assets: sound.assets.map((existingAsset) => ({
-                ...existingAsset,
-              })),
-            })) ?? []),
-          ],
-        });
-      });
-    },
-    [updateElement],
-  );
-
-  const clearInteractionSoundAssetsForElements = useCallback(
-    (elementIds: string[]) => {
-      elementIds.forEach((elementId) => {
-        const currentElement = useEditorStore
-          .getState()
-          .pages.flatMap((page) => page.elements)
-          .find((element) => element.id === elementId);
-        const existingSettings = currentElement?.interactionSounds;
-        updateElement(elementId, {
-          interactionSounds: (existingSettings?.length
-            ? existingSettings
-            : [defaultInteractionSoundSettings]
-          ).map((sound) => ({
-            ...sound,
-            assets: [],
-          })),
-        });
-      });
-    },
-    [updateElement],
-  );
-
-  const deleteInteractionSoundAsset = useCallback(
-    (elementId: string, settingIndex: number, assetIndex: number) => {
-      const currentElement = useEditorStore
-        .getState()
-        .pages.flatMap((page) => page.elements)
-        .find((element) => element.id === elementId);
-      if (!currentElement?.interactionSounds?.[settingIndex]) return;
-      updateElement(elementId, {
-        interactionSounds: currentElement.interactionSounds.map(
-          (sound, currentSettingIndex) => ({
-            ...sound,
-            assets: sound.assets
-              .filter(
-                (_, currentAssetIndex) =>
-                  currentSettingIndex !== settingIndex ||
-                  currentAssetIndex !== assetIndex,
-              )
-              .map((asset) => ({ ...asset })),
-          }),
-        ),
-      });
-    },
-    [updateElement],
-  );
-
-  const replaceInteractionSoundsForElement = useCallback(
-    (elementId: string, interactionSounds: InteractionSoundSettings[]) => {
-      updateElement(elementId, {
-        interactionSounds: interactionSounds.map((sound) => ({
-          ...sound,
-          assets: sound.assets.map((asset) => ({ ...asset })),
-        })),
-      });
-    },
-    [updateElement],
-  );
-
-  const updateInteractionExpandedForElements = useCallback(
-    (elementIds: string[], interactionSoundExpanded: boolean) => {
-      elementIds.forEach((elementId) =>
-        updateElement(elementId, { interactionSoundExpanded }),
-      );
-    },
-    [updateElement],
-  );
-
-  const attachBackgroundMusicArtwork = useCallback(
-    (pageId: string, assetSrc: string, artwork: Blob) => {
-      if (!editorMountedRef.current) return;
-      const state = useEditorStore.getState();
-      const snapshots = [...state.past, ...state.future];
-      const referencedAssets = [
-        ...state.pages,
-        ...snapshots.flatMap((snapshot) => snapshot.pages),
-      ]
-        .filter((page) => page.id === pageId)
-        .map((page) => page.backgroundMusic?.asset)
-        .filter((asset) => asset?.src === assetSrc);
-      if (referencedAssets.length === 0) return;
-      const existingArtworkSrc = referencedAssets.find(
-        (asset) => asset?.artworkSrc,
-      )?.artworkSrc;
-      if (existingArtworkSrc) {
-        setBackgroundMusicArtwork(pageId, assetSrc, existingArtworkSrc);
-        return;
-      }
-      const artworkSrc = createBackgroundMusicObjectUrl(artwork);
-      setBackgroundMusicArtwork(pageId, assetSrc, artworkSrc);
-    },
-    [createBackgroundMusicObjectUrl, setBackgroundMusicArtwork],
-  );
-
-  useEffect(() => {
-    const referencedSources = new Set<string>();
-    const collectSources = (sourcePages: typeof pages) => {
-      sourcePages.forEach((page) => {
-        const asset = page.backgroundMusic?.asset;
-        if (asset) {
-          referencedSources.add(asset.src);
-          if (asset.artworkSrc) referencedSources.add(asset.artworkSrc);
-        }
-        page.elements.forEach((element) => {
-          element.interactionSounds?.forEach((sound) => {
-            sound.assets.forEach((soundAsset) =>
-              referencedSources.add(soundAsset.src),
-            );
-          });
-        });
-      });
-    };
-    collectSources(useEditorStore.getState().pages);
-    past.forEach((snapshot) => collectSources(snapshot.pages));
-    future.forEach((snapshot) => collectSources(snapshot.pages));
-    useEditorStore.getState().clipboard.forEach((element) => {
-      element.interactionSounds?.forEach((sound) => {
-        sound.assets.forEach((soundAsset) =>
-          referencedSources.add(soundAsset.src),
-        );
-      });
-    });
-    const ownedSources = backgroundMusicObjectUrlsRef.current;
-    ownedSources.forEach((source) => {
-      if (referencedSources.has(source)) return;
-      URL.revokeObjectURL(source);
-      ownedSources.delete(source);
-    });
-  }, [clipboard, future, pages, past]);
-
-  useEffect(() => {
-    editorMountedRef.current = true;
-    const ownedSources = backgroundMusicObjectUrlsRef.current;
-    return () => {
-      editorMountedRef.current = false;
-      ownedSources.forEach((source) => URL.revokeObjectURL(source));
-      ownedSources.clear();
-    };
-  }, []);
+  const {
+    appendInteractionSoundAssetsForElements,
+    applyCommonInteractionSoundAssetForElements,
+    attachBackgroundMusicArtwork,
+    clearInteractionSoundAssetsForElements,
+    createBackgroundMusicObjectUrl,
+    deleteInteractionSoundAsset,
+    replaceInteractionSoundsForElement,
+    updateInteractionExpandedForElements,
+    updateInteractionSoundForElements,
+  } = useInteractionSoundAssets();
 
   const handleAssetUpload = (event: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files ?? []);
@@ -3549,7 +3236,10 @@ export function EditorShell() {
                       }
                       className="view-menu-item"
                       key={option.value}
-                      onClick={() => selectInterfaceScale(option.value)}
+                      onClick={() => {
+                        selectInterfaceScale(option.value);
+                        setViewMenuOpen(false);
+                      }}
                       role="menuitemradio"
                       type="button"
                     >
