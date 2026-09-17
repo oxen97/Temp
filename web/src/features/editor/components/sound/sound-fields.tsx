@@ -1,5 +1,5 @@
 import Image from "next/image";
-import { useRef, useState } from "react";
+import { type MouseEventHandler, useRef, useState } from "react";
 
 import { clamp } from "@/features/editor/lib/geometry";
 import { assetPath } from "@/lib/asset-path";
@@ -45,7 +45,7 @@ export function SoundPlayButton({
   disabled?: boolean;
   isPlaying?: boolean;
   label: string;
-  onClick?: () => void;
+  onClick?: MouseEventHandler<HTMLButtonElement>;
 }) {
   return (
     <button

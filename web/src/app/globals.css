@@ -6407,21 +6407,6 @@ input[type="number"] {
   color: var(--disabled);
 }
 
-.interaction-row-play {
-  display: grid;
-  width: 15px;
-  height: 15px;
-  padding: 0;
-  place-items: center;
-  border: 1px solid var(--accent-border);
-  border-radius: 50%;
-  background: #ffffff;
-  color: var(--accent);
-  font-size: 6px;
-  cursor: pointer;
-  flex: none;
-}
-
 .interaction-row-name {
   flex: 1;
   font-size: 10px;

@@ -10,7 +10,10 @@ import {
   DesignNumberField,
   DesignRange,
 } from "@/features/editor/components/ui/design-fields";
-import { SoundStepperField } from "@/features/editor/components/sound/sound-fields";
+import {
+  SoundPlayButton,
+  SoundStepperField,
+} from "@/features/editor/components/sound/sound-fields";
 import {
   collisionInteractionTriggers,
   continuousInteractionTriggers,
@@ -378,14 +381,10 @@ export function InteractionPanel({
                   key={interaction.id}
                   onClick={() => setSelectedId(interaction.id)}
                 >
-                  <button
-                    aria-label={`Preview ${interaction.name}`}
-                    className="interaction-row-play"
+                  <SoundPlayButton
+                    label={`Preview ${interaction.name}`}
                     onClick={(event) => event.stopPropagation()}
-                    type="button"
-                  >
-                    <span aria-hidden="true">▶</span>
-                  </button>
+                  />
                   <button
                     aria-label={`Toggle ${interaction.name}`}
                     aria-pressed={interaction.enabled}
