@@ -19,14 +19,16 @@ import type {
   CanvasElement,
   InteractionSoundSettings,
 } from "../store/editor-store";
+import { calculateCanvasFitZoom } from "../lib/geometry";
 import {
-  calculateCanvasFitZoom,
   calculateInteractionSoundVolume,
   chooseInteractionSoundAsset,
-  EditorShell,
+} from "../lib/sound-playback";
+import {
   soundOutputBitrate,
   soundPreloadAttribute,
-} from "./editor-shell";
+} from "../lib/sound-settings";
+import { EditorShell } from "./editor-shell";
 
 beforeEach(() => {
   vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
