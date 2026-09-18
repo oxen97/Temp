@@ -111,17 +111,16 @@ export function getEffectOptions(
   const type = selectedTypes[0];
   if (type === "image") {
     return [
-      ...commonEffects,
-      ...imageEffects,
       ...(collisionBounceTriggers.has(trigger)
         ? [{ label: "Bounce Off Target", value: "collision-bounce" }]
         : []),
+      ...commonEffects,
+      ...imageEffects,
     ];
   }
   if (type === "text") return [...commonEffects, ...textEffects];
   if (type === "video") return [...commonEffects, ...videoEffects];
   return [
-    ...commonEffects,
     ...(type !== undefined &&
     isLiquidMergeShape(type) &&
     liquidMergeTriggers.has(trigger)
@@ -130,6 +129,7 @@ export function getEffectOptions(
     ...(selectedTypes.length === 1 && collisionBounceTriggers.has(trigger)
       ? [{ label: "Bounce Off Target", value: "collision-bounce" }]
       : []),
+    ...commonEffects,
   ];
 }
 

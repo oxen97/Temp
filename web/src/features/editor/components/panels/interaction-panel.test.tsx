@@ -160,4 +160,17 @@ describe("InteractionPanel conditional UI", () => {
       "Move",
     );
   });
+
+  it("explains why Liquid Merge is unavailable for a multiple selection", () => {
+    render(
+      <InteractionPanel
+        selectedName="Rectangle 1"
+        selectedTypes={["rectangle", "circle"]}
+      />,
+    );
+    choose("Trigger", "Near Target");
+    expect(
+      screen.getByText(/Liquid Merge needs one selected rectangle/i),
+    ).toBeTruthy();
+  });
 });

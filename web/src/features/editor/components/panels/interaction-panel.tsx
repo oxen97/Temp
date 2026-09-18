@@ -819,6 +819,13 @@ export function InteractionPanel({
             value={selectedEffect}
           />
         </Row>
+        {(trigger === "near-target" || trigger === "while-overlapping") &&
+        !effectChoices.some((option) => option.value === "liquid-merge") ? (
+          <p className="interaction-note">
+            Liquid Merge needs one selected rectangle, circle, triangle, or
+            star.
+          </p>
+        ) : null}
         {selectedEffect === "group-animation" ? (
           <Row label="Child effect">
             <DesignDropdown
