@@ -4493,6 +4493,12 @@ export function EditorShell() {
         </div>
         {visiblePropertyTab === "interaction" ? (
           <InteractionPanel
+            elements={elements.map(({ id, name, type }) => ({
+              id,
+              name,
+              type,
+            }))}
+            selectedElementIds={selectedElements.map((element) => element.id)}
             selectedName={selectedElements[0]?.name ?? null}
             selectedTypes={selectedElements.map((element) => element.type)}
           />

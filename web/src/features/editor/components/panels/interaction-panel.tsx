@@ -22,6 +22,7 @@ import {
   getMotionOptions,
   getResetPolicy,
   immediateEffects,
+  isLiquidMergeShape,
   mediaInteractionTriggers,
   pageInteractionTriggers,
   timeInteractionTriggers,
@@ -61,6 +62,7 @@ const triggerGroups: TriggerOptionGroup[] = [
       { label: "While Overlapping", value: "while-overlapping" },
       { label: "Overlap End", value: "overlap-end" },
       { label: "Drop On Target", value: "drop-on-target" },
+      { label: "Near Target", value: "near-target" },
     ],
   },
   {
@@ -227,9 +229,13 @@ function Row({ children, label }: { children: ReactNode; label: string }) {
 }
 
 export function InteractionPanel({
+  elements = [],
+  selectedElementIds = [],
   selectedName,
   selectedTypes = [],
 }: {
+  elements?: readonly { id: string; name: string; type: string }[];
+  selectedElementIds?: readonly string[];
   selectedName: string | null;
   selectedTypes?: readonly string[];
 }) {
@@ -242,8 +248,10 @@ export function InteractionPanel({
   const [sourceVideo, setSourceVideo] = useState("");
   const [fallback, setFallback] = useState("tap");
   const [longPressSeconds, setLongPressSeconds] = useState(0.5);
-  const [collisionTarget, setCollisionTarget] = useState("sauce-zone");
+  const [collisionTarget, setCollisionTarget] = useState("");
   const [detection, setDetection] = useState("bounding-box");
+  const [joinDistance, setJoinDistance] = useState(30);
+  const [releaseDistance, setReleaseDistance] = useState(45);
   const [timeSeconds, setTimeSeconds] = useState(5);
 
   const [mapping, setMapping] = useState("drag-progress");
@@ -264,6 +272,13 @@ export function InteractionPanel({
   const [scaleX, setScaleX] = useState(120);
   const [scaleY, setScaleY] = useState(120);
   const [opacityTo, setOpacityTo] = useState(40);
+  const [bridgeWidth, setBridgeWidth] = useState(50);
+  const [liquidSmoothness, setLiquidSmoothness] = useState(60);
+  const [affectedObjects, setAffectedObjects] = useState("selected");
+  const [impactBounciness, setImpactBounciness] = useState(65);
+  const [impactMass, setImpactMass] = useState(1);
+  const [targetMass, setTargetMass] = useState(1);
+  const [impactFriction, setImpactFriction] = useState(20);
 
   const [motion, setMotion] = useState("spring");
   const [springStrength, setSpringStrength] = useState(100);
@@ -310,15 +325,22 @@ export function InteractionPanel({
   )
     ? mapping
     : (mappingChoices[0]?.value ?? "");
-  const effectChoices = getEffectOptions(selectedTypes);
+  const effectChoices = getEffectOptions(selectedTypes, trigger);
   const selectedEffect = effectChoices.some((option) => option.value === effect)
     ? effect
     : effectChoices[0].value;
   const activeEffect =
     selectedEffect === "group-animation" ? groupEffect : selectedEffect;
+  const isLiquidMerge = activeEffect === "liquid-merge";
+  const isCollisionBounce = activeEffect === "collision-bounce";
+  const isPairEffect = isLiquidMerge || isCollisionBounce;
   const isImmediate = immediateEffects.has(activeEffect);
   const selectedMappingMode =
-    isImmediate && showMapping ? "threshold" : mappingMode;
+    isLiquidMerge && showMapping
+      ? "follow"
+      : isImmediate && showMapping
+        ? "threshold"
+        : mappingMode;
   const eventTiming = !isContinuous || selectedMappingMode === "threshold";
   const motionChoices = getMotionOptions(
     trigger,
@@ -329,12 +351,27 @@ export function InteractionPanel({
   const selectedMotion = motionChoices.some((option) => option.value === motion)
     ? motion
     : (motionChoices[0]?.value ?? "direct");
-  const resetPolicy = getResetPolicy(trigger, fallback);
+  const resetPolicy = getResetPolicy(trigger, fallback, activeEffect);
   const selectedReset = resetPolicy.options.some(
     (option) => option.value === resetMode,
   )
     ? resetMode
     : "contextual";
+  const targetChoices = elements
+    .filter(
+      (element) =>
+        !selectedElementIds.includes(element.id) &&
+        (!isLiquidMerge || isLiquidMergeShape(element.type)),
+    )
+    .map((element) => ({
+      label: `${element.name} (${element.type})`,
+      value: element.id,
+    }));
+  const selectedCollisionTarget = targetChoices.some(
+    (option) => option.value === collisionTarget,
+  )
+    ? collisionTarget
+    : (targetChoices[0]?.value ?? "");
 
   const groupOrder: string[] = [];
   for (const interaction of interactions) {
@@ -442,6 +479,13 @@ export function InteractionPanel({
               setMapping(getMappingOptions(nextTrigger)[0]?.value ?? "");
               setMappingMode("follow");
               setResetMode("contextual");
+              if (
+                !getEffectOptions(selectedTypes, nextTrigger).some(
+                  (option) => option.value === effect,
+                )
+              ) {
+                setEffect("move");
+              }
             }}
             value={trigger}
           />
@@ -519,28 +563,75 @@ export function InteractionPanel({
               <DesignDropdown
                 ariaLabel="Collision target element"
                 className="interaction-dropdown"
+                disabled={targetChoices.length === 0}
                 noScroll
                 onChange={setCollisionTarget}
-                options={[
-                  { label: "Sauce zone (Rectangle 2)", value: "sauce-zone" },
-                  { label: "Floor (Rectangle 3)", value: "floor" },
-                ]}
-                value={collisionTarget}
+                options={
+                  targetChoices.length
+                    ? targetChoices
+                    : [
+                        {
+                          label: isLiquidMerge
+                            ? "No other closed shapes"
+                            : "No other objects",
+                          value: "",
+                        },
+                      ]
+                }
+                value={selectedCollisionTarget}
               />
             </Row>
             <Row label="Detection">
               <DesignDropdown
                 ariaLabel="Collision detection"
                 className="interaction-dropdown"
+                disabled={isPairEffect}
                 noScroll
                 onChange={setDetection}
                 options={[
                   { label: "Bounding box", value: "bounding-box" },
                   { label: "Precise outline", value: "precise-outline" },
                 ]}
-                value={detection}
+                value={isPairEffect ? "precise-outline" : detection}
               />
             </Row>
+            {trigger === "near-target" ? (
+              <>
+                <Row label="Join distance">
+                  <DesignNumberField
+                    ariaLabel="Join distance"
+                    label=""
+                    min={0}
+                    onChange={(value) => {
+                      const next = Math.max(0, value);
+                      setJoinDistance(next);
+                      setReleaseDistance((current) => Math.max(current, next));
+                    }}
+                    value={joinDistance}
+                  />
+                </Row>
+                <Row label="Release distance">
+                  <DesignNumberField
+                    ariaLabel="Release distance"
+                    label=""
+                    min={joinDistance}
+                    onChange={(value) =>
+                      setReleaseDistance(Math.max(joinDistance, value))
+                    }
+                    value={releaseDistance}
+                  />
+                </Row>
+                <p className="interaction-note">
+                  Distances are in px. The larger release distance prevents
+                  flickering while the objects separate.
+                </p>
+              </>
+            ) : null}
+            {isPairEffect ? (
+              <p className="interaction-note">
+                Precise outline is used for this two-object effect.
+              </p>
+            ) : null}
             <p className="interaction-note">
               Only elements used by a collision interaction are checked
             </p>
@@ -575,6 +666,11 @@ export function InteractionPanel({
               value={selectedMapping}
             />
           </Row>
+          {selectedMapping === "distance-to-target" ? (
+            <p className="interaction-note">
+              0% at the join distance; 100% when the outlines touch.
+            </p>
+          ) : null}
           {selectedMapping === "pointer-position" ? (
             <>
               <Row label="Axis">
@@ -663,7 +759,7 @@ export function InteractionPanel({
               ariaLabel="Mapping response mode"
               className="interaction-dropdown"
               noScroll
-              disabled={isImmediate}
+              disabled={isImmediate || isLiquidMerge}
               onChange={setMappingMode}
               options={[
                 { label: "Follow input", value: "follow" },
@@ -702,6 +798,12 @@ export function InteractionPanel({
             <p className="interaction-note">
               Immediate actions use a threshold so they do not repeat every
               frame.
+            </p>
+          ) : null}
+          {isLiquidMerge ? (
+            <p className="interaction-note">
+              Liquid Merge follows proximity continuously while the shapes are
+              near each other.
             </p>
           ) : null}
         </InteractionSection>
@@ -814,6 +916,63 @@ export function InteractionPanel({
             <span className="interaction-value-caption">{opacityTo} %</span>
           </Row>
         ) : null}
+        {isLiquidMerge ? (
+          <>
+            <Row label="Bridge width">
+              <DesignRange
+                ariaLabel="Liquid bridge width"
+                className="sound-slider"
+                max={100}
+                min={0}
+                onChange={setBridgeWidth}
+                value={bridgeWidth}
+              />
+              <span className="interaction-value-caption">{bridgeWidth} %</span>
+            </Row>
+            <Row label="Smoothness">
+              <DesignRange
+                ariaLabel="Liquid smoothness"
+                className="sound-slider"
+                max={100}
+                min={0}
+                onChange={setLiquidSmoothness}
+                value={liquidSmoothness}
+              />
+              <span className="interaction-value-caption">
+                {liquidSmoothness} %
+              </span>
+            </Row>
+            <p className="interaction-note">
+              Visually join the selected shape and target; keep both source
+              objects editable.
+            </p>
+          </>
+        ) : null}
+        {isCollisionBounce ? (
+          <>
+            <Row label="Affected objects">
+              <DesignDropdown
+                ariaLabel="Collision affected objects"
+                className="interaction-dropdown"
+                noScroll
+                onChange={setAffectedObjects}
+                options={[
+                  { label: "Selected object only", value: "selected" },
+                  { label: "Both objects", value: "both" },
+                ]}
+                value={affectedObjects}
+              />
+            </Row>
+            <p className="interaction-note">
+              Bounce direction and speed follow the impact angle and velocity.
+            </p>
+          </>
+        ) : null}
+        {isPairEffect ? (
+          <p className="interaction-note">
+            Settings preview only — interaction playback is not connected yet.
+          </p>
+        ) : null}
       </InteractionSection>
 
       {!isImmediate ? (
@@ -860,6 +1019,60 @@ export function InteractionPanel({
               </p>
             </>
           ) : null}
+          {selectedMotion === "collision-bounce" ? (
+            <>
+              <Row label="Bounciness">
+                <DesignRange
+                  ariaLabel="Collision bounciness"
+                  className="sound-slider"
+                  max={100}
+                  min={0}
+                  onChange={setImpactBounciness}
+                  value={impactBounciness}
+                />
+                <span className="interaction-value-caption">
+                  {impactBounciness} %
+                </span>
+              </Row>
+              <Row label="Mass">
+                <DesignNumberField
+                  ariaLabel="Selected object mass"
+                  label=""
+                  min={0.1}
+                  onChange={(value) => setImpactMass(Math.max(0.1, value))}
+                  precision={1}
+                  unit=""
+                  value={impactMass}
+                />
+              </Row>
+              {affectedObjects === "both" ? (
+                <Row label="Target mass">
+                  <DesignNumberField
+                    ariaLabel="Target object mass"
+                    label=""
+                    min={0.1}
+                    onChange={(value) => setTargetMass(Math.max(0.1, value))}
+                    precision={1}
+                    unit=""
+                    value={targetMass}
+                  />
+                </Row>
+              ) : null}
+              <Row label="Friction">
+                <DesignRange
+                  ariaLabel="Collision friction"
+                  className="sound-slider"
+                  max={100}
+                  min={0}
+                  onChange={setImpactFriction}
+                  value={impactFriction}
+                />
+                <span className="interaction-value-caption">
+                  {impactFriction} %
+                </span>
+              </Row>
+            </>
+          ) : null}
           {selectedMotion === "gravity" ? (
             <>
               <Row label="Bounce off">
@@ -885,15 +1098,17 @@ export function InteractionPanel({
 
       <InteractionSection
         cap={
-          isImmediate
-            ? "Immediate action"
-            : eventTiming
-              ? "Event"
-              : "Continuous input"
+          isCollisionBounce
+            ? "Impact action"
+            : isImmediate
+              ? "Immediate action"
+              : eventTiming
+                ? "Event"
+                : "Continuous input"
         }
         title="5. TIMING"
       >
-        {isImmediate ? (
+        {isImmediate || isCollisionBounce ? (
           <>
             <Row label="Delay">
               <SoundStepperField
@@ -904,7 +1119,9 @@ export function InteractionPanel({
               />
             </Row>
             <p className="interaction-note">
-              Instant actions do not use motion or animation duration.
+              {isCollisionBounce
+                ? "Impact timing comes from the collision; no fixed duration or easing."
+                : "Instant actions do not use motion or animation duration."}
             </p>
           </>
         ) : !eventTiming ? (
@@ -1081,7 +1298,7 @@ export function InteractionPanel({
               ))}
             </div>
 
-            {!isImmediate ? (
+            {!isImmediate && !isPairEffect ? (
               <>
                 <p className="interaction-subheading">Playback</p>
                 <Row label="Repeat">
@@ -1300,7 +1517,7 @@ export function InteractionPanel({
               </>
             ) : null}
 
-            {!isImmediate && eventTiming ? (
+            {!isImmediate && !isPairEffect && eventTiming ? (
               <>
                 <p className="interaction-subheading">Keyframes</p>
                 <div className="interaction-keyframes">

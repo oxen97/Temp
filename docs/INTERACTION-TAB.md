@@ -9,6 +9,9 @@
 - **UI 프리뷰만 구현됨** (커밋 `85e5eee`). 모든 상태는 `interaction-panel.tsx`
   컴포넌트 로컬이며 **스토어에 아무것도 저장하지 않고, 뷰어 런타임도 없다.**
   목록의 인터랙션 4개(Move/Scale/Opacity/Show·Hide)는 하드코딩 샘플이다.
+- **2026-09-19 UI 추가**: 근접한 두 도형의 `Liquid Merge`와 충돌 시
+  `Bounce Off Target` 설정 필드를 추가했다. 상대 요소 목록은 현재 페이지의
+  실제 레이어를 사용하지만, 설정 저장·뷰어 렌더링·충돌 물리는 여전히 미연결이다.
 - 구현 파일:
   - `web/src/features/editor/components/panels/interaction-panel.tsx` (신규)
   - `editor-shell.tsx` — INTERACTION 탭 버튼 활성화 + 렌더 분기.
@@ -82,7 +85,7 @@
 
 ## 1. WHEN — 트리거
 
-**Trigger** 드롭다운 (6그룹 22종, 그룹 헤딩 표시):
+**Trigger** 드롭다운 (6그룹 23종, 그룹 헤딩 표시):
 
 | 그룹 | 트리거 | 의미 · 규칙 |
 |---|---|---|
@@ -99,6 +102,7 @@
 | | While Overlapping | 겹쳐 있는 동안 (연속형 — Overlap Time 매핑 사용 가능) |
 | | Overlap End | 겹침이 끝나는 순간 |
 | | Drop On Target | 대상 위에 겹친 상태로 드래그를 놓는 순간 (드롭 존) |
+| | Near Target | 상대 외곽선과 Join distance 이내로 가까워진 동안. Liquid Merge용 연속형 |
 | Time | After Delay | 페이지 진입 N초 후 1회 |
 | | Repeat Every… | 페이지 진입 후 N초마다 반복 (상시 구동 연출) |
 | | Idle Start / Idle End | 관람객 입력이 N초 없을 때 / 다시 입력이 들어올 때 |
@@ -139,6 +143,11 @@ Long Press를 선택했을 때 표시한다. 기본 0.5초, 최소 0.1초, 0.1�
 |---|---|
 | Target element | 겹침 상대 요소 지정. **대상이 삭제되면 이 인터랙션은 자동 비활성 + 경고 표시** |
 | Detection | Bounding box(기본, 빠름) / Precise outline(도형 외곽선 정밀 판정) |
+| Join distance / Release distance | Near Target 전용. 연결 시작 거리와 다시 분리할 거리(px). Release는 Join 이상으로 제한해 경계에서 깜빡임 방지 |
+
+현재 프리뷰의 Target element는 같은 페이지의 실제 다른 요소만 나열한다.
+Liquid Merge 선택 시에는 닫힌 도형(사각형·원·삼각형·별)만 대상에 표시하며,
+두 쌍 효과에서는 Detection을 Precise outline으로 고정한다.
 
 성능 규칙: 충돌 검사는 충돌 인터랙션에 참여하는 요소만 수행. 박스 판정 먼저,
 박스가 겹칠 때만 외곽선 비교. (외곽선 교차는 기존 `lib/pathfinder.ts`의
@@ -164,6 +173,7 @@ Target: A).
 | Wheel / Pinch Amount | 휠 누적량·핀치 배율 | Range (예: 500px · 0.5×→2×) |
 | Pointer Velocity | 포인터 속도 | Max velocity: 100%로 해석할 상한 (예: 2000 px/s) — 속도는 무한대라 상한 필수 |
 | Overlap Time | 겹쳐 있는 시간 (충돌 트리거) | Max time: 100%로 해석할 시간 (예: 3s) |
+| Proximity to Target | Near Target에서 두 외곽선 사이의 근접도. Join distance에서 0%, 접촉 시 100% | Join / Release distance는 WHEN에서 설정. Liquid Merge는 Follow input 고정 |
 
 - **Input range** (min% ~ max%): min/max를 서로 바꾸면 방향 반전 (100→0).
 - **Response mode**: **Follow input**(기본)은 매 프레임 입력값을 효과에 연결한다.
@@ -210,6 +220,17 @@ Target: A).
 | Text | Reveal · **Stroke Draw**(획 그리기) · Character / Word Animation |
 | Multi(다중 선택) | Group Animation (TIMING의 Stagger 사용) |
 
+**두 요소 효과(UI 프리뷰)**:
+
+| 효과 | 표시 조건 | 3.DO 설정 |
+|---|---|---|
+| Liquid Merge | 단일 닫힌 도형 + Near Target/While Overlapping | Bridge width · Smoothness. 원본 두 요소는 분리 유지, 관람 화면에서만 부드러운 연결부로 합성 |
+| Bounce Off Target | 단일 도형/이미지 + Overlap Start/Drop On Target | Affected objects: Selected object only / Both objects. 접촉 법선과 상대 속도로 튕길 방향을 계산하는 별도 물리 반응 |
+
+기존 HOW의 `Bounce`는 목표 위치의 끝점 반동이며, 위의 물체 간 충돌
+반동과 다르다. 두 효과 모두 현재는 **선택·숫자 변경 UI만 가능**하다.
+뷰어의 합성 렌더러·충돌 물리와 저장 모델은 후속 구현 대상이다.
+
 ## 4. HOW — 모션
 
 **Behavior** 드롭다운 (선택한 트리거·매핑과 Effect **양쪽에서 가능한
@@ -238,6 +259,8 @@ Effect별 허용 Behavior (A-2의 트리거·매핑 제한과 다시 교집합�
 | Opacity · Color · Blur · Shadow · Show/Hide · Shake · Particle · Pixelate · Dissolve · Trail · Text Reveal · Stroke Draw · Character/Word Animation | Direct만. 이벤트형에서는 TIMING의 Time·Easing으로 시각 전환 가능 |
 | Order · Video Play/Pause/Resume/Seek | HOW 섹션 숨김(내부적으로 즉시 실행). TIMING은 Delay만 표시 |
 | Group Animation | 그룹 안에서 고른 자식 Effect의 허용 Behavior를 따름 |
+| Liquid Merge | Direct · Spring. 근접도를 따라 연결 정도를 연속 갱신 |
+| Bounce Off Target | Collision bounce 단일 Behavior. Bounciness · 선택 요소 Mass · (Both일 때) Target mass · Friction을 HOW에 표시 |
 
 Effect나 매핑 변경으로 현재 Behavior가 불가능해지면 첫 가용 항목으로
 자동 조정한다. 비활성 옵션을 남겨 혼동시키지 않는다.
@@ -266,6 +289,10 @@ Effect나 매핑 변경으로 현재 Behavior가 불가능해지면 첫 가용 �
 표시한다. Time·Easing·Smoothing·HOW는 숨긴다. 연속 트리거에서 즉시 명령을
 쓰면 Fire at threshold로 단발 실행한다.
 
+`Bounce Off Target`도 충돌 시점에서 계산하므로 TIMING에는 Delay만 표시한다.
+Duration/Easing/Keyframes/Playback은 숨기고 HOW의 물리값은 유지한다.
+`Liquid Merge`는 Follow input의 Smoothing/Easing을 사용한다.
+
 ## 6. RESET — 종료 후
 
 **After** 드롭다운. 기본값 "Contextual default"는 다음처럼 트리거별로
@@ -278,12 +305,15 @@ Effect나 매핑 변경으로 현재 Behavior가 불가능해지면 첫 가용 �
 | Pointer Move | 포인터가 Trigger area/뷰포트를 벗어나면 복귀. 터치 이동은 손가락 해제·취소 시 복귀 | Keep final state |
 | Drag | Return when trigger ends(놓으면 복귀) | Keep final state |
 | While Overlapping | 겹침이 끝나면 복귀 | Keep final state |
+| Near Target | Release distance 밖으로 떨어지면 분리 | Keep final state |
 | Overlap Start/End · Drop On Target | Keep final state | Restart when triggered again |
 | Scroll/Swipe | 스크롤 진행도·역방향을 따라 효과도 되돌아감 | Keep final state |
 | Wheel/Pinch | 마지막 매핑값 유지, 페이지 이탈 시 런타임 상태 폐기 | Return when trigger ends |
 | Time(After Delay·Repeat Every·Idle Start/End) · Media(Video Starts/Ends) | Keep final state | Restart when triggered again |
 | Page Enter | 페이지 이탈까지 유지. Page Exit 시 런타임 상태 초기화 | — |
 | Page Exit | 이탈 효과를 실행한 뒤 해당 페이지의 런타임 상태를 폐기. 다음 페이지에 결과를 넘기지 않음 | — |
+
+`Bounce Off Target`의 Contextual default는 충돌 후 도달한 위치를 유지한다.
 
 Fire at threshold는 발생 순간부터 단발 이벤트로 취급하되, 선택한 원래
 트리거의 복귀 의미를 유지한다(예: Drag는 놓으면 복귀, Scroll은 역방향으로
@@ -338,14 +368,15 @@ UI 동작을 구현할 때 이 표가 단일 기준이다. "표시 조건"이 �
 
 | 컨트롤 | 표시 조건 | 눌렀을 때 표시되는 항목 (순서대로) |
 |---|---|---|
-| Trigger | 항상 | 그룹 헤딩 6개(보라 소문자 캡션) 아래로: **TAP & POINTER** Click/Tap · Double Click/Double Tap · Hover · Touch Start · Touch End · Long Press / **CONTINUOUS** Pointer Move/Touch Move · Drag · Wheel/Pinch · Scroll/Swipe(scroll 페이지에서만 항목 노출) / **COLLISION** Overlap Start · While Overlapping · Overlap End · Drop On Target / **TIME** After Delay · Repeat Every… · Idle Start · Idle End / **MEDIA** Video Starts · Video Ends(비디오 요소 있을 때만) / **PAGE** Page Enter · Page Exit |
+| Trigger | 항상 | 그룹 헤딩 6개 아래로: **TAP & POINTER** Click/Tap · Double Click/Double Tap · Hover · Touch Start · Touch End · Long Press / **CONTINUOUS** Pointer Move/Touch Move · Drag · Wheel/Pinch · Scroll/Swipe / **COLLISION** Overlap Start · While Overlapping · Overlap End · Drop On Target · Near Target / **TIME** After Delay · Repeat Every… · Idle Start · Idle End / **MEDIA** Video Starts · Video Ends / **PAGE** Page Enter · Page Exit |
 | Trigger area | Trigger ∈ TAP & POINTER · CONTINUOUS · COLLISION | Selected object(기본) · Entire artwork · Draw detail area… (Page·Time·Media에서는 행 숨김) |
 | Source video | Trigger = Video Starts/Ends | 현재 페이지의 비디오 요소 목록. 비디오가 아직 없으면 선택 불가 안내 |
 | Mobile fallback | Trigger = Hover | Tap(기본) · Touch Start · Long Press |
 | Hold duration | Trigger = Long Press 또는 Hover의 Mobile fallback = Long Press | 길게 누르기 판정 시간. 기본 0.5초, 최소 0.1초, 0.1초 단위 입력 |
 | Target element | Trigger ∈ COLLISION | 현재 페이지의 다른 요소 전체 목록 (요소명 + 타입, 자기 자신 제외) |
 | Detection | Trigger ∈ COLLISION | Bounding box(기본) · Precise outline |
-| Input mapping | MAPPING 섹션 표시 시 | 트리거별 가용 항목만: Drag → Drag Progress(기본) · Drag Angle · Pointer Velocity / Pointer Move → Pointer Position(기본) · Pointer Velocity / Scroll·Swipe → Scroll Progress / Wheel·Pinch → Wheel/Pinch Amount / While Overlapping → Overlap Time |
+| Join/Release distance | Trigger = Near Target | 각각 px 입력. Release는 Join보다 작아질 수 없음 |
+| Input mapping | MAPPING 섹션 표시 시 | Drag → Drag Progress · Drag Angle · Pointer Velocity / Pointer Move → Pointer Position · Pointer Velocity / Scroll·Swipe → Scroll Progress / Wheel·Pinch → Wheel/Pinch Amount / While Overlapping → Overlap Time / Near Target → Proximity to Target |
 | Axis | Input mapping = Drag Progress | Free(기본) · X only · Y only |
 | Position axis | Input mapping = Pointer Position | Both(기본) · X only · Y only; Both는 X/Y 각각 0~100% 정규화, 영역 밖은 clamp |
 | Response mode | MAPPING 섹션 표시 시 | Follow input(기본, 연속 반응) · Fire at threshold(상향 통과 시 단발, 하향 이탈 시 재장전) |
@@ -354,6 +385,7 @@ UI 동작을 구현할 때 이 표가 단일 기준이다. "표시 조건"이 �
 | Path | Effect = Move | Straight(기본) · Circular |
 | Reference point | Effect = Move·Scale·Rotate 등 기하 효과 | Center(기본) · Top Left · Top Right · Bottom Left · Bottom Right |
 | Behavior (Motion) | 즉시 명령 Effect가 아닐 때 | A-2 트리거·매핑 매트릭스와 A-2b Effect 매트릭스의 교집합만 |
+| Collision bounce physics | Effect = Bounce Off Target | Bounciness · Mass · Both 선택 시 Target mass · Friction |
 | Bounce off | Behavior = Gravity | Artboard edges(기본) · Artboard + obstacles…(요소 다중 선택 UI) |
 | Easing | 이벤트형 또는 Follow input, 즉시 명령 제외 | Linear · Ease In · Ease Out · Ease In Out · Custom Curve…(선택 시 커브 편집 팝업 열림) |
 | After (Reset) | 항상 | Contextual default(기본)와 6.RESET 표의 해당 트리거에 의미 있는 대안만. Page Exit는 런타임 상태 폐기 안내 |
@@ -371,6 +403,7 @@ UI 동작을 구현할 때 이 표가 단일 기준이다. "표시 조건"이 �
 | Drag/Scroll/Angle/Wheel Progress (위치성 연속값 — 놓기/끝점 있음) | ✓ | ✓ (입력 추종) | ✓ (놓은 뒤 관성) | ✓ (끝점 반동) | — |
 | Pointer Position · Pointer Velocity (포인터 추종값 — 놓기 개념 없음) | ✓ | ✓ | — | — | — |
 | Overlap Time | ✓ | ✓ | — | — | — |
+| Proximity to Target | ✓ | ✓ | — | — | — |
 
 Fire at threshold에서는 선택한 입력을 단발 이벤트로 바꾸므로 **이벤트형
 트리거 행**을 적용한다. 그다음 아래 Effect 제한과 교집합을 취한다.
@@ -383,6 +416,8 @@ Fire at threshold에서는 선택한 입력을 단발 이벤트로 바꾸므로 
 | Rotate | ✓ | ✓ | ✓ | ✓ | — |
 | Scale | ✓ | ✓ | — | ✓ | — |
 | Skew · Distort | ✓ | ✓ | — | — | — |
+| Liquid Merge | ✓ | ✓ | — | — | — |
+| Bounce Off Target | 별도 Collision bounce 물리 모드만 허용 | — | — | — | — |
 | Opacity · Color · Blur · Shadow · Show/Hide · Shake · Particle · Pixelate · Dissolve · Trail · Text Reveal · Stroke Draw · Character/Word Animation | ✓ | — | — | — | — |
 | Order · Video Play/Pause/Resume/Seek | HOW 숨김 | — | — | — | — |
 | Group Animation | 자식 Effect의 행을 따름 | 자식 Effect의 행을 따름 | 자식 Effect의 행을 따름 | 자식 Effect의 행을 따름 | 자식 Effect의 행을 따름 |
@@ -397,6 +432,7 @@ Fire at threshold에서는 선택한 입력을 단발 이벤트로 바꾸므로 
 | Pointer Move · Drag · Wheel/Pinch · Scroll/Swipe | 트리거에 따라 Trigger area | 표시: Follow input → Smoothing·Easing, Fire at threshold → Time·Delay·Easing |
 | Overlap Start · Overlap End · Drop On Target | Target element · Detection | 숨김 | 이벤트형 |
 | While Overlapping | Target element · Detection | 표시: Follow input → Smoothing·Easing, Fire at threshold → Time·Delay·Easing |
+| Near Target | Target element · Detection · Join/Release distance | 표시: Liquid Merge는 Follow input 고정 → Smoothing·Easing |
 | After Delay · Repeat Every · Idle Start/End | Time (초), Trigger area 숨김 | 숨김 | 이벤트형 |
 | Video Starts/Ends | Source video, Trigger area 숨김 | 숨김 | 이벤트형 |
 | Page Enter/Exit | Trigger area 숨김 | 숨김 | 이벤트형 |
@@ -414,6 +450,8 @@ Delay만 보여주고 HOW를 숨긴다.
 | Rotate | 각도(°) · Axis(Z/X flip/Y flip) · Reference point |
 | Skew / Distort | 값 필드 |
 | Opacity | 목표 % (슬라이더 + 값) |
+| Liquid Merge | Bridge width · Smoothness 슬라이더. 닫힌 도형 1개 선택 + Near Target/While Overlapping에서만 |
+| Bounce Off Target | Affected objects(선택 요소만/두 요소). 도형·이미지 1개 선택 + Overlap Start/Drop On Target에서만 |
 | Color | Fill 색 · Stroke 색 (컬러 필드) |
 | Blur | 강도(px) |
 | Shadow | Elevation · Softness |
@@ -432,3 +470,4 @@ Delay만 보여주고 HOW를 숨긴다.
 | Inertia | Initial velocity · Friction · Deceleration |
 | Bounce | Strength · Bounce count · Damping |
 | Gravity | Bounce off · Strength · Bounciness · Direction |
+| Collision bounce | Bounciness · 선택 요소 Mass · Both일 때 Target mass · Friction |

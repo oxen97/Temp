@@ -12,9 +12,16 @@ function choose(ariaLabel: string, option: string) {
 
 describe("InteractionPanel conditional UI", () => {
   it("shows Long Press duration and hides area for page, time, and media triggers", () => {
-    render(<InteractionPanel selectedName="Rectangle 1" selectedTypes={["rectangle"]} />);
+    render(
+      <InteractionPanel
+        selectedName="Rectangle 1"
+        selectedTypes={["rectangle"]}
+      />,
+    );
     choose("Trigger", "Long Press");
-    expect(screen.getByRole("spinbutton", { name: "Long press duration" })).toBeTruthy();
+    expect(
+      screen.getByRole("spinbutton", { name: "Long press duration" }),
+    ).toBeTruthy();
     expect(screen.getByRole("button", { name: "Trigger area" })).toBeTruthy();
 
     choose("Trigger", "Page Enter");
@@ -23,14 +30,26 @@ describe("InteractionPanel conditional UI", () => {
     expect(screen.queryByRole("button", { name: "Trigger area" })).toBeNull();
     choose("Trigger", "Video Starts");
     expect(screen.queryByRole("button", { name: "Trigger area" })).toBeNull();
-    expect(screen.getByRole("button", { name: "Source video" })).toHaveProperty("disabled", true);
+    expect(screen.getByRole("button", { name: "Source video" })).toHaveProperty(
+      "disabled",
+      true,
+    );
   });
 
   it("changes Pointer Move from follow input to a one-shot threshold event", () => {
-    render(<InteractionPanel selectedName="Rectangle 1" selectedTypes={["rectangle"]} />);
+    render(
+      <InteractionPanel
+        selectedName="Rectangle 1"
+        selectedTypes={["rectangle"]}
+      />,
+    );
     choose("Trigger", "Pointer Move / Touch Move");
-    expect(screen.getByRole("button", { name: "Input mapping" })).toHaveTextContent("Pointer Position");
-    expect(screen.getByRole("button", { name: "Pointer position axis" })).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Input mapping" }),
+    ).toHaveTextContent("Pointer Position");
+    expect(
+      screen.getByRole("button", { name: "Pointer position axis" }),
+    ).toBeTruthy();
     expect(screen.getByRole("spinbutton", { name: "Smoothing" })).toBeTruthy();
     expect(screen.queryByRole("spinbutton", { name: "Duration" })).toBeNull();
 
@@ -41,7 +60,9 @@ describe("InteractionPanel conditional UI", () => {
   });
 
   it("filters effects by element type and hides HOW and duration for immediate commands", () => {
-    render(<InteractionPanel selectedName="Video 1" selectedTypes={["video"]} />);
+    render(
+      <InteractionPanel selectedName="Video 1" selectedTypes={["video"]} />,
+    );
     choose("Effect", "Play");
     expect(screen.queryByText("4. HOW")).toBeNull();
     expect(screen.queryByRole("spinbutton", { name: "Duration" })).toBeNull();
@@ -49,11 +70,94 @@ describe("InteractionPanel conditional UI", () => {
   });
 
   it("coerces reset options when the trigger changes", () => {
-    render(<InteractionPanel selectedName="Rectangle 1" selectedTypes={["rectangle"]} />);
+    render(
+      <InteractionPanel
+        selectedName="Rectangle 1"
+        selectedTypes={["rectangle"]}
+      />,
+    );
     choose("Trigger", "Hover");
     choose("Reset behavior", "Return when pointer leaves");
     choose("Trigger", "Page Exit");
-    expect(screen.getByRole("button", { name: "Reset behavior" })).toHaveTextContent("Contextual default");
+    expect(
+      screen.getByRole("button", { name: "Reset behavior" }),
+    ).toHaveTextContent("Contextual default");
     expect(screen.getByText(/discard this page's runtime state/i)).toBeTruthy();
+  });
+
+  it("configures a liquid merge against another closed shape", () => {
+    render(
+      <InteractionPanel
+        elements={[
+          { id: "a", name: "Rectangle 1", type: "rectangle" },
+          { id: "b", name: "Circle 2", type: "circle" },
+          { id: "c", name: "Image 3", type: "image" },
+        ]}
+        selectedElementIds={["a"]}
+        selectedName="Rectangle 1"
+        selectedTypes={["rectangle"]}
+      />,
+    );
+    choose("Trigger", "Near Target");
+    choose("Effect", "Liquid Merge");
+    expect(
+      screen.getByRole("spinbutton", { name: "Join distance" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("spinbutton", { name: "Release distance" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("slider", { name: "Liquid bridge width" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("slider", { name: "Liquid smoothness" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Collision detection" }),
+    ).toHaveTextContent("Precise outline");
+    choose("Collision target element", "Circle 2 (circle)");
+    expect(
+      screen.getByRole("button", { name: "Collision target element" }),
+    ).toHaveTextContent("Circle 2");
+    fireEvent.click(
+      screen.getByRole("button", { name: "Collision target element" }),
+    );
+    expect(
+      screen.queryByRole("option", { name: "Image 3 (image)" }),
+    ).toBeNull();
+  });
+
+  it("configures physical collision bounce without animation duration", () => {
+    render(
+      <InteractionPanel
+        elements={[
+          { id: "a", name: "Rectangle 1", type: "rectangle" },
+          { id: "b", name: "Circle 2", type: "circle" },
+        ]}
+        selectedElementIds={["a"]}
+        selectedName="Rectangle 1"
+        selectedTypes={["rectangle"]}
+      />,
+    );
+    choose("Trigger", "Overlap Start");
+    choose("Effect", "Bounce Off Target");
+    expect(
+      screen.getByRole("slider", { name: "Collision bounciness" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("spinbutton", { name: "Selected object mass" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("slider", { name: "Collision friction" }),
+    ).toBeTruthy();
+    expect(screen.queryByRole("spinbutton", { name: "Duration" })).toBeNull();
+    choose("Collision affected objects", "Both objects");
+    expect(
+      screen.getByRole("spinbutton", { name: "Target object mass" }),
+    ).toBeTruthy();
+    choose("Trigger", "Click / Tap");
+    expect(screen.getByRole("button", { name: "Effect" })).toHaveTextContent(
+      "Move",
+    );
   });
 });

@@ -6,6 +6,7 @@ export const continuousInteractionTriggers = new Set([
   "wheel-pinch",
   "scroll-swipe",
   "while-overlapping",
+  "near-target",
 ]);
 
 export const collisionInteractionTriggers = new Set([
@@ -13,6 +14,7 @@ export const collisionInteractionTriggers = new Set([
   "while-overlapping",
   "overlap-end",
   "drop-on-target",
+  "near-target",
 ]);
 
 export const timeInteractionTriggers = new Set([
@@ -39,7 +41,18 @@ export const mappingOptions: Record<string, InteractionOption[]> = {
   "wheel-pinch": [{ label: "Wheel / Pinch Amount", value: "wheel-amount" }],
   "scroll-swipe": [{ label: "Scroll Progress", value: "scroll-progress" }],
   "while-overlapping": [{ label: "Overlap Time", value: "overlap-time" }],
+  "near-target": [
+    { label: "Proximity to Target", value: "distance-to-target" },
+  ],
 };
+
+const liquidMergeTriggers = new Set(["near-target", "while-overlapping"]);
+const collisionBounceTriggers = new Set(["overlap-start", "drop-on-target"]);
+const closedShapeTypes = new Set(["rectangle", "circle", "triangle", "star"]);
+
+export function isLiquidMergeShape(type: string): boolean {
+  return closedShapeTypes.has(type);
+}
 
 const commonEffects: InteractionOption[] = [
   { label: "Move", value: "move" },
@@ -87,6 +100,7 @@ export const immediateEffects = new Set([
 
 export function getEffectOptions(
   selectedTypes: readonly string[],
+  trigger = "",
 ): InteractionOption[] {
   if (selectedTypes.length > 1) {
     return [
@@ -95,10 +109,28 @@ export function getEffectOptions(
     ];
   }
   const type = selectedTypes[0];
-  if (type === "image") return [...commonEffects, ...imageEffects];
+  if (type === "image") {
+    return [
+      ...commonEffects,
+      ...imageEffects,
+      ...(collisionBounceTriggers.has(trigger)
+        ? [{ label: "Bounce Off Target", value: "collision-bounce" }]
+        : []),
+    ];
+  }
   if (type === "text") return [...commonEffects, ...textEffects];
   if (type === "video") return [...commonEffects, ...videoEffects];
-  return commonEffects;
+  return [
+    ...commonEffects,
+    ...(type !== undefined &&
+    isLiquidMergeShape(type) &&
+    liquidMergeTriggers.has(trigger)
+      ? [{ label: "Liquid Merge", value: "liquid-merge" }]
+      : []),
+    ...(selectedTypes.length === 1 && collisionBounceTriggers.has(trigger)
+      ? [{ label: "Bounce Off Target", value: "collision-bounce" }]
+      : []),
+  ];
 }
 
 export function getMappingOptions(trigger: string): InteractionOption[] {
@@ -113,6 +145,9 @@ export function getMotionOptions(
 ): InteractionOption[] {
   // Group Animation is a stagger wrapper: motions come from the child effect.
   const resolvedEffect = effect === "group-animation" ? groupSubEffect : effect;
+  if (resolvedEffect === "collision-bounce") {
+    return [{ label: "Collision bounce", value: "collision-bounce" }];
+  }
   if (immediateEffects.has(resolvedEffect)) return [];
   const eventMotions = ["direct", "spring", "inertia", "bounce", "gravity"];
   const progressMotions = ["direct", "spring", "inertia", "bounce"];
@@ -121,7 +156,8 @@ export function getMotionOptions(
     ? eventMotions
     : mapping === "pointer-velocity" ||
         mapping === "pointer-position" ||
-        mapping === "overlap-time"
+        mapping === "overlap-time" ||
+        mapping === "distance-to-target"
       ? velocityMotions
       : progressMotions;
   const effectMotions: Record<string, string[]> = {
@@ -130,6 +166,7 @@ export function getMotionOptions(
     scale: ["direct", "spring", "bounce"],
     skew: ["direct", "spring"],
     distort: ["direct", "spring"],
+    "liquid-merge": ["direct", "spring"],
   };
   const allowed = effectMotions[resolvedEffect] ?? ["direct"];
   const labels: Record<string, string> = {
@@ -152,6 +189,7 @@ export type ResetPolicy = {
 export function getResetPolicy(
   trigger: string,
   hoverFallback: string,
+  effect = "",
 ): ResetPolicy {
   const contextual = { label: "Contextual default", value: "contextual" };
   const keep = { label: "Keep final state", value: "keep" };
@@ -160,6 +198,18 @@ export function getResetPolicy(
   const leave = { label: "Return when pointer leaves", value: "leave" };
   const pageExit = { label: "Return on page exit", value: "page-exit" };
   const reverse = { label: "Follow reverse scroll", value: "reverse" };
+  if (effect === "collision-bounce") {
+    return {
+      description: "Default: keep the position reached after the collision.",
+      options: [contextual, keep],
+    };
+  }
+  if (trigger === "near-target") {
+    return {
+      description: "Default: separate when the elements move apart.",
+      options: [contextual, release, keep],
+    };
+  }
   if (trigger === "hover") {
     return {
       description:

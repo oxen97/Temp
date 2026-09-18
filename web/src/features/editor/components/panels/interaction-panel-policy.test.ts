@@ -17,6 +17,7 @@ describe("interaction mapping policy", () => {
     ["wheel-pinch", ["wheel-amount"]],
     ["scroll-swipe", ["scroll-progress"]],
     ["while-overlapping", ["overlap-time"]],
+    ["near-target", ["distance-to-target"]],
     ["click-tap", []],
     ["overlap-start", []],
     ["drop-on-target", []],
@@ -55,6 +56,33 @@ describe("effect options by selected element", () => {
     expect(values(getEffectOptions(["image"]))).not.toContain(
       "group-animation",
     );
+  });
+
+  it("offers pair effects only with compatible triggers and element types", () => {
+    expect(values(getEffectOptions(["rectangle"], "near-target"))).toContain(
+      "liquid-merge",
+    );
+    expect(values(getEffectOptions(["circle"], "while-overlapping"))).toContain(
+      "liquid-merge",
+    );
+    expect(values(getEffectOptions(["rectangle"], "overlap-start"))).toContain(
+      "collision-bounce",
+    );
+    expect(values(getEffectOptions(["image"], "drop-on-target"))).toContain(
+      "collision-bounce",
+    );
+    expect(values(getEffectOptions(["rectangle"], "click-tap"))).not.toContain(
+      "liquid-merge",
+    );
+    expect(values(getEffectOptions(["line"], "near-target"))).not.toContain(
+      "liquid-merge",
+    );
+    expect(values(getEffectOptions(["text"], "near-target"))).not.toContain(
+      "liquid-merge",
+    );
+    expect(
+      values(getEffectOptions(["rectangle", "circle"], "near-target")),
+    ).not.toContain("liquid-merge");
   });
 });
 
@@ -123,6 +151,17 @@ describe("effect and motion compatibility", () => {
       values(getMotionOptions("page-enter", "", "group-animation")),
     ).toEqual(["direct", "spring", "inertia", "bounce", "gravity"]);
   });
+
+  it("offers only relevant motion controls for pair effects", () => {
+    expect(
+      values(
+        getMotionOptions("near-target", "distance-to-target", "liquid-merge"),
+      ),
+    ).toEqual(["direct", "spring"]);
+    expect(
+      values(getMotionOptions("overlap-start", "", "collision-bounce")),
+    ).toEqual(["collision-bounce"]);
+  });
 });
 
 describe("contextual reset policy", () => {
@@ -161,5 +200,16 @@ describe("contextual reset policy", () => {
     expect(values(getResetPolicy("page-enter", "tap").options)).toEqual([
       "contextual",
     ]);
+  });
+
+  it("separates liquid shapes when apart and keeps the physical result after a bounce", () => {
+    expect(
+      getResetPolicy("near-target", "tap", "liquid-merge").description,
+    ).toContain("separate");
+    expect(
+      values(
+        getResetPolicy("overlap-start", "tap", "collision-bounce").options,
+      ),
+    ).toEqual(["contextual", "keep"]);
   });
 });
