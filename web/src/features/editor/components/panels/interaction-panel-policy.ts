@@ -109,8 +109,11 @@ export function getMotionOptions(
   trigger: string,
   mapping: string,
   effect: string,
+  groupSubEffect = "move",
 ): InteractionOption[] {
-  if (immediateEffects.has(effect)) return [];
+  // Group Animation is a stagger wrapper: motions come from the child effect.
+  const resolvedEffect = effect === "group-animation" ? groupSubEffect : effect;
+  if (immediateEffects.has(resolvedEffect)) return [];
   const eventMotions = ["direct", "spring", "inertia", "bounce", "gravity"];
   const progressMotions = ["direct", "spring", "inertia", "bounce"];
   const velocityMotions = ["direct", "spring"];
@@ -128,7 +131,7 @@ export function getMotionOptions(
     skew: ["direct", "spring"],
     distort: ["direct", "spring"],
   };
-  const allowed = effectMotions[effect] ?? ["direct"];
+  const allowed = effectMotions[resolvedEffect] ?? ["direct"];
   const labels: Record<string, string> = {
     direct: "Direct",
     spring: "Spring",

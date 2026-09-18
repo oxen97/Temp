@@ -323,7 +323,8 @@ export function InteractionPanel({
   const motionChoices = getMotionOptions(
     trigger,
     selectedMapping,
-    activeEffect,
+    selectedEffect,
+    groupEffect,
   );
   const selectedMotion = motionChoices.some((option) => option.value === motion)
     ? motion
@@ -351,7 +352,11 @@ export function InteractionPanel({
       <div className="interaction-header">
         <div className="interaction-selected">
           <span>Selected</span>
-          <strong>{selectedName ?? "No selection"}</strong>
+          <strong>
+            {selectedTypes.length > 1
+              ? `${selectedTypes.length} objects`
+              : (selectedName ?? "No selection")}
+          </strong>
         </div>
         <button className="interaction-add-button" type="button">
           + Add interaction

@@ -368,8 +368,8 @@ UI 동작을 구현할 때 이 표가 단일 기준이다. "표시 조건"이 �
 | 입력 상황 | Direct | Spring | Inertia | Bounce | Gravity |
 |---|---|---|---|---|---|
 | 이벤트형 트리거 (Click·Page Enter·Time·Overlap Start 등) | ✓ | ✓ (목표값까지 애니메이션) | ✓ (Initial velocity로 던지기) | ✓ | ✓ (트리거 순간 낙하 시작) |
-| Drag/Scroll/Angle/Wheel Progress · Pointer Position (위치성 연속값) | ✓ | ✓ (입력 추종) | ✓ (놓은 뒤 관성) | ✓ (끝점 반동) | — |
-| Pointer Velocity (속도값) | ✓ | ✓ | — | — | — |
+| Drag/Scroll/Angle/Wheel Progress (위치성 연속값 — 놓기/끝점 있음) | ✓ | ✓ (입력 추종) | ✓ (놓은 뒤 관성) | ✓ (끝점 반동) | — |
+| Pointer Position · Pointer Velocity (포인터 추종값 — 놓기 개념 없음) | ✓ | ✓ | — | — | — |
 | Overlap Time | ✓ | ✓ | — | — | — |
 
 Fire at threshold에서는 선택한 입력을 단발 이벤트로 바꾸므로 **이벤트형

@@ -108,6 +108,21 @@ describe("effect and motion compatibility", () => {
       expect(getMotionOptions("click-tap", "", effect)).toEqual([]);
     },
   );
+
+  it("resolves Group Animation motions from its child effect", () => {
+    expect(
+      values(getMotionOptions("page-enter", "", "group-animation", "move")),
+    ).toEqual(["direct", "spring", "inertia", "bounce", "gravity"]);
+    expect(
+      values(getMotionOptions("page-enter", "", "group-animation", "opacity")),
+    ).toEqual(["direct"]);
+  });
+
+  it("defaults the Group Animation child effect to Move", () => {
+    expect(
+      values(getMotionOptions("page-enter", "", "group-animation")),
+    ).toEqual(["direct", "spring", "inertia", "bounce", "gravity"]);
+  });
 });
 
 describe("contextual reset policy", () => {
