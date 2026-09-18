@@ -816,6 +816,11 @@ export function InteractionPanel({
             className="interaction-dropdown interaction-effect-dropdown"
             onChange={setEffect}
             options={effectChoices}
+            scrollToEndOnOpen={effectChoices.some(
+              (option) =>
+                option.value === "liquid-merge" ||
+                option.value === "collision-bounce",
+            )}
             value={selectedEffect}
           />
         </Row>

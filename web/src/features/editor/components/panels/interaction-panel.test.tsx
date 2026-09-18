@@ -99,6 +99,11 @@ describe("InteractionPanel conditional UI", () => {
       />,
     );
     choose("Trigger", "Near Target");
+    fireEvent.click(screen.getByRole("button", { name: "Effect" }));
+    expect(
+      screen.getByRole("listbox", { name: "Effect menu" }).lastElementChild,
+    ).toHaveTextContent("Liquid Merge");
+    fireEvent.click(screen.getByRole("button", { name: "Effect" }));
     choose("Effect", "Liquid Merge");
     expect(
       screen.getByRole("spinbutton", { name: "Join distance" }),

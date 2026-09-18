@@ -99,6 +99,7 @@ export function DesignDropdown({
   onChange,
   options,
   overlay = false,
+  scrollToEndOnOpen = false,
   style,
   toggleIcon,
   value,
@@ -114,12 +115,20 @@ export function DesignDropdown({
     value: string;
   }[];
   overlay?: boolean;
+  scrollToEndOnOpen?: boolean;
   style?: CSSProperties;
   toggleIcon?: ReactNode;
   value: string;
 }) {
   const [open, setOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
   const selectedOption = options.find((option) => option.value === value);
+
+  useEffect(() => {
+    if (open && scrollToEndOnOpen && menuRef.current) {
+      menuRef.current.scrollTop = menuRef.current.scrollHeight;
+    }
+  }, [open, scrollToEndOnOpen]);
 
   return (
     <div
@@ -163,6 +172,7 @@ export function DesignDropdown({
         <div
           aria-label={`${ariaLabel} menu`}
           className="design-dropdown-menu"
+          ref={menuRef}
           role="listbox"
         >
           {options.map((option) => (

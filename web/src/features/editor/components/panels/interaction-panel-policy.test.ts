@@ -59,16 +59,16 @@ describe("effect options by selected element", () => {
   });
 
   it("offers pair effects only with compatible triggers and element types", () => {
-    expect(values(getEffectOptions(["rectangle"], "near-target"))[0]).toBe(
+    expect(values(getEffectOptions(["rectangle"], "near-target")).at(-1)).toBe(
       "liquid-merge",
     );
     expect(values(getEffectOptions(["circle"], "while-overlapping"))).toContain(
       "liquid-merge",
     );
-    expect(values(getEffectOptions(["rectangle"], "overlap-start"))[0]).toBe(
-      "collision-bounce",
-    );
-    expect(values(getEffectOptions(["image"], "drop-on-target"))[0]).toBe(
+    expect(
+      values(getEffectOptions(["rectangle"], "overlap-start")).at(-1),
+    ).toBe("collision-bounce");
+    expect(values(getEffectOptions(["image"], "drop-on-target")).at(-1)).toBe(
       "collision-bounce",
     );
     expect(values(getEffectOptions(["rectangle"], "click-tap"))).not.toContain(
