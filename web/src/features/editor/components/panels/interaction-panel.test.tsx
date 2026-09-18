@@ -178,4 +178,72 @@ describe("InteractionPanel conditional UI", () => {
       screen.getByText(/Liquid Merge needs one selected rectangle/i),
     ).toBeTruthy();
   });
+
+  it("configures Gravity stacking without changing the existing bounce-only fields", () => {
+    render(
+      <InteractionPanel
+        elements={[
+          { id: "ice", name: "Ice", type: "circle" },
+          { id: "cup", name: "Cup", type: "rectangle" },
+        ]}
+        selectedElementIds={["ice"]}
+        selectedName="Ice"
+        selectedTypes={["circle"]}
+      />,
+    );
+    choose("Trigger", "Page Enter");
+    choose("Motion behavior", "Gravity");
+    expect(
+      screen.getByRole("button", { name: "Gravity bounce targets" }),
+    ).toBeTruthy();
+    expect(screen.getByRole("spinbutton", { name: "Move X" })).toBeTruthy();
+
+    choose("Gravity contact behavior", "Stack & Settle");
+    expect(
+      screen.getByRole("button", { name: "Stack collision targets" }),
+    ).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: "Gravity bounce targets" }),
+    ).toBeNull();
+    expect(screen.queryByRole("spinbutton", { name: "Move X" })).toBeNull();
+    expect(
+      screen.getByRole("spinbutton", { name: "Stacking mass" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("slider", { name: "Stacking friction" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("slider", { name: "Stacking bounciness" }),
+    ).toBeTruthy();
+    expect(screen.queryByRole("spinbutton", { name: "Duration" })).toBeNull();
+    expect(screen.getByRole("spinbutton", { name: "Delay" })).toBeTruthy();
+    expect(
+      screen.getByText(/keep the settled pile until page exit/i),
+    ).toBeTruthy();
+
+    choose("Stack collision targets", "Physics + obstacles…");
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Static obstacle Cup" }),
+    );
+    expect(
+      screen.getByRole("checkbox", { name: "Static obstacle Cup" }),
+    ).toBeChecked();
+    fireEvent.click(screen.getByRole("button", { name: "Expand advanced" }));
+    expect(
+      screen.getByRole("spinbutton", { name: "Stacking settle speed" }),
+    ).toBeTruthy();
+    expect(
+      screen.queryByRole("spinbutton", { name: "Repeat count" }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Edit keyframes…" }),
+    ).toBeNull();
+
+    choose("Gravity contact behavior", "Bounce only");
+    expect(
+      screen.getByRole("button", { name: "Gravity bounce targets" }),
+    ).toBeTruthy();
+    expect(screen.getByRole("spinbutton", { name: "Move X" })).toBeTruthy();
+    expect(screen.getByRole("spinbutton", { name: "Duration" })).toBeTruthy();
+  });
 });

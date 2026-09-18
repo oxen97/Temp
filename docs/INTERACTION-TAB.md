@@ -12,6 +12,9 @@
 - **2026-09-19 UI 추가**: 근접한 두 도형의 `Liquid Merge`와 충돌 시
   `Bounce Off Target` 설정 필드를 추가했다. 상대 요소 목록은 현재 페이지의
   실제 레이어를 사용하지만, 설정 저장·뷰어 렌더링·충돌 물리는 여전히 미연결이다.
+- **2026-09-19 UI 추가**: `Move → Gravity → Contact behavior: Stack & Settle`을
+  추가했다. 쌓일 물체와 고정 장애물, Mass·Friction·Bounciness·Settle speed를
+  설정하는 조건부 UI이며, 실제 쌓임·안정화 물리와 저장은 아직 미연결이다.
 - 구현 파일:
   - `web/src/features/editor/components/panels/interaction-panel.tsx` (신규)
   - `editor-shell.tsx` — INTERACTION 탭 버튼 활성화 + 렌더 분기.
@@ -244,11 +247,18 @@ Effect 메뉴를 열면 아래쪽으로 자동 스크롤하여 항목이 바로 
 | Spring | 스프링. **이벤트형 = 목표값까지 스프링 애니메이션, 연속형 = 입력을 스프링으로 추종** (같은 이름, 두 동작) | Strength · Mass · Damping (세부는 Advanced 슬라이더) |
 | Inertia | 손을 떼도 관성 유지 | Initial velocity · Friction · Deceleration |
 | Bounce | 끝 지점 반동 | Strength · Bounce count · Damping |
-| Gravity | 낙하 + 충돌 튕김 | **Bounce off**: Artboard edges(기본) + 작가가 지정한 장애물 요소. Strength · Bounciness · Direction |
+| Gravity | 낙하 + 접촉 반응 | **Contact behavior**: Bounce only(기본) / Stack & Settle. Bounce only에서는 기존 Bounce off(Artboard edges / Artboard + obstacles…)를 유지한다. Stack & Settle에서는 Collide with · Mass · Friction · Bounciness · Settle speed와 공통 Strength · Direction을 사용한다. |
 
-Gravity 스코프: 낙하·튕김·드롭 존까지. **쌓임(스태킹)은 제외** — 정지 접촉
-해석에 물리 솔버가 필요해서 이번 스코프가 아님. 지정된 장애물만 충돌
-검사하므로 성능 규칙과 정합.
+스태킹 UI 경로: 도형을 선택하고 WHEN에서 이벤트형 Trigger(예: Page Enter)를
+고른 뒤 `DO: Move → HOW: Gravity → Contact behavior: Stack & Settle`.
+Collide with의 기본값은 `Artboard + physics objects`이고, 다른 Gravity
+오브젝트끼리 쌓인다는 의미다. `Physics + obstacles…`로 바꾸면 현재 페이지의
+다른 요소를 고정 장애물로 다중 선택할 수 있다. 이 모드에서 DO의 작성자 지정
+Move X/Y/Path는 숨긴다. TIMING은 Delay만, RESET의 Contextual default는
+페이지를 나갈 때까지 쌓인 상태 유지(다음 진입 시 초기화)로 안내한다.
+Advanced에서는 반복·왕복·Hold·키프레임을 숨기고 물리 세부의 Settle speed를
+표시한다. **이는 UI 프리뷰 기획이며 실제 정지 접촉 해석·동적 충돌 물리·저장
+기능은 후속 구현 대상이다.**
 
 Effect별 허용 Behavior (A-2의 트리거·매핑 제한과 다시 교집합을 취함):
 
@@ -294,6 +304,8 @@ Effect나 매핑 변경으로 현재 Behavior가 불가능해지면 첫 가용 �
 `Bounce Off Target`도 충돌 시점에서 계산하므로 TIMING에는 Delay만 표시한다.
 Duration/Easing/Keyframes/Playback은 숨기고 HOW의 물리값은 유지한다.
 `Liquid Merge`는 Follow input의 Smoothing/Easing을 사용한다.
+`Gravity → Stack & Settle`은 지속 물리 시뮬레이션이므로 Delay만 표시한다.
+고정 Time/Duration·Easing·Repeat·Yoyo·Hold·Keyframes는 숨긴다.
 
 ## 6. RESET — 종료 후
 
@@ -316,6 +328,9 @@ Duration/Easing/Keyframes/Playback은 숨기고 HOW의 물리값은 유지한다
 | Page Exit | 이탈 효과를 실행한 뒤 해당 페이지의 런타임 상태를 폐기. 다음 페이지에 결과를 넘기지 않음 | — |
 
 `Bounce Off Target`의 Contextual default는 충돌 후 도달한 위치를 유지한다.
+`Gravity → Stack & Settle`의 Contextual default는 페이지 이탈까지 쌓인
+상태를 유지하고, 다음 페이지 진입 시 초기화한다. 대안은 재발동 시 처음부터
+다시 쌓는 Restart when triggered again이다.
 
 Fire at threshold는 발생 순간부터 단발 이벤트로 취급하되, 선택한 원래
 트리거의 복귀 의미를 유지한다(예: Drag는 놓으면 복귀, Scroll은 역방향으로
@@ -341,7 +356,8 @@ Time·Easing, Follow input이면 Smoothing·Easing을 따른다.
 ## 스코프에서 제외한 것 (의도적)
 
 - 입력: 카메라 · 마이크(음성) · 키보드 · ML 인식 — 장기 로드맵 후보(전시 센서 입력)
-- 물리: 스태킹(쌓임), 겹침 깊이 매핑, 요소 간 마찰·밀기
+- 물리 런타임: 스태킹의 정지 접촉 해석·안정화(설정 UI만 있음), 겹침 깊이 매핑,
+  요소 간 실제 마찰·밀기
 - 3D 씬/셰이더 풀 렌더링, 드로잉→오브젝트 생성, 입력 기록·역재생
 
 ## 다음 구현 단계 가이드 (기능 구현 시)
@@ -388,7 +404,9 @@ UI 동작을 구현할 때 이 표가 단일 기준이다. "표시 조건"이 �
 | Reference point | Effect = Move·Scale·Rotate 등 기하 효과 | Center(기본) · Top Left · Top Right · Bottom Left · Bottom Right |
 | Behavior (Motion) | 즉시 명령 Effect가 아닐 때 | A-2 트리거·매핑 매트릭스와 A-2b Effect 매트릭스의 교집합만 |
 | Collision bounce physics | Effect = Bounce Off Target | Bounciness · Mass · Both 선택 시 Target mass · Friction |
-| Bounce off | Behavior = Gravity | Artboard edges(기본) · Artboard + obstacles…(요소 다중 선택 UI) |
+| Contact behavior | Behavior = Gravity | Bounce only(기본) · Stack & Settle |
+| Bounce off | Gravity + Bounce only | Artboard edges(기본) · Artboard + obstacles… |
+| Collide with | Gravity + Stack & Settle | Artboard + physics objects(기본) · Physics + obstacles…(현재 페이지의 다른 요소 다중 선택). Mass · Friction · Bounciness 표시 |
 | Easing | 이벤트형 또는 Follow input, 즉시 명령 제외 | Linear · Ease In · Ease Out · Ease In Out · Custom Curve…(선택 시 커브 편집 팝업 열림) |
 | After (Reset) | 항상 | Contextual default(기본)와 6.RESET 표의 해당 트리거에 의미 있는 대안만. Page Exit는 런타임 상태 폐기 안내 |
 | Same property | Advanced | Replace existing(기본) · Additive · Interrupt |
@@ -471,5 +489,5 @@ Delay만 보여주고 HOW를 숨긴다.
 | Spring | Strength · Mass · Damping (3칸) |
 | Inertia | Initial velocity · Friction · Deceleration |
 | Bounce | Strength · Bounce count · Damping |
-| Gravity | Bounce off · Strength · Bounciness · Direction |
+| Gravity | Contact behavior: Bounce only → Bounce off · Strength · Bounciness · Direction. Stack & Settle → Collide with · Mass · Friction · Bounciness · Strength · Direction · Settle speed(Advanced) |
 | Collision bounce | Bounciness · 선택 요소 Mass · Both일 때 Target mass · Friction |

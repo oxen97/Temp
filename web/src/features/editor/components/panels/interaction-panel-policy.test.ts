@@ -212,4 +212,10 @@ describe("contextual reset policy", () => {
       ),
     ).toEqual(["contextual", "keep"]);
   });
+
+  it("keeps a settled pile until page exit and can restart the simulation", () => {
+    const policy = getResetPolicy("page-enter", "tap", "move", true);
+    expect(policy.description).toContain("settled pile until page exit");
+    expect(values(policy.options)).toEqual(["contextual", "restart"]);
+  });
 });

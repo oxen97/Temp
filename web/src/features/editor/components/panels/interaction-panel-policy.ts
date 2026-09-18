@@ -190,6 +190,7 @@ export function getResetPolicy(
   trigger: string,
   hoverFallback: string,
   effect = "",
+  stacking = false,
 ): ResetPolicy {
   const contextual = { label: "Contextual default", value: "contextual" };
   const keep = { label: "Keep final state", value: "keep" };
@@ -198,6 +199,13 @@ export function getResetPolicy(
   const leave = { label: "Return when pointer leaves", value: "leave" };
   const pageExit = { label: "Return on page exit", value: "page-exit" };
   const reverse = { label: "Follow reverse scroll", value: "reverse" };
+  if (stacking) {
+    return {
+      description:
+        "Default: keep the settled pile until page exit; reset on the next page enter.",
+      options: [contextual, restart],
+    };
+  }
   if (effect === "collision-bounce") {
     return {
       description: "Default: keep the position reached after the collision.",

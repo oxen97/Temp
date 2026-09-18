@@ -291,6 +291,12 @@ export function InteractionPanel({
   const [bounceCount, setBounceCount] = useState(2);
   const [bounceDamping, setBounceDamping] = useState(12);
   const [bounceOff, setBounceOff] = useState("artboard");
+  const [gravityContact, setGravityContact] = useState("bounce");
+  const [stackColliders, setStackColliders] = useState("physics");
+  const [stackObstacleIds, setStackObstacleIds] = useState<string[]>([]);
+  const [stackMass, setStackMass] = useState(1);
+  const [stackFriction, setStackFriction] = useState(25);
+  const [stackSleepSpeed, setStackSleepSpeed] = useState(5);
   const [gravityStrength, setGravityStrength] = useState(100);
   const [bounciness, setBounciness] = useState(50);
   const [gravityDirection, setGravityDirection] = useState("down");
@@ -351,18 +357,23 @@ export function InteractionPanel({
   const selectedMotion = motionChoices.some((option) => option.value === motion)
     ? motion
     : (motionChoices[0]?.value ?? "direct");
-  const resetPolicy = getResetPolicy(trigger, fallback, activeEffect);
+  const isStacking = selectedMotion === "gravity" && gravityContact === "stack";
+  const resetPolicy = getResetPolicy(
+    trigger,
+    fallback,
+    activeEffect,
+    isStacking,
+  );
   const selectedReset = resetPolicy.options.some(
     (option) => option.value === resetMode,
   )
     ? resetMode
     : "contextual";
-  const targetChoices = elements
-    .filter(
-      (element) =>
-        !selectedElementIds.includes(element.id) &&
-        (!isLiquidMerge || isLiquidMergeShape(element.type)),
-    )
+  const obstacleChoices = elements.filter(
+    (element) => !selectedElementIds.includes(element.id),
+  );
+  const targetChoices = obstacleChoices
+    .filter((element) => !isLiquidMerge || isLiquidMergeShape(element.type))
     .map((element) => ({
       label: `${element.name} (${element.type})`,
       value: element.id,
@@ -845,7 +856,7 @@ export function InteractionPanel({
             />
           </Row>
         ) : null}
-        {activeEffect === "move" ? (
+        {activeEffect === "move" && !isStacking ? (
           <>
             <Row label="Move">
               <div className="interaction-field-pair">
@@ -893,6 +904,12 @@ export function InteractionPanel({
               />
             </Row>
           </>
+        ) : null}
+        {isStacking ? (
+          <p className="interaction-note">
+            Gravity controls movement while the objects fall and settle;
+            authored Move X/Y offsets are not used.
+          </p>
         ) : null}
         {activeEffect === "scale" ? (
           <Row label="Scale">
@@ -1087,22 +1104,135 @@ export function InteractionPanel({
           ) : null}
           {selectedMotion === "gravity" ? (
             <>
-              <Row label="Bounce off">
+              <Row label="Contact behavior">
                 <DesignDropdown
-                  ariaLabel="Gravity bounce targets"
+                  ariaLabel="Gravity contact behavior"
                   className="interaction-dropdown"
                   noScroll
-                  onChange={setBounceOff}
+                  onChange={setGravityContact}
                   options={[
-                    { label: "Artboard edges", value: "artboard" },
-                    { label: "Artboard + obstacles…", value: "obstacles" },
+                    { label: "Bounce only", value: "bounce" },
+                    { label: "Stack & Settle", value: "stack" },
                   ]}
-                  value={bounceOff}
+                  value={gravityContact}
                 />
               </Row>
-              <p className="interaction-note">
-                Falling, bouncing and drop zones — resting piles are not
-              </p>
+              {isStacking ? (
+                <>
+                  <Row label="Collide with">
+                    <DesignDropdown
+                      ariaLabel="Stack collision targets"
+                      className="interaction-dropdown"
+                      noScroll
+                      onChange={setStackColliders}
+                      options={[
+                        {
+                          label: "Artboard + physics objects",
+                          value: "physics",
+                        },
+                        { label: "Physics + obstacles…", value: "obstacles" },
+                      ]}
+                      value={stackColliders}
+                    />
+                  </Row>
+                  {stackColliders === "obstacles" ? (
+                    <div
+                      aria-label="Static obstacles"
+                      className="interaction-obstacle-list"
+                      role="group"
+                    >
+                      {obstacleChoices.length ? (
+                        obstacleChoices.map((element) => (
+                          <label key={element.id}>
+                            <input
+                              aria-label={`Static obstacle ${element.name}`}
+                              checked={stackObstacleIds.includes(element.id)}
+                              onChange={() =>
+                                setStackObstacleIds((current) =>
+                                  current.includes(element.id)
+                                    ? current.filter((id) => id !== element.id)
+                                    : [...current, element.id],
+                                )
+                              }
+                              type="checkbox"
+                            />
+                            <span>{element.name}</span>
+                          </label>
+                        ))
+                      ) : (
+                        <span>No other objects on this page</span>
+                      )}
+                    </div>
+                  ) : null}
+                  <Row label="Mass">
+                    <DesignNumberField
+                      ariaLabel="Stacking mass"
+                      label=""
+                      min={0.1}
+                      onChange={(value) => setStackMass(Math.max(0.1, value))}
+                      precision={1}
+                      unit=""
+                      value={stackMass}
+                    />
+                  </Row>
+                  <Row label="Friction">
+                    <DesignRange
+                      ariaLabel="Stacking friction"
+                      className="sound-slider"
+                      max={100}
+                      min={0}
+                      onChange={setStackFriction}
+                      value={stackFriction}
+                    />
+                    <span className="interaction-value-caption">
+                      {stackFriction} %
+                    </span>
+                  </Row>
+                  <Row label="Bounciness">
+                    <DesignRange
+                      ariaLabel="Stacking bounciness"
+                      className="sound-slider"
+                      max={100}
+                      min={0}
+                      onChange={setBounciness}
+                      value={bounciness}
+                    />
+                    <span className="interaction-value-caption">
+                      {bounciness} %
+                    </span>
+                  </Row>
+                  <p className="interaction-note">
+                    Other Gravity objects can pile up. Selected obstacles stay
+                    fixed; artboard edges are always included.
+                  </p>
+                  <p className="interaction-note">
+                    Settings preview only — stacking playback is not connected
+                    yet.
+                  </p>
+                </>
+              ) : (
+                <>
+                  <Row label="Bounce off">
+                    <DesignDropdown
+                      ariaLabel="Gravity bounce targets"
+                      className="interaction-dropdown"
+                      noScroll
+                      onChange={setBounceOff}
+                      options={[
+                        { label: "Artboard edges", value: "artboard" },
+                        {
+                          label: "Artboard + obstacles…",
+                          value: "obstacles",
+                        },
+                      ]}
+                      value={bounceOff}
+                    />
+                  </Row>
+                  <p className="interaction-note">
+                    Falling and bouncing without a persistent resting pile.
+                  </p>
+                </>
+              )}
             </>
           ) : null}
         </InteractionSection>
@@ -1110,17 +1240,19 @@ export function InteractionPanel({
 
       <InteractionSection
         cap={
-          isCollisionBounce
-            ? "Impact action"
-            : isImmediate
-              ? "Immediate action"
-              : eventTiming
-                ? "Event"
-                : "Continuous input"
+          isStacking
+            ? "Physics simulation"
+            : isCollisionBounce
+              ? "Impact action"
+              : isImmediate
+                ? "Immediate action"
+                : eventTiming
+                  ? "Event"
+                  : "Continuous input"
         }
         title="5. TIMING"
       >
-        {isImmediate || isCollisionBounce ? (
+        {isImmediate || isCollisionBounce || isStacking ? (
           <>
             <Row label="Delay">
               <SoundStepperField
@@ -1131,9 +1263,11 @@ export function InteractionPanel({
               />
             </Row>
             <p className="interaction-note">
-              {isCollisionBounce
-                ? "Impact timing comes from the collision; no fixed duration or easing."
-                : "Instant actions do not use motion or animation duration."}
+              {isStacking
+                ? "Stacking runs until the page exits; no fixed duration or easing."
+                : isCollisionBounce
+                  ? "Impact timing comes from the collision; no fixed duration or easing."
+                  : "Instant actions do not use motion or animation duration."}
             </p>
           </>
         ) : !eventTiming ? (
@@ -1310,7 +1444,7 @@ export function InteractionPanel({
               ))}
             </div>
 
-            {!isImmediate && !isPairEffect ? (
+            {!isImmediate && !isPairEffect && !isStacking ? (
               <>
                 <p className="interaction-subheading">Playback</p>
                 <Row label="Repeat">
@@ -1498,17 +1632,32 @@ export function InteractionPanel({
                         value={gravityStrength}
                       />
                     </Row>
-                    <Row label="Bounciness">
-                      <DesignRange
-                        ariaLabel="Gravity bounciness detail"
-                        className="sound-slider"
-                        max={100}
-                        min={0}
-                        onBegin={noop}
-                        onChange={setBounciness}
-                        value={bounciness}
-                      />
-                    </Row>
+                    {isStacking ? (
+                      <Row label="Settle speed">
+                        <DesignNumberField
+                          ariaLabel="Stacking settle speed"
+                          label=""
+                          min={0}
+                          onChange={(value) =>
+                            setStackSleepSpeed(Math.max(0, value))
+                          }
+                          unit="px/s"
+                          value={stackSleepSpeed}
+                        />
+                      </Row>
+                    ) : (
+                      <Row label="Bounciness">
+                        <DesignRange
+                          ariaLabel="Gravity bounciness detail"
+                          className="sound-slider"
+                          max={100}
+                          min={0}
+                          onBegin={noop}
+                          onChange={setBounciness}
+                          value={bounciness}
+                        />
+                      </Row>
+                    )}
                     <Row label="Direction">
                       <DesignDropdown
                         ariaLabel="Gravity direction"
@@ -1529,7 +1678,7 @@ export function InteractionPanel({
               </>
             ) : null}
 
-            {!isImmediate && !isPairEffect && eventTiming ? (
+            {!isImmediate && !isPairEffect && !isStacking && eventTiming ? (
               <>
                 <p className="interaction-subheading">Keyframes</p>
                 <div className="interaction-keyframes">
