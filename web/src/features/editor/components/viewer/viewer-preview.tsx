@@ -11,6 +11,7 @@ import {
 } from "react";
 
 import { ArtboardBackground } from "@/features/editor/components/canvas/artboard-background";
+import { Artboard3DScene } from "@/features/editor/components/canvas/artboard-3d-scene";
 import { ShapeGraphic } from "@/features/editor/components/canvas/shape-graphic";
 import { ViewerBackgroundMusic } from "@/features/editor/components/viewer/viewer-background-music";
 import { textStyleForElement } from "@/features/editor/lib/element-style";
@@ -35,6 +36,10 @@ import {
   type SoundAdvancedSettings,
   type SoundMixerSettings,
 } from "@/features/editor/store/editor-store";
+import type {
+  Object3DElement,
+  Scene3DSettings,
+} from "@/features/editor/three/types";
 
 export function viewerPreviewLayout(
   artboard: ArtboardSettings,
@@ -98,14 +103,20 @@ export function ViewerPreview({
   backgroundMusic,
   elements,
   mixer,
+  objects3d,
   onClose,
+  projectId,
+  scene3d,
 }: {
   advancedSound: SoundAdvancedSettings;
   artboard: ArtboardSettings;
   backgroundMusic: BackgroundMusicSettings;
   elements: CanvasElement[];
   mixer: SoundMixerSettings;
+  objects3d: Object3DElement[];
   onClose: () => void;
+  projectId: string;
+  scene3d?: Partial<Scene3DSettings>;
 }) {
   const [viewport, setViewport] = useState(() => ({
     height:
@@ -614,6 +625,13 @@ export function ViewerPreview({
               }}
             >
               <ArtboardBackground artboard={artboard} />
+              <Artboard3DScene
+                artboardHeight={artboard.height}
+                artboardWidth={artboard.width}
+                objects={objects3d}
+                projectId={projectId}
+                scene={scene3d}
+              />
               {elements
                 .filter((element) => element.visible)
                 .map((element) => (

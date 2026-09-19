@@ -1,21 +1,22 @@
 import { create } from "zustand";
 
+import type { PathPoint, VectorPath } from "@/features/editor/lib/vector-types";
+import {
+  cloneObject3D,
+  createDefaultScene3DSettings,
+  type Object3DElement,
+  resolveScene3DSettings,
+  type Scene3DSettings,
+} from "@/features/editor/three/types";
+
+export type { PathPoint, VectorPath } from "@/features/editor/lib/vector-types";
+
 export type SaveStatus = "saved" | "saving" | "offline";
 export type EditorTool =
   "selection" | "hand" | "rectangle" | "text" | "zoom" | "settings";
 export type ShapeType =
   "rectangle" | "circle" | "triangle" | "star" | "line" | "pen";
 export type CanvasElementType = ShapeType | "text" | "image";
-export type PathPoint = {
-  x: number;
-  y: number;
-  handleIn?: { x: number; y: number };
-  handleOut?: { x: number; y: number };
-};
-export type VectorPath = {
-  points: PathPoint[];
-  closed?: boolean;
-};
 export type ImageCrop = {
   baseHeight: number;
   baseWidth: number;
@@ -215,6 +216,8 @@ export type EditorPage = {
   id: string;
   name: string;
   elements: CanvasElement[];
+  objects3d?: Object3DElement[];
+  scene3d?: Scene3DSettings;
   backgroundMusic?: BackgroundMusicSettings;
   advancedSound?: SoundAdvancedSettings;
   soundMixer?: SoundMixerSettings;
@@ -257,6 +260,7 @@ type EditorSnapshot = {
   pages: EditorPage[];
   activePageId: string;
   selectedElementIds: string[];
+  selectedObject3DIds: string[];
   artboard: ArtboardSettings;
 };
 
@@ -267,6 +271,7 @@ type EditorState = {
   pages: EditorPage[];
   activePageId: string;
   selectedElementIds: string[];
+  selectedObject3DIds: string[];
   zoom: number;
   artboard: ArtboardSettings;
   clipboard: CanvasElement[];
@@ -277,6 +282,7 @@ type EditorState = {
   setSelectedShape: (shape: ShapeType) => void;
   setActivePageId: (pageId: string) => void;
   setSelectedElementIds: (ids: string[]) => void;
+  setSelectedObject3DIds: (ids: string[]) => void;
   setZoom: (zoom: number) => void;
   updateArtboard: (updates: Partial<ArtboardSettings>) => void;
   updateBackgroundMusic: (updates: Partial<BackgroundMusicSettings>) => void;
@@ -291,8 +297,11 @@ type EditorState = {
   removePage: () => void;
   renamePage: (pageId: string, name: string) => void;
   addElement: (element: CanvasElement) => void;
+  addObject3D: (object: Object3DElement) => void;
   checkpoint: () => void;
   updateElement: (elementId: string, updates: Partial<CanvasElement>) => void;
+  updateObject3D: (objectId: string, updates: Partial<Object3DElement>) => void;
+  updateScene3D: (updates: Partial<Scene3DSettings>) => void;
   replaceElements: (
     elementIds: string[],
     replacements: CanvasElement[],
@@ -342,7 +351,13 @@ const initialArtboard: ArtboardSettings = {
 };
 
 const initialPages: EditorPage[] = [
-  { id: "page-1", name: "Intro", elements: [] },
+  {
+    id: "page-1",
+    name: "Intro",
+    elements: [],
+    objects3d: [],
+    scene3d: createDefaultScene3DSettings(),
+  },
 ];
 
 function createId(prefix: string) {
@@ -352,6 +367,8 @@ function createId(prefix: string) {
 function clonePages(pages: EditorPage[]) {
   return pages.map((page) => ({
     ...page,
+    objects3d: page.objects3d?.map(cloneObject3D),
+    scene3d: page.scene3d ? resolveScene3DSettings(page.scene3d) : undefined,
     backgroundMusic: page.backgroundMusic
       ? {
           ...page.backgroundMusic,
@@ -448,6 +465,7 @@ function createSnapshot(state: EditorState): EditorSnapshot {
     pages: clonePages(state.pages),
     activePageId: state.activePageId,
     selectedElementIds: [...state.selectedElementIds],
+    selectedObject3DIds: [...state.selectedObject3DIds],
     artboard: cloneArtboard(state.artboard),
   };
 }
@@ -467,6 +485,26 @@ function updateActivePage(
   );
 }
 
+function updateActivePageObjects3D(
+  state: EditorState,
+  updater: (objects: Object3DElement[]) => Object3DElement[],
+) {
+  return state.pages.map((page) =>
+    page.id === state.activePageId
+      ? { ...page, objects3d: updater(page.objects3d ?? []) }
+      : page,
+  );
+}
+
+function applyObject3DUpdates(
+  object: Object3DElement,
+  updates: Partial<Object3DElement>,
+) {
+  // Clone only the changed branches. Keeping source/dimensions identities stable
+  // prevents expensive geometry and GLB rebuilds during position/rotation drags.
+  return { ...object, ...structuredClone(updates) } as Object3DElement;
+}
+
 function responsiveOriginFactors(origin = 4) {
   const index = Math.min(8, Math.max(0, Math.round(origin)));
   return {
@@ -482,6 +520,7 @@ export const useEditorStore = create<EditorState>((set) => ({
   pages: initialPages,
   activePageId: "page-1",
   selectedElementIds: [],
+  selectedObject3DIds: [],
   zoom: 100,
   artboard: initialArtboard,
   clipboard: [],
@@ -491,8 +530,11 @@ export const useEditorStore = create<EditorState>((set) => ({
   setActiveTool: (activeTool) => set({ activeTool }),
   setSelectedShape: (selectedShape) => set({ selectedShape }),
   setActivePageId: (activePageId) =>
-    set({ activePageId, selectedElementIds: [] }),
-  setSelectedElementIds: (selectedElementIds) => set({ selectedElementIds }),
+    set({ activePageId, selectedElementIds: [], selectedObject3DIds: [] }),
+  setSelectedElementIds: (selectedElementIds) =>
+    set({ selectedElementIds, selectedObject3DIds: [] }),
+  setSelectedObject3DIds: (selectedObject3DIds) =>
+    set({ selectedElementIds: [], selectedObject3DIds }),
   setZoom: (zoom) => set({ zoom: Math.min(500, Math.max(5, zoom)) }),
   updateArtboard: (updates) =>
     set((state) => {
@@ -511,6 +553,17 @@ export const useEditorStore = create<EditorState>((set) => ({
                   y: element.y + heightDelta * origin.y,
                 };
               }),
+              objects3d: page.objects3d?.map((object) => ({
+                ...object,
+                transform: {
+                  ...object.transform,
+                  position: {
+                    ...object.transform.position,
+                    x: object.transform.position.x + widthDelta / 2,
+                    y: object.transform.position.y + heightDelta / 2,
+                  },
+                },
+              })),
             }))
           : state.pages;
       return {
@@ -599,11 +652,14 @@ export const useEditorStore = create<EditorState>((set) => ({
         id: createId("page"),
         name: `Page ${pageNumber}`,
         elements: [],
+        objects3d: [],
+        scene3d: createDefaultScene3DSettings(),
       };
       return {
         pages: [...state.pages, page],
         activePageId: page.id,
         selectedElementIds: [],
+        selectedObject3DIds: [],
         past: pushHistory(state),
         future: [],
       };
@@ -622,6 +678,7 @@ export const useEditorStore = create<EditorState>((set) => ({
         pages,
         activePageId: fallback.id,
         selectedElementIds: [],
+        selectedObject3DIds: [],
         past: pushHistory(state),
         future: [],
       };
@@ -644,6 +701,27 @@ export const useEditorStore = create<EditorState>((set) => ({
     set((state) => ({
       pages: updateActivePage(state, (elements) => [...elements, element]),
       selectedElementIds: [element.id],
+      selectedObject3DIds: [],
+      activeTool: "selection",
+      past: pushHistory(state),
+      future: [],
+    })),
+  addObject3D: (object) =>
+    set((state) => ({
+      pages: state.pages.map((page) =>
+        page.id === state.activePageId
+          ? {
+              ...page,
+              objects3d: [...(page.objects3d ?? []), cloneObject3D(object)],
+              scene3d: resolveScene3DSettings({
+                ...page.scene3d,
+                enabled: true,
+              }),
+            }
+          : page,
+      ),
+      selectedElementIds: [],
+      selectedObject3DIds: [object.id],
       activeTool: "selection",
       past: pushHistory(state),
       future: [],
@@ -656,6 +734,32 @@ export const useEditorStore = create<EditorState>((set) => ({
           element.id === elementId ? { ...element, ...updates } : element,
         ),
       ),
+    })),
+  updateObject3D: (objectId, updates) =>
+    set((state) => ({
+      pages: updateActivePageObjects3D(state, (objects) =>
+        objects.map((object) =>
+          object.id === objectId
+            ? applyObject3DUpdates(object, updates)
+            : object,
+        ),
+      ),
+    })),
+  updateScene3D: (updates) =>
+    set((state) => ({
+      pages: state.pages.map((page) =>
+        page.id === state.activePageId
+          ? {
+              ...page,
+              scene3d: resolveScene3DSettings({
+                ...page.scene3d,
+                ...updates,
+              }),
+            }
+          : page,
+      ),
+      past: pushHistory(state),
+      future: [],
     })),
   replaceElements: (elementIds, replacements) =>
     set((state) => ({
@@ -670,6 +774,7 @@ export const useEditorStore = create<EditorState>((set) => ({
         return remaining;
       }),
       selectedElementIds: replacements.map((replacement) => replacement.id),
+      selectedObject3DIds: [],
     })),
   renameElement: (elementId, name) =>
     set((state) => {
@@ -700,15 +805,32 @@ export const useEditorStore = create<EditorState>((set) => ({
     })),
   removeSelected: () =>
     set((state) => {
-      if (!state.selectedElementIds.length) return state;
+      if (
+        !state.selectedElementIds.length &&
+        !state.selectedObject3DIds.length
+      ) {
+        return state;
+      }
       return {
-        pages: updateActivePage(state, (elements) =>
-          elements.filter(
-            (element) =>
-              !state.selectedElementIds.includes(element.id) || element.locked,
-          ),
+        pages: state.pages.map((page) =>
+          page.id === state.activePageId
+            ? {
+                ...page,
+                elements: page.elements.filter(
+                  (element) =>
+                    !state.selectedElementIds.includes(element.id) ||
+                    element.locked,
+                ),
+                objects3d: (page.objects3d ?? []).filter(
+                  (object) =>
+                    !state.selectedObject3DIds.includes(object.id) ||
+                    object.locked,
+                ),
+              }
+            : page,
         ),
         selectedElementIds: [],
+        selectedObject3DIds: [],
         past: pushHistory(state),
         future: [],
       };
@@ -797,6 +919,7 @@ export const useEditorStore = create<EditorState>((set) => ({
       return {
         pages: updateActivePage(state, (elements) => [...elements, ...pasted]),
         selectedElementIds: pasted.map((element) => element.id),
+        selectedObject3DIds: [],
         past: pushHistory(state),
         future: [],
       };

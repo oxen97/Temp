@@ -10,6 +10,54 @@ function choose(ariaLabel: string, option: string) {
   fireEvent.click(screen.getByRole("option", { name: option }));
 }
 
+function openDropdown(ariaLabel: string) {
+  fireEvent.click(screen.getByRole("button", { name: ariaLabel }));
+}
+
+function renderPrimitive3DPanel() {
+  return render(
+    <InteractionPanel
+      elements={[
+        {
+          id: "cube",
+          name: "Cube 1",
+          sourceKind: "primitive",
+          type: "object3d",
+        },
+      ]}
+      selectedElementIds={["cube"]}
+      selectedName="Cube 1"
+      selectedTypes={["object3d"]}
+    />,
+  );
+}
+
+function renderModel3DPanel() {
+  return render(
+    <InteractionPanel
+      elements={[
+        {
+          animationNames: ["Idle", "Walk"],
+          assetId: "robot-glb",
+          boneNames: ["Spine"],
+          id: "robot",
+          jointNames: ["Shoulder"],
+          materialNames: ["Body", "Eyes"],
+          meshFaceGroupNames: ["BodyMesh · Face Group 1"],
+          meshNames: ["BodyMesh"],
+          morphTargetNames: ["Smile", "Blink"],
+          name: "Robot",
+          sourceKind: "asset",
+          type: "object3d",
+        },
+      ]}
+      selectedElementIds={["robot"]}
+      selectedName="Robot"
+      selectedTypes={["object3d"]}
+    />,
+  );
+}
+
 describe("InteractionPanel conditional UI", () => {
   it("shows Long Press duration and hides area for page, time, and media triggers", () => {
     render(
@@ -245,5 +293,235 @@ describe("InteractionPanel conditional UI", () => {
     ).toBeTruthy();
     expect(screen.getByRole("spinbutton", { name: "Move X" })).toBeTruthy();
     expect(screen.getByRole("spinbutton", { name: "Duration" })).toBeTruthy();
+  });
+
+  it("keeps 3D-only triggers, effects, and controls out of a 2D selection", () => {
+    render(
+      <InteractionPanel
+        elements={[{ id: "rectangle", name: "Rectangle 1", type: "rectangle" }]}
+        selectedElementIds={["rectangle"]}
+        selectedName="Rectangle 1"
+        selectedTypes={["rectangle"]}
+      />,
+    );
+
+    openDropdown("Trigger");
+    expect(
+      screen.queryByRole("option", { name: "Collision Enter" }),
+    ).toBeNull();
+    openDropdown("Trigger");
+
+    openDropdown("Effect");
+    expect(
+      screen.queryByRole("option", { name: "Play Model Animation" }),
+    ).toBeNull();
+    openDropdown("Effect");
+
+    expect(screen.queryByRole("spinbutton", { name: "Move Z" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Coordinate space" }),
+    ).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Expand advanced" }));
+    expect(
+      screen.queryByRole("button", { name: "Rigid body type" }),
+    ).toBeNull();
+    expect(screen.queryByRole("button", { name: "Collider shape" })).toBeNull();
+  });
+
+  it("shows XYZ transform and complete rigid-body controls for a 3D primitive", () => {
+    renderPrimitive3DPanel();
+
+    openDropdown("Trigger");
+    expect(
+      screen.getByRole("option", { name: "Collision Enter" }),
+    ).toBeTruthy();
+    openDropdown("Trigger");
+
+    expect(screen.getByRole("spinbutton", { name: "Move Z" })).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Coordinate space" }),
+    ).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Expand advanced" }));
+    expect(
+      screen.getByRole("button", { name: "Rigid body type" }),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Collider shape" })).toBeTruthy();
+    expect(
+      screen.getByRole("checkbox", { name: "Freeze position X" }),
+    ).toBeTruthy();
+  });
+
+  it("uses GLB metadata to expose animation, material, and morph interactions", () => {
+    renderModel3DPanel();
+
+    openDropdown("Trigger");
+    expect(
+      screen.getByRole("option", { name: "Model Animation Ends" }),
+    ).toBeTruthy();
+    openDropdown("Trigger");
+
+    openDropdown("Effect");
+    expect(
+      screen.getByRole("option", { name: "Play Model Animation" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("option", { name: "Change Material" }),
+    ).toBeTruthy();
+    expect(screen.getByRole("option", { name: "Morph Target" })).toBeTruthy();
+    expect(screen.getByRole("option", { name: "Bone Transform" })).toBeTruthy();
+    expect(screen.getByRole("option", { name: "Joint Rotation" })).toBeTruthy();
+    expect(screen.getByRole("option", { name: "Mesh Transform" })).toBeTruthy();
+    expect(
+      screen.getByRole("option", { name: "Mesh Face Material" }),
+    ).toBeTruthy();
+    openDropdown("Effect");
+
+    choose("Effect", "Play Model Animation");
+    expect(
+      screen.getByRole("button", { name: "Animation clip" }),
+    ).toHaveTextContent("Idle");
+
+    choose("Effect", "Change Material");
+    expect(
+      screen.getByRole("button", { name: "Material slot" }),
+    ).toHaveTextContent("Body");
+
+    choose("Effect", "Morph Target");
+    expect(
+      screen.getByRole("button", { name: "Morph target" }),
+    ).toHaveTextContent("Smile");
+
+    choose("Effect", "Bone Transform");
+    expect(
+      screen.getByRole("button", { name: "Model bone" }),
+    ).toHaveTextContent("Spine");
+
+    choose("Effect", "Joint Rotation");
+    expect(
+      screen.getByRole("button", { name: "Model joint" }),
+    ).toHaveTextContent("Shoulder");
+
+    choose("Effect", "Mesh Face Material");
+    expect(
+      screen.getByRole("button", { name: "Mesh face group" }),
+    ).toHaveTextContent("BodyMesh · Face Group 1");
+    choose("Mesh face selection mode", "Face index");
+    expect(
+      screen.getByRole("spinbutton", { name: "Mesh face index" }),
+    ).toBeTruthy();
+  });
+
+  it("plans a physical 2D-to-3D collision with a spatial proxy", () => {
+    render(
+      <InteractionPanel
+        elements={[
+          { id: "poster", name: "Poster", type: "image" },
+          {
+            id: "cube",
+            name: "Cube",
+            sourceKind: "primitive",
+            type: "object3d",
+          },
+        ]}
+        selectedElementIds={["poster"]}
+        selectedName="Poster"
+        selectedTypes={["image"]}
+      />,
+    );
+
+    choose("Trigger", "Collision Enter");
+    expect(
+      screen.getByRole("button", { name: "Collision target element" }),
+    ).toHaveTextContent("Cube");
+    expect(
+      screen.getByRole("button", { name: "Hybrid collider mode" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("spinbutton", { name: "2D collision depth" }),
+    ).toBeTruthy();
+
+    openDropdown("Effect");
+    expect(
+      screen.getByRole("option", { name: "Bounce Off Target" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("option", { name: "Stack On Target" }),
+    ).toBeTruthy();
+    openDropdown("Effect");
+
+    fireEvent.click(screen.getByRole("button", { name: "Expand advanced" }));
+    expect(
+      screen.getByText("2D / 3D Collision Body", { exact: true }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Rigid body type" }),
+    ).toBeTruthy();
+  });
+
+  it("exposes scene-logic lifecycle outputs and opens the full keyframe editor", () => {
+    renderPrimitive3DPanel();
+    fireEvent.click(screen.getByRole("button", { name: "Expand advanced" }));
+
+    expect(
+      screen.getByRole("checkbox", { name: "Emit On Trigger" }),
+    ).toBeChecked();
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Emit Custom Event" }),
+    );
+    expect(
+      screen.getByRole("textbox", { name: "Custom event output name" }),
+    ).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit keyframes…" }));
+    expect(
+      screen.getByRole("dialog", { name: "Interaction Keyframes" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Select Cube 1 Position Z track" }),
+    ).toBeTruthy();
+  });
+
+  it("shows camera, lighting, post-processing, and shader controls", () => {
+    renderPrimitive3DPanel();
+
+    choose("Effect", "Camera Rotate");
+    expect(
+      screen.getByRole("spinbutton", { name: "Camera rotate Z" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Camera projection" }),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Expand advanced" }));
+    fireEvent.click(screen.getByRole("button", { name: "Edit keyframes…" }));
+    expect(
+      screen.getByRole("button", {
+        name: "Select Artwork Camera Camera Rotation Z track",
+      }),
+    ).toBeTruthy();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Close keyframe editor" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Collapse advanced" }));
+
+    choose("Effect", "Animate Lighting");
+    expect(screen.getByRole("button", { name: "Animated light" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Expand advanced" }));
+    expect(
+      screen.getByRole("button", { name: "Visual effect quality" }),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Collapse advanced" }));
+
+    choose("Effect", "Post Processing");
+    expect(
+      screen.getByRole("button", { name: "Post processing effect" }),
+    ).toBeTruthy();
+
+    choose("Effect", "Shader Parameter");
+    choose("Shader uniform type", "Vector 4");
+    expect(
+      screen.getByRole("spinbutton", { name: "Shader value W" }),
+    ).toBeTruthy();
   });
 });

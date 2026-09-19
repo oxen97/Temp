@@ -1,5 +1,42 @@
 export type InteractionOption = { label: string; value: string };
 
+export type Interaction3DContext = {
+  /** Explicitly marks this interaction as targeting one or more 3D objects. */
+  is3D?: boolean;
+  /** The selected 3D object's source, when every selected object shares it. */
+  sourceKind?: "asset" | "primitive" | "vector";
+  /** Imported clip names. An empty array means that the asset has no clips. */
+  animationNames?: readonly string[];
+  /** Allows callers to expose authored morph-target animation controls. */
+  hasMorphTargets?: boolean;
+  /** Allows callers to expose source-material slot controls. */
+  hasMaterialSlots?: boolean;
+  /** A selected 2D object can collide with a 3D proxy on this page. */
+  isHybridCollision?: boolean;
+  hasBones?: boolean;
+  hasJoints?: boolean;
+  hasMeshes?: boolean;
+  hasMeshFaceGroups?: boolean;
+};
+
+export const threeDCollisionTriggerOptions: InteractionOption[] = [
+  { label: "Collision Enter", value: "collision-enter" },
+  { label: "While Colliding", value: "while-colliding" },
+  { label: "Collision Exit", value: "collision-exit" },
+];
+
+export const model3DTriggerOptions: InteractionOption[] = [
+  { label: "Model Animation Starts", value: "model-animation-start" },
+  { label: "While Model Animation Plays", value: "while-model-animation" },
+  { label: "Model Animation Ends", value: "model-animation-end" },
+  { label: "Model Animation Loops", value: "model-animation-loop" },
+  { label: "Model Animation Marker", value: "model-animation-marker" },
+];
+
+export const modelInteractionTriggers = new Set(
+  model3DTriggerOptions.map((option) => option.value),
+);
+
 export const continuousInteractionTriggers = new Set([
   "pointer-move",
   "drag",
@@ -7,6 +44,8 @@ export const continuousInteractionTriggers = new Set([
   "scroll-swipe",
   "while-overlapping",
   "near-target",
+  "while-colliding",
+  "while-model-animation",
 ]);
 
 export const collisionInteractionTriggers = new Set([
@@ -15,6 +54,7 @@ export const collisionInteractionTriggers = new Set([
   "overlap-end",
   "drop-on-target",
   "near-target",
+  ...threeDCollisionTriggerOptions.map((option) => option.value),
 ]);
 
 export const timeInteractionTriggers = new Set([
@@ -43,6 +83,27 @@ export const mappingOptions: Record<string, InteractionOption[]> = {
   "while-overlapping": [{ label: "Overlap Time", value: "overlap-time" }],
   "near-target": [
     { label: "Proximity to Target", value: "distance-to-target" },
+  ],
+  "while-colliding": [
+    { label: "Contact Duration", value: "contact-duration" },
+    { label: "Collision Impulse", value: "collision-impulse" },
+    { label: "Penetration Depth", value: "penetration-depth" },
+  ],
+  "while-model-animation": [
+    { label: "Animation Progress", value: "animation-progress" },
+    { label: "Animation Time", value: "animation-time" },
+  ],
+};
+
+const threeDMappingAdditions: Record<string, InteractionOption[]> = {
+  drag: [
+    { label: "3D Position", value: "position-3d" },
+    { label: "Depth Progress", value: "depth-progress" },
+  ],
+  "near-target": [{ label: "3D Distance", value: "distance-3d" }],
+  "pointer-move": [
+    { label: "Surface Position", value: "surface-position" },
+    { label: "Pointer Depth", value: "pointer-depth" },
   ],
 };
 
@@ -90,21 +151,113 @@ const videoEffects: InteractionOption[] = [
   { label: "Seek", value: "seek" },
 ];
 
+export const cameraEffects: InteractionOption[] = [
+  { label: "Camera Move", value: "camera-move" },
+  { label: "Camera Zoom / Dolly", value: "camera-zoom" },
+  { label: "Camera Rotate", value: "camera-rotate" },
+  { label: "Camera Look At", value: "camera-look-at" },
+  { label: "Camera Shake", value: "camera-shake" },
+];
+
+export const visualPipelineEffects: InteractionOption[] = [
+  { label: "Animate Lighting", value: "animate-lighting" },
+  { label: "Post Processing", value: "post-processing" },
+  { label: "Shader Parameter", value: "shader-parameter" },
+];
+
+export const spatial3DEffects: InteractionOption[] = [
+  { label: "Look At Target", value: "look-at-target" },
+  { label: "Orbit Around Target", value: "orbit-around-target" },
+  { label: "Attach To Target", value: "attach-to-target" },
+];
+
+export const model3DAnimationEffects: InteractionOption[] = [
+  { label: "Play Model Animation", value: "play-model-animation" },
+  { label: "Pause Model Animation", value: "pause-model-animation" },
+  { label: "Resume Model Animation", value: "resume-model-animation" },
+  { label: "Stop Model Animation", value: "stop-model-animation" },
+  { label: "Change Model Animation", value: "change-model-animation" },
+  { label: "Seek Model Animation", value: "seek-model-animation" },
+  {
+    label: "Crossfade Model Animation",
+    value: "crossfade-model-animation",
+  },
+];
+
+export const model3DMaterialEffects: InteractionOption[] = [
+  { label: "Change Material", value: "change-material" },
+  { label: "Material Parameter", value: "material-parameter" },
+  { label: "Material Slot", value: "material-slot" },
+];
+
+export const model3DMorphEffects: InteractionOption[] = [
+  { label: "Morph Target", value: "morph-target" },
+];
+
+export const model3DStructureEffects: InteractionOption[] = [
+  { label: "Bone Transform", value: "bone-transform" },
+  { label: "Joint Rotation", value: "joint-rotation" },
+  { label: "Mesh Transform", value: "mesh-transform" },
+  { label: "Mesh Visibility", value: "mesh-visibility" },
+  { label: "Mesh Face Material", value: "mesh-face-material" },
+];
+
+const modelAnimationEffectValues = new Set(
+  model3DAnimationEffects.map((option) => option.value),
+);
+
 export const immediateEffects = new Set([
   "order",
   "play",
   "pause",
   "resume",
   "seek",
+  "play-model-animation",
+  "pause-model-animation",
+  "resume-model-animation",
+  "stop-model-animation",
+  "change-model-animation",
+  "seek-model-animation",
+  "crossfade-model-animation",
+  "material-slot",
+  "mesh-visibility",
+  "mesh-face-material",
 ]);
+
+function is3DSelection(
+  selectedTypes: readonly string[],
+  context: Interaction3DContext,
+) {
+  return context.is3D ?? selectedTypes.some((type) => type === "object3d");
+}
+
+function supports3DLiquidMerge(context: Interaction3DContext) {
+  return context.sourceKind === "primitive" || context.sourceKind === "vector";
+}
 
 export function getEffectOptions(
   selectedTypes: readonly string[],
   trigger = "",
+  context: Interaction3DContext = {},
 ): InteractionOption[] {
+  const is3D = is3DSelection(selectedTypes, context);
+  const hybridCollisionEffects =
+    selectedTypes.length === 1 && context.isHybridCollision
+      ? [
+          ...(trigger === "collision-enter"
+            ? [{ label: "Bounce Off Target", value: "collision-bounce" }]
+            : []),
+          ...(trigger === "collision-enter" || trigger === "drop-on-target"
+            ? [{ label: "Stack On Target", value: "stack-on-target" }]
+            : []),
+        ]
+      : [];
   if (selectedTypes.length > 1) {
     return [
       ...commonEffects,
+      ...cameraEffects,
+      ...visualPipelineEffects,
+      ...(is3D ? spatial3DEffects : []),
       { label: "Group Animation", value: "group-animation" },
     ];
   }
@@ -112,16 +265,79 @@ export function getEffectOptions(
   if (type === "image") {
     return [
       ...commonEffects,
+      ...cameraEffects,
+      ...visualPipelineEffects,
       ...imageEffects,
       ...(collisionBounceTriggers.has(trigger)
         ? [{ label: "Bounce Off Target", value: "collision-bounce" }]
         : []),
+      ...hybridCollisionEffects,
     ];
   }
-  if (type === "text") return [...commonEffects, ...textEffects];
-  if (type === "video") return [...commonEffects, ...videoEffects];
+  if (type === "text")
+    return [
+      ...commonEffects,
+      ...cameraEffects,
+      ...visualPipelineEffects,
+      ...textEffects,
+      ...hybridCollisionEffects,
+    ];
+  if (type === "video")
+    return [
+      ...commonEffects,
+      ...cameraEffects,
+      ...visualPipelineEffects,
+      ...videoEffects,
+      ...hybridCollisionEffects,
+    ];
+  if (is3D) {
+    const hasAnimations = (context.animationNames?.length ?? 0) > 0;
+    return [
+      ...commonEffects,
+      ...cameraEffects,
+      ...visualPipelineEffects,
+      ...spatial3DEffects,
+      { label: "Change Material", value: "change-material" },
+      { label: "Material Parameter", value: "material-parameter" },
+      ...(context.sourceKind === "asset" && hasAnimations
+        ? model3DAnimationEffects
+        : []),
+      ...(context.sourceKind === "asset" && context.hasMaterialSlots
+        ? [{ label: "Material Slot", value: "material-slot" }]
+        : []),
+      ...(context.sourceKind === "asset" && context.hasMorphTargets
+        ? model3DMorphEffects
+        : []),
+      ...(context.sourceKind === "asset" && context.hasBones
+        ? [{ label: "Bone Transform", value: "bone-transform" }]
+        : []),
+      ...(context.sourceKind === "asset" && context.hasJoints
+        ? [{ label: "Joint Rotation", value: "joint-rotation" }]
+        : []),
+      ...(context.sourceKind === "asset" && context.hasMeshes
+        ? [
+            { label: "Mesh Transform", value: "mesh-transform" },
+            { label: "Mesh Visibility", value: "mesh-visibility" },
+          ]
+        : []),
+      ...(context.sourceKind === "asset" && context.hasMeshFaceGroups
+        ? [{ label: "Mesh Face Material", value: "mesh-face-material" }]
+        : []),
+      ...(supports3DLiquidMerge(context) && liquidMergeTriggers.has(trigger)
+        ? [{ label: "Liquid Merge", value: "liquid-merge" }]
+        : []),
+      ...(collisionBounceTriggers.has(trigger) || trigger === "collision-enter"
+        ? [{ label: "Bounce Off Target", value: "collision-bounce" }]
+        : []),
+      ...(trigger === "collision-enter" || trigger === "drop-on-target"
+        ? [{ label: "Stack On Target", value: "stack-on-target" }]
+        : []),
+    ];
+  }
   return [
     ...commonEffects,
+    ...cameraEffects,
+    ...visualPipelineEffects,
     ...(type !== undefined &&
     isLiquidMergeShape(type) &&
     liquidMergeTriggers.has(trigger)
@@ -130,11 +346,17 @@ export function getEffectOptions(
     ...(selectedTypes.length === 1 && collisionBounceTriggers.has(trigger)
       ? [{ label: "Bounce Off Target", value: "collision-bounce" }]
       : []),
+    ...hybridCollisionEffects,
   ];
 }
 
-export function getMappingOptions(trigger: string): InteractionOption[] {
-  return mappingOptions[trigger] ?? [];
+export function getMappingOptions(
+  trigger: string,
+  context: Interaction3DContext = {},
+): InteractionOption[] {
+  const options = mappingOptions[trigger] ?? [];
+  if (!context.is3D) return options;
+  return [...options, ...(threeDMappingAdditions[trigger] ?? [])];
 }
 
 export function getMotionOptions(
@@ -148,6 +370,9 @@ export function getMotionOptions(
   if (resolvedEffect === "collision-bounce") {
     return [{ label: "Collision bounce", value: "collision-bounce" }];
   }
+  if (resolvedEffect === "stack-on-target") {
+    return [{ label: "Gravity", value: "gravity" }];
+  }
   if (immediateEffects.has(resolvedEffect)) return [];
   const eventMotions = ["direct", "spring", "inertia", "bounce", "gravity"];
   const progressMotions = ["direct", "spring", "inertia", "bounce"];
@@ -156,7 +381,13 @@ export function getMotionOptions(
     ? eventMotions
     : mapping === "pointer-velocity" ||
         mapping === "pointer-position" ||
+        mapping === "pointer-depth" ||
+        mapping === "surface-position" ||
         mapping === "overlap-time" ||
+        mapping === "contact-duration" ||
+        mapping === "collision-impulse" ||
+        mapping === "penetration-depth" ||
+        mapping === "distance-3d" ||
         mapping === "distance-to-target"
       ? velocityMotions
       : progressMotions;
@@ -167,6 +398,23 @@ export function getMotionOptions(
     skew: ["direct", "spring"],
     distort: ["direct", "spring"],
     "liquid-merge": ["direct", "spring"],
+    "look-at-target": ["direct", "spring"],
+    "orbit-around-target": ["direct", "spring", "inertia"],
+    "attach-to-target": ["direct", "spring"],
+    "morph-target": ["direct", "spring"],
+    "change-material": ["direct"],
+    "material-parameter": ["direct"],
+    "camera-move": eventMotions,
+    "camera-zoom": ["direct", "spring", "inertia"],
+    "camera-rotate": progressMotions,
+    "camera-look-at": ["direct", "spring"],
+    "camera-shake": ["direct", "spring"],
+    "animate-lighting": ["direct", "spring"],
+    "post-processing": ["direct", "spring"],
+    "shader-parameter": ["direct", "spring"],
+    "bone-transform": progressMotions,
+    "joint-rotation": progressMotions,
+    "mesh-transform": eventMotions,
   };
   const allowed = effectMotions[resolvedEffect] ?? ["direct"];
   const labels: Record<string, string> = {
@@ -186,7 +434,7 @@ export type ResetPolicy = {
   options: InteractionOption[];
 };
 
-export function getResetPolicy(
+function getBaseResetPolicy(
   trigger: string,
   hoverFallback: string,
   effect = "",
@@ -210,6 +458,31 @@ export function getResetPolicy(
     return {
       description: "Default: keep the position reached after the collision.",
       options: [contextual, keep],
+    };
+  }
+  if (trigger === "while-colliding") {
+    return {
+      description: "Default: return when the physical contact ends.",
+      options: [contextual, release, keep],
+    };
+  }
+  if (trigger === "collision-enter") {
+    return {
+      description: "Default: keep the state reached after the impact.",
+      options: [contextual, keep, pageExit],
+    };
+  }
+  if (trigger === "collision-exit") {
+    return {
+      description: "Default: keep the state reached after separation.",
+      options: [contextual, keep, pageExit],
+    };
+  }
+  if (modelInteractionTriggers.has(trigger)) {
+    return {
+      description:
+        "Default: keep the result and restore the authored pose on page exit.",
+      options: [contextual, keep, pageExit, restart],
     };
   }
   if (trigger === "near-target") {
@@ -277,4 +550,67 @@ export function getResetPolicy(
         ? [contextual, keep, restart, release]
         : [contextual, keep, restart],
   };
+}
+
+export function getResetPolicy(
+  trigger: string,
+  hoverFallback: string,
+  effect = "",
+  stacking = false,
+  context: Interaction3DContext = {},
+): ResetPolicy {
+  const policy = getBaseResetPolicy(trigger, hoverFallback, effect, stacking);
+  if (!context.is3D && !context.isHybridCollision) return policy;
+
+  const options = [...policy.options];
+  const append = (option: InteractionOption) => {
+    if (!options.some((current) => current.value === option.value)) {
+      options.push(option);
+    }
+  };
+  const transformEffects = new Set([
+    "move",
+    "scale",
+    "rotate",
+    "look-at-target",
+    "orbit-around-target",
+    "attach-to-target",
+    "stack-on-target",
+    "collision-bounce",
+    "mesh-transform",
+  ]);
+
+  if (transformEffects.has(effect) || stacking) {
+    append({
+      label: "Restore initial 3D transform",
+      value: "restore-transform",
+    });
+    append({ label: "Restore initial position", value: "restore-position" });
+    append({ label: "Restore initial rotation", value: "restore-rotation" });
+    append({ label: "Restore initial scale", value: "restore-scale" });
+    append({ label: "Reset physics velocity", value: "reset-velocity" });
+  }
+  if (modelAnimationEffectValues.has(effect)) {
+    append({ label: "Stop model animation", value: "stop-animation" });
+    append({
+      label: "Return to initial animation",
+      value: "initial-animation",
+    });
+  }
+  if (effect.startsWith("camera-")) {
+    append({ label: "Restore initial camera", value: "restore-camera" });
+  }
+  if (
+    effect === "animate-lighting" ||
+    effect === "post-processing" ||
+    effect === "shader-parameter" ||
+    effect === "shadow" ||
+    effect === "blur" ||
+    effect === "color"
+  ) {
+    append({ label: "Restore visual state", value: "restore-visual" });
+  }
+  append({ label: "Return full 3D state", value: "restore-full-3d" });
+
+  return { ...policy, options };
 }

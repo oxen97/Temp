@@ -36,12 +36,14 @@ import {
 } from "react";
 
 import { ArtboardBackground } from "@/features/editor/components/canvas/artboard-background";
+import { Artboard3DScene } from "@/features/editor/components/canvas/artboard-3d-scene";
 import { DrawDraftPreview } from "@/features/editor/components/canvas/draw-draft";
 import { PenEditControls } from "@/features/editor/components/canvas/pen-edit-controls";
 import { SelectionOutlineSvg } from "@/features/editor/components/canvas/selection-outline-svg";
 import { ShapeGraphic } from "@/features/editor/components/canvas/shape-graphic";
 import { DesignPanel } from "@/features/editor/components/panels/design-panel";
 import { InteractionPanel } from "@/features/editor/components/panels/interaction-panel";
+import { LogicPanel } from "@/features/editor/components/panels/logic-panel";
 import { ScenePanel } from "@/features/editor/components/panels/scene-panel";
 import { SoundPanel } from "@/features/editor/components/sound/sound-panel";
 import { LayerSymbol } from "@/features/editor/components/ui/layer-symbol";
@@ -166,13 +168,20 @@ import {
   useEditorStore,
   type VectorPath,
 } from "@/features/editor/store/editor-store";
+import { createPrimitiveObject3D } from "@/features/editor/three/types";
+import { LOCAL_PROJECT_ID } from "@/features/editor/three/model-assets";
 import { assetPath } from "@/lib/asset-path";
 
-export function EditorShell() {
+export function EditorShell({
+  projectId = LOCAL_PROJECT_ID,
+}: {
+  projectId?: string;
+} = {}) {
   const {
     activePageId,
     activeTool,
     addElement,
+    addObject3D,
     addPage,
     artboard,
     checkpoint,
@@ -189,10 +198,12 @@ export function EditorShell() {
     renameElement,
     renamePage,
     selectedElementIds,
+    selectedObject3DIds,
     selectedShape,
     setActivePageId,
     setActiveTool,
     setSelectedElementIds,
+    setSelectedObject3DIds,
     setSelectedShape,
     setZoom,
     toggleElementLocked,
@@ -208,6 +219,54 @@ export function EditorShell() {
   } = useEditorStore();
   const activePage = pages.find((page) => page.id === activePageId) ?? pages[0];
   const elements = useMemo(() => activePage?.elements ?? [], [activePage]);
+  const objects3d = useMemo(() => activePage?.objects3d ?? [], [activePage]);
+  const threeDemoSeededRef = useRef(false);
+
+  useEffect(() => {
+    if (
+      process.env.NODE_ENV !== "development" ||
+      threeDemoSeededRef.current ||
+      typeof window === "undefined" ||
+      new URLSearchParams(window.location.search).get("threeDemo") !== "1"
+    ) {
+      return;
+    }
+    threeDemoSeededRef.current = true;
+    if (objects3d.length) return;
+    const centerX = artboard.width / 2;
+    const centerY = artboard.height / 2;
+    const box = createPrimitiveObject3D({
+      dimensions: { depth: 150, height: 150, width: 150 },
+      id: "three-demo-box",
+      name: "Demo Box",
+      position: { x: centerX - 190, y: centerY, z: 10 },
+      primitive: "box",
+    });
+    box.material.color = "#ab51f0";
+    box.transform.rotation = { x: 22, y: 34, z: 0 };
+    addObject3D(box);
+
+    const sphere = createPrimitiveObject3D({
+      dimensions: { depth: 150, height: 150, width: 150 },
+      id: "three-demo-sphere",
+      name: "Demo Sphere",
+      position: { x: centerX, y: centerY, z: 25 },
+      primitive: "sphere",
+    });
+    sphere.material.color = "#67c5ff";
+    addObject3D(sphere);
+
+    const torus = createPrimitiveObject3D({
+      dimensions: { depth: 150, height: 150, width: 150 },
+      id: "three-demo-torus",
+      name: "Demo Torus",
+      position: { x: centerX + 190, y: centerY, z: 15 },
+      primitive: "torus",
+    });
+    torus.material.color = "#ff8c67";
+    torus.transform.rotation = { x: 55, y: 12, z: 8 };
+    addObject3D(torus);
+  }, [addObject3D, artboard.height, artboard.width, objects3d.length]);
   const backgroundMusicSettings: BackgroundMusicSettings = {
     ...defaultBackgroundMusicSettings,
     ...(activePage?.backgroundMusic ?? {}),
@@ -416,6 +475,34 @@ export function EditorShell() {
   const selectedElements = useMemo(
     () => elements.filter((element) => selectedElementIds.includes(element.id)),
     [elements, selectedElementIds],
+  );
+  const selectedObjects3D = useMemo(
+    () => objects3d.filter((object) => selectedObject3DIds.includes(object.id)),
+    [objects3d, selectedObject3DIds],
+  );
+  const interactionElements = useMemo(
+    () => [
+      ...elements.map(({ id, name, type }) => ({ id, name, type })),
+      ...objects3d.map((object) => ({
+        assetId:
+          object.source.kind === "asset" ? object.source.assetId : undefined,
+        id: object.id,
+        name: object.name,
+        sourceKind: object.source.kind,
+        type: "object3d",
+      })),
+    ],
+    [elements, objects3d],
+  );
+  const logicInteractions = useMemo(
+    () =>
+      interactionElements.map((element) => ({
+        id: `${element.id}:interaction-preview`,
+        name: "Configured interaction",
+        objectId: element.id,
+        triggerLabel: "INTERACTION tab",
+      })),
+    [interactionElements],
   );
   const visiblePropertyTab = propertyTab;
   const guides = useMemo(
@@ -3778,6 +3865,24 @@ export function EditorShell() {
           style={artboardStyle}
         >
           <ArtboardBackground artboard={artboard} />
+          <Artboard3DScene
+            artboardHeight={artboard.height}
+            artboardWidth={artboard.width}
+            objects={objects3d}
+            onClearSelection={() => setSelectedObject3DIds([])}
+            onSelectObject={(objectId) => {
+              setSelectedObject3DIds([objectId]);
+              setSelectedGuideIds([]);
+              setNodeEditElementId(null);
+              setSelectedPenNodes([]);
+              setSelectedPenHandles([]);
+              setEditingTextId(null);
+              setArtboardSelected(false);
+            }}
+            scene={activePage?.scene3d}
+            projectId={projectId}
+            selectedObjectIds={selectedObject3DIds}
+          />
           {elements.map((element) => {
             if (!element.visible) return null;
             const selected = selectedElementIds.includes(element.id);
@@ -4482,9 +4587,9 @@ export function EditorShell() {
           </button>
           <button
             aria-label="LOGIC"
-            aria-selected="false"
+            aria-selected={visiblePropertyTab === "logic"}
             data-label="LOGIC"
-            disabled
+            onClick={() => setPropertyTab("logic")}
             role="tab"
             type="button"
           >
@@ -4493,17 +4598,37 @@ export function EditorShell() {
         </div>
         {visiblePropertyTab === "interaction" ? (
           <InteractionPanel
-            elements={elements.map(({ id, name, type }) => ({
+            elements={interactionElements}
+            projectId={projectId}
+            selectedElementIds={[
+              ...selectedElements.map((element) => element.id),
+              ...selectedObjects3D.map((object) => object.id),
+            ]}
+            selectedName={
+              selectedElements[0]?.name ?? selectedObjects3D[0]?.name ?? null
+            }
+            selectedTypes={[
+              ...selectedElements.map((element) => element.type),
+              ...selectedObjects3D.map(() => "object3d"),
+            ]}
+          />
+        ) : null}
+        {visiblePropertyTab === "logic" ? (
+          <LogicPanel
+            currentPageId={activePageId}
+            interactions={logicInteractions}
+            objects={interactionElements.map(({ id, name, type }) => ({
               id,
               name,
               type,
             }))}
-            selectedElementIds={selectedElements.map((element) => element.id)}
-            selectedName={selectedElements[0]?.name ?? null}
-            selectedTypes={selectedElements.map((element) => element.type)}
+            pages={pages.map(({ id, name }) => ({ id, name }))}
+            selectedObjectIds={[
+              ...selectedElements.map((element) => element.id),
+              ...selectedObjects3D.map((object) => object.id),
+            ]}
           />
-        ) : null}
-        {visiblePropertyTab === "scenes" ? (
+        ) : visiblePropertyTab === "scenes" ? (
           <ScenePanel
             activePageId={activePageId}
             activePageName={activePage?.name ?? "Page"}
@@ -4572,7 +4697,10 @@ export function EditorShell() {
           backgroundMusic={backgroundMusicSettings}
           elements={elements}
           mixer={soundMixerSettings}
+          objects3d={objects3d}
           onClose={() => setPreviewVisible(false)}
+          projectId={projectId}
+          scene3d={activePage?.scene3d}
         />
       ) : null}
     </main>
