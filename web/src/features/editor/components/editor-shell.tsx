@@ -224,7 +224,6 @@ export function EditorShell({
 
   useEffect(() => {
     if (
-      process.env.NODE_ENV !== "development" ||
       threeDemoSeededRef.current ||
       typeof window === "undefined" ||
       new URLSearchParams(window.location.search).get("threeDemo") !== "1"
