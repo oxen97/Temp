@@ -1,4 +1,4 @@
-# Interaction 탭 — 전체 기획 + 구현 현황 (2026-09-20)
+# Interaction 탭 — 전체 기획 + 구현 현황 (2026-09-21)
 
 관람객 인터랙션(클릭·호버·드래그·충돌·시간 등)에 반응하는 효과를 작가가
 코드 없이 붙이는 탭. 확정 스펙 목업: `docs/interaction-panel-final.png`
@@ -22,6 +22,15 @@
   Z·Depth를 가진 충돌 프록시로 실제 2D↔3D 물리 충돌을 기획할 수 있다.
   **이 확장도 현재는 패널 로컬 상태를 바꾸는 UI 프리뷰이며, 인터랙션 데이터
   저장과 뷰어 실행은 아직 연결하지 않았다.**
+- **3D Scene 기반은 별도로 구현됨**: 페이지의 `objects3d`/`scene3d`, 3D
+  프리미티브·벡터 변환·GLB 데이터 모델, WebGL 렌더링, 선택, 프로젝트 문서
+  직렬화와 GLB IndexedDB 저장 기반은 존재한다. 따라서 "3D 오브젝트가
+  보이고 선택되는 것"과 "Interaction 설정이 실제로 실행되는 것"을 구분해야
+  한다. 전자는 구현됐고, 후자는 아직 UI 프리뷰다.
+- **3D UI 확인용 데모**: 로컬에서는 URL에 `?threeDemo=1`을 붙인다. GitHub
+  Pages 빌드는 `NEXT_PUBLIC_ENABLE_3D_DEMO=1`을 사용하므로 빈 Scene에 Demo
+  Box·Sphere·Torus가 자동 생성된다. 이 플래그는 검증용이며 일반 프로젝트
+  기본 데이터가 아니다.
 - **정밀 Keyframe 편집기 UI 추가**: 2D/3D Position·Rotation·Scale·Opacity,
   Material, Morph Target 트랙과 키프레임 추가·복제·삭제, 시간·값·Easing,
   재생 헤드와 확대/축소를 별도 전체 화면 편집기에서 조절한다.
@@ -372,8 +381,11 @@ Time·Easing, Follow input이면 Smoothing·Easing을 따른다.
 3D UI는 별도 파이프라인을 하나 더 만들지 않고 기존
 `WHEN → MAPPING → DO → HOW → TIMING → RESET → ADVANCED` 흐름을 그대로
 확장한다. 2D와 3D를 함께 선택한 경우에는 공통으로 안전한 항목만 보여주고,
-아래 전용 항목은 **선택 항목이 모두 3D 오브젝트일 때만** 표시한다. 화면의
-카메라는 계속 정면 고정이며, 좌표 공간·회전·물리는 오브젝트에 적용된다.
+오브젝트 전용 항목은 **선택 항목이 모두 3D 오브젝트일 때만** 표시한다. 예외로
+Camera·Visual Pipeline Effect는 모든 요소 타입에 제공하고, 2D↔3D 물리
+Trigger는 같은 Scene에 두 종류가 있을 때 2D 또는 3D 단일 선택에도 제공한다.
+에디터 탐색 카메라는 계속 정면 고정이며, Camera Effect는 관람 Preview의 작품
+카메라를 애니메이션한다. 좌표 공간·회전·물리는 해당 오브젝트에 적용된다.
 
 > 현재 구현 범위: 아래 필드를 조건부로 표시하고 값을 바꿀 수 있으며, GLB
 > 메타데이터를 읽어 선택지를 채운다. 값은 `interaction-panel.tsx`의 로컬
@@ -388,8 +400,8 @@ Time·Easing, Follow input이면 Smoothing·Easing을 따른다.
 | Collision Enter                                                | 3D 선택                         | 실제 Collider 접촉이 시작된 순간                     |
 | While Colliding                                                | 3D 선택                         | 물리 접촉이 유지되는 동안                            |
 | Collision Exit                                                 | 3D 선택                         | 물리 접촉이 끝난 순간                                |
-| Collision target                                               | 위 3개 Trigger                  | Any 3D object / Selected object / Group              |
-| Target element                                                 | Selected object                 | 현재 페이지의 다른 3D 오브젝트                       |
+| Target mode                                                    | 위 3개 Trigger                  | Selected spatial object / Any compatible object / Object group |
+| Target element                                                 | Selected spatial object         | 2D가 주체면 다른 3D, 3D가 주체면 다른 2D·3D 오브젝트 |
 | Collider shape                                                 | 위 3개 Trigger                  | Auto / Box / Sphere / Capsule / Convex Hull / Mesh   |
 | Is Trigger (Sensor)                                            | 위 3개 Trigger                  | 켜면 이벤트만 감지하고 물리적으로 밀거나 튕기지 않음 |
 | Minimum impulse                                                | Collision Enter                 | 약한 접촉을 무시할 최소 충격량                       |
@@ -433,7 +445,8 @@ Time·Easing, Follow input이면 Smoothing·Easing을 따른다.
 | Liquid Merge                                 | Target, Bridge width · Smoothness. 실제 3D 메타볼/셰이더 런타임은 후속    |
 | Play / Pause / Resume / Stop Model Animation | GLB Clip, Playback speed, 재생 범위                                       |
 | Seek / Crossfade / Change Model Animation    | From/To clip, Time 또는 Progress, Transition duration                     |
-| Change Material                              | Mesh/Material slot, Property(Color·Opacity·Metalness·Roughness 등), Value |
+| Change Material / Material Parameter         | Mesh/Material slot, Property(Color·Opacity·Metalness·Roughness 등), Value |
+| Material Slot                                | GLB의 실제 material slot 선택과 교체                              |
 | Morph Target                                 | GLB morph target 이름, Weight                                             |
 
 모델 전용 선택지는 가져온 GLB에 실제 데이터가 있을 때만 표시한다.
@@ -488,6 +501,12 @@ Time·Easing, Follow input이면 Smoothing·Easing을 따른다.
 Static/Kinematic에서만 허용하고, Dynamic에서는 Convex Hull을 기본으로 한다.
 `Is Trigger`를 켜면 Collider 크기·Offset·Layer/Mask는 유지하지만 Mass,
 Friction, Bounciness 같은 물리 반응값은 감지 결과에 영향을 주지 않는다.
+
+`Liquid Merge`는 2D 사각형·원·삼각형·별 또는 3D primitive/vector에만 제공한다.
+가져온 GLB asset에는 제공하지 않는다. 또한 현재 Effect 목록에 `Scatter`,
+`Fracture`, `Shatter`는 없다. `Particle`은 이미지용 시각 효과이지 Mesh 파쇄가
+아니므로, "충돌하면 조각으로 흩어짐"은 별도의 Effect·파편 생성 런타임을 먼저
+기획·구현해야 한다.
 
 ## 스코프에서 제외한 것 (의도적)
 
@@ -736,3 +755,137 @@ timeline을 연다. 선택한 모든 요소를 객체 그룹으로 표시하며 
 
 이 UI 역시 현재 로컬 프리뷰다. 다음 구현 단계에서 interaction schema,
 undo/redo, IndexedDB 저장, viewer runtime 평가기와 연결해야 한다.
+
+---
+
+## 부록 B — 3D 구현 인수인계 (다른 PC·AI 에이전트용)
+
+이 절은 저장소를 처음 읽는 개발자나 AI가 3D 기반과 Interaction 3D UI의
+경계를 추측하지 않도록 만든 코드 인수인계다. 아래 계약을 바꾸려면 2D 편집기,
+프로젝트 문서, Preview, Interaction 조건부 UI를 함께 검토한다.
+
+### B-1. 제품·좌표계 계약
+
+- 에디터 UX와 아트보드는 계속 2D다. 3D 오브젝트만 같은 페이지 안의 WebGL
+  Scene에서 렌더링하며, 사용자가 에디터 카메라를 자유 탐색하는 구조가 아니다.
+- 기본 카메라는 아트보드를 정면으로 보고, Scene은 Orthographic/Perspective
+  projection과 camera position/target을 가진다.
+- 저작 좌표는 아트보드 픽셀 기준으로 `X=오른쪽`, `Y=아래`, `Z=깊이`다.
+  Three.js World로 넘길 때 Y축 방향을 어댑터에서 변환한다.
+- 2D와 3D는 같은 Page/Scene에 존재하지만 데이터 컬렉션과 선택 ID는 분리한다.
+  2D는 `elements`/`selectedElementIds`, 3D는
+  `objects3d`/`selectedObject3DIds`를 사용한다. 한쪽을 선택하면 다른 쪽 선택을
+  해제한다.
+- 3D 오브젝트 데이터에는 `behind-2d` 또는 `front-of-2d` 합성 레이어가 있다.
+  다만 현재 `Artboard3DScene`은 이 값으로 렌더 패스를 분기하지 않으므로 실제
+  앞/뒤 합성은 후속 구현이다. 2D를 억지로 Three.js Mesh로 바꿔 기존 DOM 편집
+  동작을 깨뜨리지 않는다.
+
+### B-2. 구현 파일 지도
+
+| 책임 | 기준 파일 |
+| --- | --- |
+| 3D 데이터 타입·기본값 | `web/src/features/editor/three/types.ts` |
+| 프리미티브·벡터 Geometry 생성 | `three/geometry-factory.ts`, `three/vector-shape-adapter.ts` |
+| 2D 벡터/GLB를 Object3D 데이터로 생성 | `three/object-factory.ts` |
+| 좌표 변환·화면 투영 Bounds | `three/coordinate-system.ts` |
+| GLB 검증·메타데이터·IndexedDB·복제 | `three/model-assets.ts` |
+| GPU Geometry/Material/Texture 해제 | `three/resource-disposal.ts` |
+| 아트보드 WebGL 렌더·선택 | `components/canvas/artboard-3d-scene.tsx` |
+| 페이지별 3D 상태·선택·Undo/Redo | `store/editor-store.ts` |
+| 프로젝트 저장 스키마·복원 | `core/project/schema.ts`, `core/project/editor-document.ts` |
+| 3D Trigger/Mapping/Effect 허용 정책 | `components/panels/interaction-panel-policy.ts` |
+| Interaction 조건부 폼 | `components/panels/interaction-panel.tsx` |
+| 정밀 타임라인 UI | `components/panels/keyframe-timeline-editor.tsx` |
+| Scene 분기 이벤트 UI | `components/panels/logic-panel.tsx` |
+| 데모 생성·2D/3D 선택 연결 | `components/editor-shell.tsx` |
+
+`Object3DElement`의 `source`는 세 종류다.
+
+1. `primitive`: Box/Sphere/Cylinder/Cone/Torus
+2. `vector`: 2D 경로 snapshot을 Plane/Extrude/Revolve/Inflate로 변환
+3. `asset`: IndexedDB에 저장된 GLB의 `assetId` 참조
+
+Transform은 Position/Rotation/Scale XYZ와 Pivot을, Dimensions는 Width/Height/
+Depth를 가진다. Material은 Color/Opacity/Metalness/Roughness/Double sided와
+GLB 원본 재질 사용 여부를 가진다. GLB는 현재 **binary glTF 2.0 `.glb`만**
+받는 기반 API로 파일당 100MB 제한이다. Animation, Bone/Joint, Mesh, Material
+group, Morph Target 이름을 import 시 메타데이터로 추출한다. 단, 현재 이 API를
+호출하는 업로드 툴바/버튼은 아직 연결되지 않았다.
+
+### B-3. Interaction 패널에 3D 항목이 나타나는 조건
+
+- 선택 대상이 전부 `object3d`면 `is3DSelection=true`가 되어 3D Collision,
+  Mapping, Transform XYZ, Spatial Effect, Reset scope, Rigid body/Collider/
+  Constraint 설정을 추가한다.
+- 같은 Scene에 2D와 3D가 함께 있고 둘 중 한 종류를 선택하면
+  `isHybridCollisionAvailable=true`가 되어 2D↔3D Collision 설정을 추가한다.
+- GLB 전용 Trigger/Effect는 단순히 3D라는 이유만으로 표시하지 않는다.
+  선택한 asset의 메타데이터에 실제 Animation/Bone/Joint/Mesh/Material/Morph가
+  있을 때만 해당 항목을 표시한다.
+- Demo Box/Sphere/Torus는 `primitive`이므로 Collision·XYZ·공간 Transform·3D
+  Physics는 확인할 수 있지만, GLB clip/Bone/Joint/Mesh 전용 목록은 보이지 않는
+  것이 정상이다.
+- GLB blob과 메타데이터는 브라우저 IndexedDB의 로컬 프로젝트에 저장된다. 한
+  PC에서 import한 GLB는 GitHub Pages나 다른 PC로 자동 공유되지 않는다. 공개
+  데모에서 GLB hierarchy 전용 UI를 검증하려면 추후 업로드 UI를 연결하거나,
+  별도의 배포용 fixture asset/metadata를 제공해야 한다.
+- 2D와 3D 혼합 다중 선택에서는 두 종류에 안전한 공통 항목만 보여준다. 3D
+  전용 Bone/Material/Collider 값을 혼합 선택에 일괄 적용하지 않는다.
+
+### B-4. GitHub Pages와 로컬에서 확인하는 방법
+
+**GitHub Pages**
+
+1. Pages workflow가 `NEXT_PUBLIC_ENABLE_3D_DEMO=1`로 빌드된다.
+2. 빈 Scene으로 접속하면 아트보드 중앙에 보라 Box, 파란 Sphere, 주황 Torus가
+   생성된다.
+3. 원하는 3D 오브젝트를 클릭한다. 보라색 선택 Box가 나타나야 한다.
+4. 오른쪽 `INTERACTION` 탭을 연다.
+5. WHEN의 3D Physics 그룹에서 `Collision Enter / While Colliding /
+   Collision Exit`, DO에서 XYZ Transform과 Spatial 항목, RESET/ADVANCED에서
+   3D scope와 Rigid body/Collider 설정을 확인한다.
+
+**로컬 개발 서버**
+
+1. `web`에서 개발 서버를 실행한다.
+2. `http://localhost:3000/?threeDemo=1`로 접속한다.
+3. 이후 확인 순서는 Pages와 같다. 이미 페이지에 3D 오브젝트가 있으면 데모는
+   중복 생성하지 않는다.
+
+데모 생성 코드는 테스트 편의 기능이다. 실제 3D 생성/업로드 툴바가 완성되면
+Pages 기본 플래그를 제거하고 사용자가 만든 `objects3d`만 사용한다.
+
+### B-5. 현재 구현됨 / 아직 미구현
+
+**구현됨**
+
+- Page별 3D Scene 설정과 Object3D 데이터, 선택·추가·수정·삭제·Undo/Redo
+- Box/Sphere/Cylinder/Cone/Torus 및 벡터 기반 3D Geometry 생성 기반
+- `.glb` 검증, IndexedDB 저장, 로딩·복제, 메타데이터 추출 기반 API
+- 아트보드와 Preview의 Three.js 렌더링, 조명, 그림자, 선택 Box
+- 프로젝트 문서의 `objects3d`/`scene3d` 직렬화·복원
+- 3D/하이브리드 선택에 따른 Interaction 조건부 UI와 타임라인·Logic UI
+
+**아직 UI 기획·프리뷰 상태**
+
+- Interaction 설정의 프로젝트 저장, Undo/Redo, 복제·삭제의 실제 데이터 연결
+- GLB import API를 호출하는 사용자용 업로드·재연결·삭제 UI
+- Trigger 감지와 Effect 실행, Reset, Conflict/Priority 평가기
+- 실제 2D↔3D/3D↔3D 물리 World와 Collision/Stack/Bounce 런타임
+- Camera/Light/Shadow/Post Processing/Shader Effect의 관람 Preview 실행
+- GLB AnimationMixer, Crossfade/Root motion, Bone/Joint/Mesh/Face 런타임 제어
+- Liquid Merge 메타볼/셰이더, 정밀 Keyframe 재생기
+- Interaction 수명주기 이벤트를 Logic Scene 분기로 전달하는 런타임 Event Bus
+
+현재 `editor-shell.tsx`가 Logic 패널에 전달하는 Interaction 목록은 요소별
+`Configured interaction` placeholder이고 실제 Interaction 데이터가 아니다.
+Logic rule도 컴포넌트 로컬 상태다. Keyframe modal 역시 변경 콜백이 연결되지
+않은 로컬 프리뷰이므로 닫기·선택 변경·새로고침 후 프로젝트 데이터로 유지된다고
+가정하면 안 된다. `Pick face in 3D object`도 현재 캔버스 picking을 시작하지 않는
+UI placeholder다.
+
+Interaction 런타임을 구현할 때는 에디터의 원본 `elements`/`objects3d`를 매
+프레임 수정하지 않는다. 관람 Preview에 별도의 runtime state와 Object3D 인스턴스를
+만들고, 페이지 이탈 시 AnimationMixer·Physics body·GPU resource·event listener를
+모두 해제해야 한다.

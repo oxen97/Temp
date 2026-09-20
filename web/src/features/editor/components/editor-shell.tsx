@@ -226,7 +226,8 @@ export function EditorShell({
     if (
       threeDemoSeededRef.current ||
       typeof window === "undefined" ||
-      new URLSearchParams(window.location.search).get("threeDemo") !== "1"
+      (process.env.NEXT_PUBLIC_ENABLE_3D_DEMO !== "1" &&
+        new URLSearchParams(window.location.search).get("threeDemo") !== "1")
     ) {
       return;
     }
