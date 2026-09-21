@@ -530,6 +530,34 @@ export function EditorShell({
       x: artboard.width / 2 - size / 2,
       y: artboard.height / 2 - size / 2 - 260,
     });
+    addElement({
+      cornerRadius: 8,
+      fill: "#ff6b35",
+      height: size,
+      id: "interaction-demo-physics",
+      interactions: [
+        createDefaultInteraction({
+          bounciness: 55,
+          effect: "move",
+          id: "interaction-demo-physics-drop",
+          motion: "gravity",
+          name: "Drop with gravity on click",
+          trigger: "click-tap",
+        }),
+      ],
+      locked: false,
+      name: "Physics Demo",
+      opacity: 100,
+      rotation: 0,
+      stroke: "transparent",
+      strokeStyle: "none",
+      strokeWidth: 0,
+      type: "rectangle",
+      visible: true,
+      width: size,
+      x: artboard.width / 2 - size / 2 + 320,
+      y: artboard.height / 2 - size / 2 - 260,
+    });
   }, [addElement, artboard.height, artboard.width, elements]);
   const backgroundMusicSettings: BackgroundMusicSettings = {
     ...defaultBackgroundMusicSettings,

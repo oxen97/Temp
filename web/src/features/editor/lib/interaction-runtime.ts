@@ -61,6 +61,8 @@ export type ElementRuntimeState = {
   timed: boolean;
   /** Accumulated wheel/scroll distance in px for `scroll-swipe`. */
   scroll: number;
+  /** Live physics readout (center px + degrees) once released into the sim. */
+  physics: { x: number; y: number; rotation: number } | null;
 };
 
 export const IDLE_RUNTIME_STATE: ElementRuntimeState = {
@@ -70,6 +72,7 @@ export const IDLE_RUNTIME_STATE: ElementRuntimeState = {
   dragOffset: { x: 0, y: 0 },
   timed: false,
   scroll: 0,
+  physics: null,
 };
 
 /** Triggers this runtime slice can play. */
@@ -222,6 +225,16 @@ export function runtimeVisualForElement(
   state: ElementRuntimeState,
   context?: RuntimeContext,
 ): RuntimeVisual {
+  // Once an element is released into the physics sim, the simulation drives its
+  // transform entirely (position + rotation), overriding authored effects.
+  if (state.physics && context) {
+    return {
+      ...IDENTITY_VISUAL,
+      tx: state.physics.x - context.center.x,
+      ty: state.physics.y - context.center.y,
+      rotate: state.physics.rotation,
+    };
+  }
   let visual = IDENTITY_VISUAL;
   for (const interaction of interactions ?? []) {
     if (interaction.enabled === false) continue;

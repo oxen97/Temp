@@ -17,12 +17,17 @@ import { ViewerBackgroundMusic } from "@/features/editor/components/viewer/viewe
 import { textStyleForElement } from "@/features/editor/lib/element-style";
 import { clamp } from "@/features/editor/lib/geometry";
 import {
+  InteractionPhysicsWorld,
+  loadRapier,
+} from "@/features/editor/lib/interaction-physics";
+import {
   activeTransition,
   composeFilter,
   composeTransform,
   type ElementRuntimeState,
   hasRuntimeInteractions,
   IDLE_RUNTIME_STATE,
+  isRuntimeInteractionActive,
   runtimeVisualForElement,
 } from "@/features/editor/lib/interaction-runtime";
 import {
@@ -163,6 +168,9 @@ export function ViewerPreview({
     x: number;
     y: number;
   } | null>(null);
+  const physicsWorldRef = useRef<InteractionPhysicsWorld | null>(null);
+  const physicsFrameRef = useRef<number | null>(null);
+  const releasedRef = useRef<Set<string>>(new Set());
 
   const [runtimeState, setRuntimeState] = useState<
     Map<string, ElementRuntimeState>
@@ -219,6 +227,57 @@ export function ViewerPreview({
       }));
     },
     [mutateRuntimeState],
+  );
+
+  const startPhysicsLoop = useCallback(() => {
+    if (physicsFrameRef.current !== null) return;
+    const tick = () => {
+      const world = physicsWorldRef.current;
+      if (!world || releasedRef.current.size === 0) {
+        physicsFrameRef.current = null;
+        return;
+      }
+      world.step();
+      for (const id of releasedRef.current) {
+        const readout = world.read(id);
+        if (readout) {
+          mutateRuntimeState(id, (state) => ({ ...state, physics: readout }));
+        }
+      }
+      physicsFrameRef.current = requestAnimationFrame(tick);
+    };
+    physicsFrameRef.current = requestAnimationFrame(tick);
+  }, [mutateRuntimeState]);
+
+  const releaseToPhysics = useCallback(
+    (element: CanvasElement) => {
+      if (releasedRef.current.has(element.id)) return;
+      const gravity = (element.interactions ?? []).find(
+        (interaction) =>
+          interaction.enabled !== false && interaction.motion === "gravity",
+      );
+      if (!gravity) return;
+      releasedRef.current.add(element.id);
+      void loadRapier().then((rapier) => {
+        if (!releasedRef.current.has(element.id)) return;
+        if (!physicsWorldRef.current) {
+          physicsWorldRef.current = new InteractionPhysicsWorld(rapier, {
+            width: artboard.width,
+            height: artboard.height,
+          });
+        }
+        physicsWorldRef.current.addBody({
+          id: element.id,
+          centerX: element.x + element.width / 2,
+          centerY: element.y + element.height / 2,
+          width: element.width,
+          height: element.height,
+          bounciness: gravity.bounciness / 100,
+        });
+        startPhysicsLoop();
+      });
+    },
+    [artboard.width, artboard.height, startPhysicsLoop],
   );
 
   const unloadInteractionAudio = useCallback((audio: HTMLAudioElement) => {
@@ -646,6 +705,34 @@ export function ViewerPreview({
     return () => timers.forEach((timer) => window.clearTimeout(timer));
   }, [elements, mutateRuntimeState]);
 
+  // Release elements into the physics sim when a gravity interaction's trigger
+  // becomes active. Already-released elements are left to the simulation.
+  useEffect(() => {
+    for (const element of elements) {
+      if (releasedRef.current.has(element.id)) continue;
+      const state = runtimeState.get(element.id) ?? IDLE_RUNTIME_STATE;
+      const active = (element.interactions ?? []).some(
+        (interaction) =>
+          interaction.enabled !== false &&
+          interaction.motion === "gravity" &&
+          isRuntimeInteractionActive(interaction, state),
+      );
+      if (active) releaseToPhysics(element);
+    }
+  }, [elements, runtimeState, releaseToPhysics]);
+
+  useEffect(
+    () => () => {
+      if (physicsFrameRef.current !== null) {
+        cancelAnimationFrame(physicsFrameRef.current);
+      }
+      physicsWorldRef.current?.dispose();
+      physicsWorldRef.current = null;
+      releasedRef.current.clear();
+    },
+    [],
+  );
+
   const pageType = artboard.pageType ?? "screen";
   const viewportMode = artboard.viewportMode ?? "fit";
   const layout = viewerPreviewLayout(artboard, viewport);
@@ -963,9 +1050,10 @@ export function ViewerPreview({
                           runtimeVisual,
                         ),
                         transformOrigin: "center",
-                        transition: prefersReducedMotion
-                          ? "none"
-                          : activeTransition(element.interactions, runtime),
+                        transition:
+                          prefersReducedMotion || runtime.physics
+                            ? "none"
+                            : activeTransition(element.interactions, runtime),
                         width: element.width,
                       }}
                     >

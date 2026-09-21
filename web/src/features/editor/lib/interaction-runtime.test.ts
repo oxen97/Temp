@@ -243,6 +243,28 @@ describe("interaction runtime", () => {
     expect(still.shake).toBe(false);
   });
 
+  it("lets physics take over the transform once released", () => {
+    const visual = runtimeVisualForElement(
+      [
+        createDefaultInteraction({
+          trigger: "click-tap",
+          effect: "move",
+          moveX: 999,
+        }),
+      ],
+      {
+        ...IDLE_RUNTIME_STATE,
+        toggled: true,
+        physics: { x: 250, y: 400, rotation: 30 },
+      },
+      { center: { x: 200, y: 200 }, pointer: null },
+    );
+    // Physics offset from center wins over the authored move effect.
+    expect(visual.tx).toBe(50);
+    expect(visual.ty).toBe(200);
+    expect(visual.rotate).toBe(30);
+  });
+
   it("makes pointer-move follow the cursor, bounded by moveX/Y", () => {
     const follow = createDefaultInteraction({
       trigger: "pointer-move",
