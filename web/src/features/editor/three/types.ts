@@ -1,3 +1,4 @@
+import type { InteractionDefinition } from "@/features/editor/lib/interaction-model";
 import type { VectorPath } from "@/features/editor/lib/vector-types";
 
 export type Vector3Value = {
@@ -100,6 +101,7 @@ export type Object3DElement = {
   compositeLayer: "behind-2d" | "front-of-2d";
   dimensions: Object3DDimensions;
   id: string;
+  interactions?: InteractionDefinition[];
   locked: boolean;
   material: Material3DSettings;
   name: string;

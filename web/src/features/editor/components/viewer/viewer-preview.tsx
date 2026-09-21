@@ -854,6 +854,7 @@ export function ViewerPreview({
               <Artboard3DScene
                 artboardHeight={artboard.height}
                 artboardWidth={artboard.width}
+                interactive
                 objects={objects3d}
                 projectId={projectId}
                 scene={scene3d}

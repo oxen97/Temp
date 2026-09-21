@@ -80,6 +80,7 @@ export const object3DElementSchema = z.object({
     depth: z.number().positive(),
   }),
   id: z.string().min(1),
+  interactions: z.array(z.unknown()).optional(),
   locked: z.boolean(),
   material: z.object({
     color: z.string().min(1),

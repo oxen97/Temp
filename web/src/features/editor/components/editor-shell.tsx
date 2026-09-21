@@ -253,6 +253,23 @@ export function EditorShell({
     });
     box.material.color = "#ab51f0";
     box.transform.rotation = { x: 22, y: 34, z: 0 };
+    box.interactions = [
+      createDefaultInteraction({
+        effect: "scale",
+        id: "three-demo-box-hover",
+        name: "Grow on hover",
+        scaleX: 140,
+        scaleY: 140,
+        trigger: "hover",
+      }),
+      createDefaultInteraction({
+        effect: "rotate",
+        id: "three-demo-box-click",
+        name: "Spin on click",
+        rotateTo: 90,
+        trigger: "click-tap",
+      }),
+    ];
     addObject3D(box);
 
     const sphere = createPrimitiveObject3D({

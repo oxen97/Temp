@@ -15,8 +15,20 @@ import {
   PerspectiveCamera,
   Vector3,
 } from "three";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 
+import {
+  IDLE_RUNTIME_STATE,
+  runtimeVisualForElement,
+} from "@/features/editor/lib/interaction-runtime";
 import {
   projectObjectToScreen,
   spatialTransformToWorld,
@@ -32,10 +44,18 @@ import {
   type Scene3DSettings,
 } from "@/features/editor/three/types";
 
+/**
+ * True inside the viewer preview, where authored interactions play. Provided
+ * inside the Canvas so it crosses the R3F reconciler boundary to ObjectGroup.
+ */
+const Interactive3DContext = createContext(false);
+
 type Artboard3DSceneProps = {
   artboardHeight: number;
   artboardWidth: number;
   className?: string;
+  /** When true (viewer preview), objects play their authored interactions. */
+  interactive?: boolean;
   objects: Object3DElement[];
   onClearSelection?: () => void;
   onLoadError?: (objectId: string, error: Error) => void;
@@ -143,7 +163,10 @@ function ObjectGroup({
   onSelectObject: Artboard3DSceneProps["onSelectObject"];
   selected: boolean;
 }) {
+  const interactive = useContext(Interactive3DContext);
   const [group, setGroup] = useState<Group | null>(null);
+  const [toggled, setToggled] = useState(false);
+  const [hovering, setHovering] = useState(false);
   const world = spatialTransformToWorld(object.transform);
   const handlePointerDown = (event: ThreeEvent<PointerEvent>) => {
     event.stopPropagation();
@@ -151,18 +174,62 @@ function ObjectGroup({
     if (!object.locked) onSelectObject?.(object.id);
   };
 
+  const interactions =
+    interactive && object.interactions?.length ? object.interactions : null;
+  // Reuses the shared runtime; screen-plane deltas map to 3D: tx/ty -> x/-y,
+  // rotate -> Z spin, scale -> uniform-ish. Applied on an inner group so the
+  // rotation pivots at the object's own center, not the world origin.
+  const visual = interactions
+    ? runtimeVisualForElement(interactions, {
+        ...IDLE_RUNTIME_STATE,
+        hovering,
+        toggled,
+      })
+    : null;
+
   return (
     <>
       <group
         name={object.name}
+        onClick={
+          interactions
+            ? (event: ThreeEvent<MouseEvent>) => {
+                event.stopPropagation();
+                setToggled((current) => !current);
+              }
+            : undefined
+        }
         onPointerDown={handlePointerDown}
+        onPointerOut={interactions ? () => setHovering(false) : undefined}
+        onPointerOver={
+          interactions
+            ? (event: ThreeEvent<PointerEvent>) => {
+                event.stopPropagation();
+                setHovering(true);
+              }
+            : undefined
+        }
         position={world.position}
         ref={setGroup}
         rotation={world.rotation}
         scale={world.scale}
         userData={{ amousObjectId: object.id }}
       >
-        {children}
+        {visual ? (
+          <group
+            position={[visual.tx, -visual.ty, 0]}
+            rotation={[0, 0, (visual.rotate * Math.PI) / 180]}
+            scale={[
+              visual.scaleX,
+              visual.scaleY,
+              (visual.scaleX + visual.scaleY) / 2,
+            ]}
+          >
+            {children}
+          </group>
+        ) : (
+          children
+        )}
       </group>
       {selected && group ? <SelectedBox object={group} /> : null}
       {selected && group ? (
@@ -366,6 +433,7 @@ export function Artboard3DScene({
   artboardHeight,
   artboardWidth,
   className,
+  interactive = false,
   objects,
   onClearSelection,
   onLoadError,
@@ -419,32 +487,34 @@ export function Artboard3DScene({
           shadow-mapSize-height={2048}
           shadow-mapSize-width={2048}
         />
-        {visibleObjects.map((object) =>
-          object.source.kind === "asset" ? (
-            <AssetObject
-              key={`${object.id}:${object.source.assetId}:${object.material.useSourceMaterial}`}
-              object={
-                object as Object3DElement & {
-                  source: { assetId: string; kind: "asset" };
+        <Interactive3DContext.Provider value={interactive}>
+          {visibleObjects.map((object) =>
+            object.source.kind === "asset" ? (
+              <AssetObject
+                key={`${object.id}:${object.source.assetId}:${object.material.useSourceMaterial}`}
+                object={
+                  object as Object3DElement & {
+                    source: { assetId: string; kind: "asset" };
+                  }
                 }
-              }
-              onLoadError={onLoadError}
-              onProjectedBoundsChange={onProjectedBoundsChange}
-              onSelectObject={onSelectObject}
-              projectId={projectId}
-              selected={selectedObjectIds.includes(object.id)}
-            />
-          ) : (
-            <GeneratedObject
-              key={object.id}
-              object={object}
-              onLoadError={onLoadError}
-              onProjectedBoundsChange={onProjectedBoundsChange}
-              onSelectObject={onSelectObject}
-              selected={selectedObjectIds.includes(object.id)}
-            />
-          ),
-        )}
+                onLoadError={onLoadError}
+                onProjectedBoundsChange={onProjectedBoundsChange}
+                onSelectObject={onSelectObject}
+                projectId={projectId}
+                selected={selectedObjectIds.includes(object.id)}
+              />
+            ) : (
+              <GeneratedObject
+                key={object.id}
+                object={object}
+                onLoadError={onLoadError}
+                onProjectedBoundsChange={onProjectedBoundsChange}
+                onSelectObject={onSelectObject}
+                selected={selectedObjectIds.includes(object.id)}
+              />
+            ),
+          )}
+        </Interactive3DContext.Provider>
       </Canvas>
     </div>
   );
