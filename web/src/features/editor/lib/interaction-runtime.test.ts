@@ -185,6 +185,78 @@ describe("interaction runtime", () => {
     ).toBeCloseTo(0.5);
   });
 
+  it("activates an after-delay interaction only once timed", () => {
+    const timed = createDefaultInteraction({
+      trigger: "after-delay",
+      effect: "move",
+      moveX: 80,
+      moveY: 0,
+    });
+    expect(runtimeVisualForElement([timed], IDLE_RUNTIME_STATE).tx).toBe(0);
+    expect(
+      runtimeVisualForElement([timed], { ...IDLE_RUNTIME_STATE, timed: true })
+        .tx,
+    ).toBe(80);
+    expect(hasRuntimeInteractions([timed])).toBe(true);
+  });
+
+  it("makes pointer-move follow the cursor, bounded by moveX/Y", () => {
+    const follow = createDefaultInteraction({
+      trigger: "pointer-move",
+      effect: "move",
+      moveX: 100,
+      moveY: 100,
+      trackDistance: 200,
+    });
+    const center = { x: 500, y: 500 };
+    const half = runtimeVisualForElement([follow], IDLE_RUNTIME_STATE, {
+      center,
+      pointer: { x: 600, y: 500 },
+    });
+    expect(half.tx).toBeCloseTo(50);
+    expect(half.ty).toBeCloseTo(0);
+
+    const far = runtimeVisualForElement([follow], IDLE_RUNTIME_STATE, {
+      center,
+      pointer: { x: 5000, y: 500 },
+    });
+    expect(far.tx).toBeCloseTo(100);
+
+    const noPointer = runtimeVisualForElement([follow], IDLE_RUNTIME_STATE, {
+      center,
+      pointer: null,
+    });
+    expect(noPointer.tx).toBe(0);
+  });
+
+  it("scales a non-move pointer-move effect by proximity", () => {
+    const glow = createDefaultInteraction({
+      trigger: "pointer-move",
+      effect: "scale",
+      scaleX: 200,
+      scaleY: 200,
+      trackDistance: 100,
+    });
+    const center = { x: 0, y: 0 };
+    const onCenter = runtimeVisualForElement([glow], IDLE_RUNTIME_STATE, {
+      center,
+      pointer: { x: 0, y: 0 },
+    });
+    expect(onCenter.scaleX).toBeCloseTo(2);
+
+    const near = runtimeVisualForElement([glow], IDLE_RUNTIME_STATE, {
+      center,
+      pointer: { x: 50, y: 0 },
+    });
+    expect(near.scaleX).toBeCloseTo(1.5);
+
+    const far = runtimeVisualForElement([glow], IDLE_RUNTIME_STATE, {
+      center,
+      pointer: { x: 500, y: 0 },
+    });
+    expect(far.scaleX).toBeCloseTo(1);
+  });
+
   it("combines multiple active interactions", () => {
     const visual = runtimeVisualForElement(
       [

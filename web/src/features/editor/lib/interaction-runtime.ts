@@ -11,6 +11,8 @@
  * continuous trigger that either repositions the element (drag + move: follow
  * the pointer 1:1 and stay where dropped) or scrubs an effect proportionally to
  * drag progress (drag + rotate/scale/opacity, mapped by `trackDistance`).
+ * Also `after-delay` (fires once after `timeSeconds`, auto-play) and
+ * `pointer-move` (follows / reacts to the cursor over the stage).
  * Effects: `move`, `rotate`, `scale`, `opacity`. Physics motions
  * (spring/inertia/bounce), collision, and 3D-object interactions are handled by
  * later runtime phases; unsupported triggers/effects are simply inert here.
@@ -44,6 +46,8 @@ export type ElementRuntimeState = {
   drag: { dx: number; dy: number } | null;
   /** Committed drag displacement in artboard pixels (persists after drop). */
   dragOffset: { x: number; y: number };
+  /** True once an `after-delay` timer has elapsed. */
+  timed: boolean;
 };
 
 export const IDLE_RUNTIME_STATE: ElementRuntimeState = {
@@ -51,10 +55,29 @@ export const IDLE_RUNTIME_STATE: ElementRuntimeState = {
   hovering: false,
   drag: null,
   dragOffset: { x: 0, y: 0 },
+  timed: false,
 };
 
 /** Triggers this runtime slice can play. */
-export const RUNTIME_TRIGGERS = ["click-tap", "hover", "drag"] as const;
+export const RUNTIME_TRIGGERS = [
+  "click-tap",
+  "hover",
+  "drag",
+  "after-delay",
+  "pointer-move",
+] as const;
+
+/**
+ * Per-element geometry the runtime needs for pointer-driven triggers. Supplied
+ * by the viewer at render time; omit for elements/interactions that don't use
+ * the pointer position.
+ */
+export type RuntimeContext = {
+  /** Pointer position in artboard px, or null when the pointer is off-stage. */
+  pointer: { x: number; y: number } | null;
+  /** The element's center in artboard px. */
+  center: { x: number; y: number };
+};
 
 export function isRuntimeInteractionActive(
   interaction: InteractionDefinition,
@@ -68,6 +91,8 @@ export function isRuntimeInteractionActive(
       return state.hovering;
     case "drag":
       return state.drag !== null;
+    case "after-delay":
+      return state.timed;
     default:
       return false;
   }
@@ -75,6 +100,10 @@ export function isRuntimeInteractionActive(
 
 function clamp01(value: number) {
   return Math.min(1, Math.max(0, value));
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
 }
 
 /**
@@ -136,6 +165,8 @@ export function interactionIntensity(
       const distance = Math.hypot(state.drag.dx, state.drag.dy);
       return clamp01(distance / Math.max(1, interaction.trackDistance));
     }
+    case "after-delay":
+      return state.timed ? 1 : 0;
     default:
       return 0;
   }
@@ -145,6 +176,7 @@ export function interactionIntensity(
 export function runtimeVisualForElement(
   interactions: InteractionDefinition[] | undefined,
   state: ElementRuntimeState,
+  context?: RuntimeContext,
 ): RuntimeVisual {
   let visual = IDENTITY_VISUAL;
   for (const interaction of interactions ?? []) {
@@ -157,6 +189,28 @@ export function runtimeVisualForElement(
         tx: visual.tx + state.dragOffset.x + (state.drag?.dx ?? 0),
         ty: visual.ty + state.dragOffset.y + (state.drag?.dy ?? 0),
       };
+      continue;
+    }
+    // Pointer-move reacts to the cursor's position over the stage: move follows
+    // the pointer (bounded by moveX/Y over trackDistance); other effects scale
+    // with proximity (strongest when the pointer is on the element).
+    if (interaction.trigger === "pointer-move") {
+      if (!context?.pointer) continue;
+      const offsetX = context.pointer.x - context.center.x;
+      const offsetY = context.pointer.y - context.center.y;
+      const track = Math.max(1, interaction.trackDistance);
+      if (interaction.effect === "move") {
+        visual = {
+          ...visual,
+          tx: visual.tx + clamp(offsetX / track, -1, 1) * interaction.moveX,
+          ty: visual.ty + clamp(offsetY / track, -1, 1) * interaction.moveY,
+        };
+      } else {
+        const proximity = clamp01(1 - Math.hypot(offsetX, offsetY) / track);
+        if (proximity > 0) {
+          visual = accumulateEffect(visual, interaction, proximity);
+        }
+      }
       continue;
     }
     const intensity = interactionIntensity(interaction, state);

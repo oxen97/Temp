@@ -157,6 +157,11 @@ export function ViewerPreview({
   );
   const scrollStopTimersRef = useRef(new Map<string, number>());
   const lastPointerRef = useRef<{ x: number; y: number } | null>(null);
+  const pageRef = useRef<HTMLDivElement>(null);
+  const [pagePointer, setPagePointer] = useState<{
+    x: number;
+    y: number;
+  } | null>(null);
 
   const [runtimeState, setRuntimeState] = useState<
     Map<string, ElementRuntimeState>
@@ -613,9 +618,42 @@ export function ViewerPreview({
     return () => query.removeEventListener("change", handler);
   }, []);
 
+  // after-delay triggers: activate an element's timed interactions once the
+  // delay elapses, counted from when the preview opened.
+  useEffect(() => {
+    const timers: number[] = [];
+    for (const element of elements) {
+      for (const interaction of element.interactions ?? []) {
+        if (
+          interaction.enabled === false ||
+          interaction.trigger !== "after-delay"
+        ) {
+          continue;
+        }
+        timers.push(
+          window.setTimeout(
+            () =>
+              mutateRuntimeState(element.id, (state) => ({
+                ...state,
+                timed: true,
+              })),
+            Math.max(0, interaction.timeSeconds) * 1000,
+          ),
+        );
+      }
+    }
+    return () => timers.forEach((timer) => window.clearTimeout(timer));
+  }, [elements, mutateRuntimeState]);
+
   const pageType = artboard.pageType ?? "screen";
   const viewportMode = artboard.viewportMode ?? "fit";
   const layout = viewerPreviewLayout(artboard, viewport);
+  const usesPointerMove = elements.some((element) =>
+    (element.interactions ?? []).some(
+      (interaction) =>
+        interaction.enabled !== false && interaction.trigger === "pointer-move",
+    ),
+  );
   const stageTop =
     pageType === "scroll"
       ? Math.max(0, (viewport.height - layout.height) / 2)
@@ -697,6 +735,26 @@ export function ViewerPreview({
           >
             <div
               className="viewer-preview-page"
+              onPointerLeave={
+                usesPointerMove ? () => setPagePointer(null) : undefined
+              }
+              onPointerMove={
+                usesPointerMove
+                  ? (event) => {
+                      const rect = pageRef.current?.getBoundingClientRect();
+                      if (!rect) return;
+                      setPagePointer({
+                        x:
+                          (event.clientX - rect.left) /
+                          Math.max(0.0001, layout.scaleX),
+                        y:
+                          (event.clientY - rect.top) /
+                          Math.max(0.0001, layout.scaleY),
+                      });
+                    }
+                  : undefined
+              }
+              ref={pageRef}
               style={{
                 borderRadius: artboard.cornerRadius,
                 height: artboard.height,
@@ -720,6 +778,13 @@ export function ViewerPreview({
                   const runtimeVisual = runtimeVisualForElement(
                     element.interactions,
                     runtime,
+                    {
+                      center: {
+                        x: element.x + element.width / 2,
+                        y: element.y + element.height / 2,
+                      },
+                      pointer: pagePointer,
+                    },
                   );
                   return (
                     <div
