@@ -429,6 +429,46 @@ export function EditorShell({
       x: artboard.width / 2 - size / 2,
       y: artboard.height / 2 - size / 2 + 240,
     });
+    addElement({
+      cornerRadius: 8,
+      fill: "#ff2d95",
+      height: size,
+      id: "interaction-demo-fx",
+      interactions: [
+        createDefaultInteraction({
+          duration: 0.3,
+          effect: "shadow",
+          id: "interaction-demo-fx-shadow",
+          name: "Lift on hover",
+          shadowBlur: 32,
+          shadowColor: "rgba(0, 0, 0, 0.4)",
+          shadowX: 0,
+          shadowY: 20,
+          trigger: "hover",
+        }),
+        createDefaultInteraction({
+          duration: 0.3,
+          effect: "skew",
+          id: "interaction-demo-fx-skew",
+          name: "Skew on click",
+          skewX: 16,
+          skewY: 0,
+          trigger: "click-tap",
+        }),
+      ],
+      locked: false,
+      name: "FX Demo",
+      opacity: 100,
+      rotation: 0,
+      stroke: "transparent",
+      strokeStyle: "none",
+      strokeWidth: 0,
+      type: "rectangle",
+      visible: true,
+      width: size,
+      x: artboard.width / 2 - size / 2 - 320,
+      y: artboard.height / 2 - size / 2 + 240,
+    });
   }, [addElement, artboard.height, artboard.width, elements]);
   const backgroundMusicSettings: BackgroundMusicSettings = {
     ...defaultBackgroundMusicSettings,

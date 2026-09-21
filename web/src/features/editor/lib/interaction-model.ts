@@ -59,6 +59,13 @@ export type InteractionDefinition = {
   scaleY: number;
   rotateTo: number;
   opacityTo: number;
+  skewX: number;
+  skewY: number;
+  blurAmount: number;
+  shadowColor: string;
+  shadowX: number;
+  shadowY: number;
+  shadowBlur: number;
   bridgeWidth: number;
   liquidSmoothness: number;
   affectedObjects: string;
@@ -162,6 +169,13 @@ export function createDefaultInteraction(
     scaleY: 120,
     rotateTo: 45,
     opacityTo: 40,
+    skewX: 12,
+    skewY: 0,
+    blurAmount: 6,
+    shadowColor: "rgba(0, 0, 0, 0.35)",
+    shadowX: 0,
+    shadowY: 12,
+    shadowBlur: 24,
     bridgeWidth: 50,
     liquidSmoothness: 60,
     affectedObjects: "selected",

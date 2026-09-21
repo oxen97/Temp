@@ -18,6 +18,7 @@ import { textStyleForElement } from "@/features/editor/lib/element-style";
 import { clamp } from "@/features/editor/lib/geometry";
 import {
   activeTransition,
+  composeFilter,
   composeTransform,
   type ElementRuntimeState,
   hasRuntimeInteractions,
@@ -933,6 +934,7 @@ export function ViewerPreview({
                         scrollStopTimersRef.current.set(element.id, timer);
                       }}
                       style={{
+                        filter: composeFilter(runtimeVisual),
                         height: element.height,
                         left: element.x,
                         opacity: runtimeVisual.opacity ?? element.opacity / 100,

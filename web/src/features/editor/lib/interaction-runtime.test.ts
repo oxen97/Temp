@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { createDefaultInteraction } from "@/features/editor/lib/interaction-model";
 import {
   activeTransition,
+  composeFilter,
   composeTransform,
   easingToCss,
   hasRuntimeInteractions,
@@ -282,7 +283,68 @@ describe("interaction runtime", () => {
   it("composes a transform string with the base rotation", () => {
     expect(
       composeTransform(30, { ...IDENTITY_VISUAL, tx: 5, ty: 6, rotate: 15 }),
-    ).toBe("translate(5px, 6px) rotate(45deg) scale(1, 1)");
+    ).toBe("translate(5px, 6px) rotate(45deg) scale(1, 1) skew(0deg, 0deg)");
+  });
+
+  it("applies skew, blur, and shadow effects and composes a filter", () => {
+    const skew = runtimeVisualForElement(
+      [
+        createDefaultInteraction({
+          trigger: "hover",
+          effect: "skew",
+          skewX: 20,
+          skewY: 5,
+        }),
+      ],
+      { ...IDLE_RUNTIME_STATE, hovering: true },
+    );
+    expect(skew.skewX).toBe(20);
+    expect(skew.skewY).toBe(5);
+
+    const blur = runtimeVisualForElement(
+      [
+        createDefaultInteraction({
+          trigger: "hover",
+          effect: "blur",
+          blurAmount: 8,
+        }),
+      ],
+      { ...IDLE_RUNTIME_STATE, hovering: true },
+    );
+    expect(blur.blur).toBe(8);
+    expect(composeFilter(blur)).toBe("blur(8px)");
+
+    const shadow = runtimeVisualForElement(
+      [
+        createDefaultInteraction({
+          trigger: "hover",
+          effect: "shadow",
+          shadowColor: "#000",
+          shadowX: 0,
+          shadowY: 10,
+          shadowBlur: 20,
+        }),
+      ],
+      { ...IDLE_RUNTIME_STATE, hovering: true },
+    );
+    expect(shadow.shadow).toBe("drop-shadow(0px 10px 20px #000)");
+    expect(composeFilter(shadow)).toBe("drop-shadow(0px 10px 20px #000)");
+
+    expect(composeFilter(IDENTITY_VISUAL)).toBeUndefined();
+  });
+
+  it("scales blur by intensity for a scrubbed drag", () => {
+    const blur = createDefaultInteraction({
+      trigger: "drag",
+      effect: "blur",
+      blurAmount: 10,
+      trackDistance: 100,
+    });
+    const half = runtimeVisualForElement([blur], {
+      ...IDLE_RUNTIME_STATE,
+      drag: { dx: 50, dy: 0 },
+    });
+    expect(half.blur).toBeCloseTo(5);
   });
 
   it("falls back to a safe easing and disables transition while dragging", () => {

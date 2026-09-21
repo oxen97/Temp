@@ -25,6 +25,10 @@ export type RuntimeVisual = {
   rotate: number;
   scaleX: number;
   scaleY: number;
+  skewX: number;
+  skewY: number;
+  blur: number;
+  shadow: string | null;
   opacity: number | null;
 };
 
@@ -34,6 +38,10 @@ export const IDENTITY_VISUAL: RuntimeVisual = {
   rotate: 0,
   scaleX: 1,
   scaleY: 1,
+  skewX: 0,
+  skewY: 0,
+  blur: 0,
+  shadow: null,
   opacity: null,
 };
 
@@ -140,6 +148,26 @@ export function accumulateEffect(
       return {
         ...visual,
         opacity: 1 + (clamp01(interaction.opacityTo / 100) - 1) * intensity,
+      };
+    case "skew":
+      return {
+        ...visual,
+        skewX: visual.skewX + interaction.skewX * intensity,
+        skewY: visual.skewY + interaction.skewY * intensity,
+      };
+    case "blur":
+      return {
+        ...visual,
+        blur: visual.blur + Math.max(0, interaction.blurAmount) * intensity,
+      };
+    case "shadow":
+      return {
+        ...visual,
+        shadow: `drop-shadow(${interaction.shadowX * intensity}px ${
+          interaction.shadowY * intensity
+        }px ${Math.max(0, interaction.shadowBlur * intensity)}px ${
+          interaction.shadowColor
+        })`,
       };
     default:
       return visual;
@@ -248,7 +276,7 @@ export function activeTransition(
   );
   const duration = active ? Math.max(0, active.duration) : 0.3;
   const easing = active ? easingToCss(active.easing) : "ease-out";
-  return `transform ${duration}s ${easing}, opacity ${duration}s ${easing}`;
+  return `transform ${duration}s ${easing}, opacity ${duration}s ${easing}, filter ${duration}s ${easing}`;
 }
 
 export function composeTransform(
@@ -257,7 +285,17 @@ export function composeTransform(
 ): string {
   return `translate(${visual.tx}px, ${visual.ty}px) rotate(${
     baseRotation + visual.rotate
-  }deg) scale(${visual.scaleX}, ${visual.scaleY})`;
+  }deg) scale(${visual.scaleX}, ${visual.scaleY}) skew(${visual.skewX}deg, ${
+    visual.skewY
+  }deg)`;
+}
+
+/** CSS `filter` value for blur/shadow effects, or undefined when neither applies. */
+export function composeFilter(visual: RuntimeVisual): string | undefined {
+  const parts: string[] = [];
+  if (visual.blur > 0) parts.push(`blur(${visual.blur}px)`);
+  if (visual.shadow) parts.push(visual.shadow);
+  return parts.length ? parts.join(" ") : undefined;
 }
 
 /** Does the element have any interaction this runtime slice can play? */
