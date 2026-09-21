@@ -11,8 +11,9 @@
  * continuous trigger that either repositions the element (drag + move: follow
  * the pointer 1:1 and stay where dropped) or scrubs an effect proportionally to
  * drag progress (drag + rotate/scale/opacity, mapped by `trackDistance`).
- * Also `after-delay` (fires once after `timeSeconds`, auto-play) and
- * `pointer-move` (follows / reacts to the cursor over the stage).
+ * Also `after-delay` (fires once after `timeSeconds`, auto-play),
+ * `pointer-move` (follows / reacts to the cursor over the stage), and
+ * `scroll-swipe` (wheel distance scrubs the effect, mapped by `trackDistance`).
  * Effects: `move`, `rotate`, `scale`, `opacity`. Physics motions
  * (spring/inertia/bounce), collision, and 3D-object interactions are handled by
  * later runtime phases; unsupported triggers/effects are simply inert here.
@@ -56,6 +57,8 @@ export type ElementRuntimeState = {
   dragOffset: { x: number; y: number };
   /** True once an `after-delay` timer has elapsed. */
   timed: boolean;
+  /** Accumulated wheel/scroll distance in px for `scroll-swipe`. */
+  scroll: number;
 };
 
 export const IDLE_RUNTIME_STATE: ElementRuntimeState = {
@@ -64,6 +67,7 @@ export const IDLE_RUNTIME_STATE: ElementRuntimeState = {
   drag: null,
   dragOffset: { x: 0, y: 0 },
   timed: false,
+  scroll: 0,
 };
 
 /** Triggers this runtime slice can play. */
@@ -73,6 +77,7 @@ export const RUNTIME_TRIGGERS = [
   "drag",
   "after-delay",
   "pointer-move",
+  "scroll-swipe",
 ] as const;
 
 /**
@@ -101,6 +106,8 @@ export function isRuntimeInteractionActive(
       return state.drag !== null;
     case "after-delay":
       return state.timed;
+    case "scroll-swipe":
+      return state.scroll > 0;
     default:
       return false;
   }
@@ -195,6 +202,8 @@ export function interactionIntensity(
     }
     case "after-delay":
       return state.timed ? 1 : 0;
+    case "scroll-swipe":
+      return clamp01(state.scroll / Math.max(1, interaction.trackDistance));
     default:
       return 0;
   }

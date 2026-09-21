@@ -916,7 +916,7 @@ export function ViewerPreview({
                           pointer.y <= rect.bottom;
                         if (!inside) setInteractionHover(element, false);
                       }}
-                      onWheel={() => {
+                      onWheel={(event) => {
                         playInteractionEvent(
                           element,
                           "scroll",
@@ -932,6 +932,21 @@ export function ViewerPreview({
                           stopContinuousInteraction(element.id, "scroll");
                         }, 150);
                         scrollStopTimersRef.current.set(element.id, timer);
+                        if (
+                          (element.interactions ?? []).some(
+                            (interaction) =>
+                              interaction.enabled !== false &&
+                              interaction.trigger === "scroll-swipe",
+                          )
+                        ) {
+                          mutateRuntimeState(element.id, (state) => ({
+                            ...state,
+                            scroll: Math.min(
+                              5000,
+                              Math.max(0, state.scroll + event.deltaY),
+                            ),
+                          }));
+                        }
                       }}
                       style={{
                         filter: composeFilter(runtimeVisual),

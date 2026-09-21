@@ -201,6 +201,28 @@ describe("interaction runtime", () => {
     expect(hasRuntimeInteractions([timed])).toBe(true);
   });
 
+  it("maps scroll-swipe distance to effect intensity", () => {
+    const scroll = createDefaultInteraction({
+      trigger: "scroll-swipe",
+      effect: "rotate",
+      rotateTo: 90,
+      trackDistance: 200,
+    });
+    expect(runtimeVisualForElement([scroll], IDLE_RUNTIME_STATE).rotate).toBe(
+      0,
+    );
+    const half = runtimeVisualForElement([scroll], {
+      ...IDLE_RUNTIME_STATE,
+      scroll: 100,
+    });
+    expect(half.rotate).toBeCloseTo(45);
+    const full = runtimeVisualForElement([scroll], {
+      ...IDLE_RUNTIME_STATE,
+      scroll: 400,
+    });
+    expect(full.rotate).toBeCloseTo(90);
+  });
+
   it("makes pointer-move follow the cursor, bounded by moveX/Y", () => {
     const follow = createDefaultInteraction({
       trigger: "pointer-move",

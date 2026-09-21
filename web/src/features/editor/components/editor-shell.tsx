@@ -469,6 +469,34 @@ export function EditorShell({
       x: artboard.width / 2 - size / 2 - 320,
       y: artboard.height / 2 - size / 2 + 240,
     });
+    addElement({
+      cornerRadius: 8,
+      fill: "#30d5c8",
+      height: size,
+      id: "interaction-demo-scroll",
+      interactions: [
+        createDefaultInteraction({
+          effect: "rotate",
+          id: "interaction-demo-scroll-rotate",
+          name: "Scroll to rotate",
+          rotateTo: 180,
+          trackDistance: 600,
+          trigger: "scroll-swipe",
+        }),
+      ],
+      locked: false,
+      name: "Scroll Demo",
+      opacity: 100,
+      rotation: 0,
+      stroke: "transparent",
+      strokeStyle: "none",
+      strokeWidth: 0,
+      type: "rectangle",
+      visible: true,
+      width: size,
+      x: artboard.width / 2 - size / 2 + 320,
+      y: artboard.height / 2 - size / 2 + 240,
+    });
   }, [addElement, artboard.height, artboard.width, elements]);
   const backgroundMusicSettings: BackgroundMusicSettings = {
     ...defaultBackgroundMusicSettings,
