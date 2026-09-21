@@ -19,7 +19,10 @@ export default defineConfig({
         // Rapier ships a large inlined-WASM "compat" build that breaks
         // vitest's dependency scan. Keep it external; the physics runtime is
         // loaded lazily at runtime and verified in the browser, not in vitest.
-        external: ["@dimforge/rapier2d-compat"],
+        external: [
+          "@dimforge/rapier2d-compat",
+          "@dimforge/rapier3d-compat",
+        ],
       },
     },
   },
