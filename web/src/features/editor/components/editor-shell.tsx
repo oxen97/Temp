@@ -301,6 +301,16 @@ export function EditorShell({
     });
     torus.material.color = "#ff8c67";
     torus.transform.rotation = { x: 55, y: 12, z: 8 };
+    torus.interactions = [
+      createDefaultInteraction({
+        bounciness: 45,
+        effect: "move",
+        id: "three-demo-torus-drop",
+        motion: "gravity",
+        name: "Drop on click",
+        trigger: "click-tap",
+      }),
+    ];
     addObject3D(torus);
     // A 2D platform the falling 3D sphere lands on (hybrid 2D<->3D collision).
     addElement({

@@ -1,7 +1,16 @@
 "use client";
 
-import { Canvas, useFrame, useThree } from "@react-three/fiber";
-import { type ThreeEvent } from "@react-three/fiber";
+import {
+  Canvas,
+  events as createPointerEvents,
+  useFrame,
+  useThree,
+} from "@react-three/fiber";
+import {
+  type DomEvent,
+  type RootState,
+  type ThreeEvent,
+} from "@react-three/fiber";
 import {
   Box3,
   type BoxHelper,
@@ -39,6 +48,7 @@ import {
 } from "@/features/editor/lib/interaction-runtime";
 import {
   projectObjectToScreen,
+  screenPointToNdc,
   spatialTransformToWorld,
   type ProjectedBounds,
 } from "@/features/editor/three/coordinate-system";
@@ -57,6 +67,30 @@ import {
  * inside the Canvas so it crosses the R3F reconciler boundary to ObjectGroup.
  */
 const Interactive3DContext = createContext(false);
+
+/**
+ * R3F's default pointer `compute` maps clicks with `event.offsetX / size.width`.
+ * When an ancestor applies a CSS `transform: scale()` — as the viewer preview
+ * does to fit the artboard — `offsetX` stays in the element's unscaled local
+ * space while the measured `size` is the scaled visual size, so the two desync
+ * and every ray misses (3D interactions never fire on click). Recompute the
+ * pointer from `clientX/Y` against the live bounding rect instead: both are in
+ * the same scaled screen space, so the ratio is correct at any scale.
+ */
+const scaledPointerEvents = (
+  store: Parameters<typeof createPointerEvents>[0],
+) => {
+  const manager = createPointerEvents(store);
+  return {
+    ...manager,
+    compute: (event: DomEvent, state: RootState) => {
+      const rect = state.gl.domElement.getBoundingClientRect();
+      const ndc = screenPointToNdc(event.clientX, event.clientY, rect);
+      state.pointer.set(ndc.x, ndc.y);
+      state.raycaster.setFromCamera(state.pointer, state.camera);
+    },
+  };
+};
 
 type Physics3DApi = {
   readouts: Map<string, Physics3DReadout>;
@@ -598,6 +632,7 @@ export function Artboard3DScene({
           zoom: 1,
         }}
         dpr={[1, 2]}
+        events={scaledPointerEvents}
         flat
         frameloop={usesPhysics ? "always" : "demand"}
         gl={{ alpha: true, antialias: true }}
