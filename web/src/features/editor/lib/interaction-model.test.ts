@@ -84,6 +84,7 @@ describe("interaction model", () => {
       { id: "a", trigger: "hover" },
       null,
       "bad",
+      [],
       { id: "b" },
     ]);
     expect(list).toHaveLength(2);

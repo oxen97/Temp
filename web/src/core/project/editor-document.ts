@@ -3,6 +3,7 @@ import {
   migrateProject,
   type CurrentExhibitionProject,
 } from "@/core/project/schema";
+import { normalizeInteractions } from "@/features/editor/lib/interaction-model";
 import type {
   ArtboardSettings,
   CanvasElement,
@@ -78,8 +79,23 @@ function hydratePage(
   const page = cloneSerializable(scene) as unknown as EditorPage;
   return {
     ...page,
-    elements: cloneSerializable(scene.elements) as CanvasElement[],
-    objects3d: cloneSerializable(scene.objects3d) as Object3DElement[],
+    elements: cloneSerializable(scene.elements).map((rawElement) => {
+      const element = rawElement as CanvasElement;
+      return element && typeof element === "object" && "interactions" in element
+        ? {
+            ...element,
+            interactions: normalizeInteractions(element.interactions),
+          }
+        : element;
+    }),
+    objects3d: cloneSerializable(scene.objects3d).map((object) =>
+      object.interactions === undefined
+        ? object
+        : {
+            ...object,
+            interactions: normalizeInteractions(object.interactions),
+          },
+    ) as Object3DElement[],
     scene3d: resolveScene3DSettings(scene.scene3d),
   };
 }

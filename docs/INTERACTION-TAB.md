@@ -6,9 +6,11 @@
 
 ## 현재 상태
 
-- **UI 프리뷰만 구현됨.** 모든 상태는 `interaction-panel.tsx`
-  컴포넌트 로컬이며 **스토어에 아무것도 저장하지 않고, 뷰어 런타임도 없다.**
-  목록의 인터랙션 4개(Move/Scale/Opacity/Show·Hide)는 하드코딩 샘플이다.
+- **패널과 런타임의 연결은 아직 없음.** 현재 `interaction-panel.tsx`의 설정은
+  컴포넌트 로컬 샘플이며, 패널에서 바꾼 값은 에디터 스토어의 인터랙션 데이터나
+  뷰어에 반영되지 않는다. 다만 `InteractionDefinition` 모델, 요소별 스토어
+  조작과 일부 인터랙션을 재생하는 독립 뷰어 런타임은 이미 구현됐다. 즉
+  "패널에서 설정 불가"와 "런타임 자체가 없음"을 혼동하지 않는다.
 - **2026-09-19 UI 추가**: 근접한 두 도형의 `Liquid Merge`와 충돌 시
   `Bounce Off Target` 설정 필드를 추가했다. 상대 요소 목록은 현재 페이지의
   실제 레이어를 사용하지만, 설정 저장·뷰어 렌더링·충돌 물리는 여전히 미연결이다.
@@ -20,17 +22,23 @@
   모프·Bone·Joint·Mesh·Face Group, 3D Reset scope와 Rigid body/Collider/
   Constraint/Blending 설정을 표시한다. 2D 요소도 3D 요소가 같은 Scene에 있으면
   Z·Depth를 가진 충돌 프록시로 실제 2D↔3D 물리 충돌을 기획할 수 있다.
-  **이 확장도 현재는 패널 로컬 상태를 바꾸는 UI 프리뷰이며, 인터랙션 데이터
-  저장과 뷰어 실행은 아직 연결하지 않았다.**
+  **이 확장도 현재는 패널 로컬 상태를 바꾸는 UI 프리뷰다. 아래의 제한된
+  런타임 구현과 패널의 전체 기획 항목은 아직 연결되지 않았다.**
 - **3D Scene 기반은 별도로 구현됨**: 페이지의 `objects3d`/`scene3d`, 3D
   프리미티브·벡터 변환·GLB 데이터 모델, WebGL 렌더링, 선택, 프로젝트 문서
-  직렬화와 GLB IndexedDB 저장 기반은 존재한다. 따라서 "3D 오브젝트가
-  보이고 선택되는 것"과 "Interaction 설정이 실제로 실행되는 것"을 구분해야
-  한다. 전자는 구현됐고, 후자는 아직 UI 프리뷰다.
-- **3D UI 확인용 데모**: 로컬에서는 URL에 `?threeDemo=1`을 붙인다. GitHub
-  Pages 빌드는 `NEXT_PUBLIC_ENABLE_3D_DEMO=1`을 사용하므로 빈 Scene에 Demo
-  Box·Sphere·Torus가 자동 생성된다. 이 플래그는 검증용이며 일반 프로젝트
-  기본 데이터가 아니다.
+  직렬화와 GLB IndexedDB 저장 기반은 존재한다. 3D 장면의 일부 호버·클릭
+  변형 및 중력/바운스, 정적 2D 프록시와 3D 바디의 접촉도 뷰어에서 동작한다.
+  하지만 패널의 모든 3D Trigger/Effect를 실행하는 것은 아니다.
+- **제한된 런타임 기반**: `interaction-model.ts`가 패널·스토어·뷰어의 공통
+  데이터 타입을 제공한다. 뷰어는 2D Click/Tap, Hover, Drag, After Delay,
+  Pointer Move, Scroll/Swipe 트리거와 Move, Rotate, Scale, Opacity, Skew,
+  Blur, Shadow, Show/Hide, Shake 효과의 일부 조합을 재생한다. Rapier 2D/3D
+  중력·바운스 및 2D↔3D 정적 충돌 프록시는 별도 경로다. 전체 조건표,
+  충돌 이벤트, 우선순위, 키프레임, Logic 연동은 아직 런타임과 연결되지 않았다.
+- **배포 시 데모 자동 생성 없음**: `?threeDemo=1`과
+  `?interactionDemo=1`은 더 이상 샘플 객체를 생성하지 않으며 Pages 빌드에도
+  데모 활성화 플래그를 사용하지 않는다. 3D GLB/GLTF 업로드 버튼도 UI 확정
+  전에는 제외한다. 모델 파일 처리와 장면 렌더링 기반 코드는 유지된다.
 - **정밀 Keyframe 편집기 UI 추가**: 2D/3D Position·Rotation·Scale·Opacity,
   Material, Morph Target 트랙과 키프레임 추가·복제·삭제, 시간·값·Easing,
   재생 헤드와 확대/축소를 별도 전체 화면 편집기에서 조절한다.
@@ -255,7 +263,8 @@ Target: A).
 
 기존 HOW의 `Bounce`는 목표 위치의 끝점 반동이며, 위의 물체 간 충돌
 반동과 다르다. 두 효과 모두 현재는 **선택·숫자 변경 UI만 가능**하다.
-뷰어의 합성 렌더러·충돌 물리와 저장 모델은 후속 구현 대상이다.
+두 효과의 합성 렌더러·충돌 이벤트/반응 런타임과 패널 설정 저장은 후속 구현
+대상이다. 이는 별도로 구현된 Rapier 중력·바운스 기반과 구분한다.
 두 효과는 Effect 목록의 기존 항목 아래에 둔다. 해당 Collision 트리거에서
 Effect 메뉴를 열면 아래쪽으로 자동 스크롤하여 항목이 바로 보이게 한다.
 
@@ -387,11 +396,12 @@ Trigger는 같은 Scene에 두 종류가 있을 때 2D 또는 3D 단일 선택�
 에디터 탐색 카메라는 계속 정면 고정이며, Camera Effect는 관람 Preview의 작품
 카메라를 애니메이션한다. 좌표 공간·회전·물리는 해당 오브젝트에 적용된다.
 
-> 현재 구현 범위: 아래 필드를 조건부로 표시하고 값을 바꿀 수 있으며, GLB
+> 패널 구현 범위: 아래 필드를 조건부로 표시하고 값을 바꿀 수 있으며, GLB
 > 메타데이터를 읽어 선택지를 채운다. 값은 `interaction-panel.tsx`의 로컬
-> 상태이므로 선택을 벗어나거나 새로고침하면 유지되지 않는다. 실제 충돌 감지,
-> 물리 시뮬레이션, 애니메이션 믹싱, 셰이더 변경과 프로젝트 저장은 아직 하지
-> 않는다.
+> 상태이므로 선택을 벗어나거나 새로고침하면 유지되지 않는다. 별도로 구현된
+> Rapier 기반 중력·바운스 및 2D↔3D 정적 프록시 충돌은 이 패널 값과 아직
+> 연결되지 않았다. 기획된 충돌 이벤트, 애니메이션 믹싱, 셰이더 변경,
+> 패널 설정 저장도 후속 범위다.
 
 ### 3D WHEN — 물리 충돌과 모델 애니메이션
 
@@ -511,28 +521,27 @@ Friction, Bounciness 같은 물리 반응값은 감지 결과에 영향을 주�
 ## 스코프에서 제외한 것 (의도적)
 
 - 입력: 카메라 · 마이크(음성) · 키보드 · ML 인식 — 장기 로드맵 후보(전시 센서 입력)
-- 인터랙션 런타임: 2D/3D 충돌 해석·스태킹 안정화·실제 마찰·밀기,
-  Mapping 계산, Effect 실행과 Reset 복귀 (현재 설정 UI만 있음)
+- 인터랙션 런타임의 나머지: 기획된 2D/3D 충돌 이벤트·스태킹 안정화·마찰·밀기,
+  전체 Mapping/Effect 조합과 Reset 복귀 (일부 2D 효과와 중력·바운스 기반만 동작)
 - 3D 인터랙션용 메타볼/Liquid Merge 셰이더, 런타임 애니메이션 믹싱·Root motion,
   재질·모프 애니메이션, 입력 기록·역재생
 
 ## 다음 구현 단계 가이드 (기능 구현 시)
 
-1. **데이터 모델**: 페이지 레벨 목록 + `targetElementIds` 참조 구조 권장
-   (감지 주체 ≠ 적용 대상인 Collision, Multi 선택의 Group Animation 때문).
-   UI는 지금처럼 선택 요소 기준으로 필터해 보여주면 된다.
-   트리거 enum은 SOUND 탭 `InteractionSoundTrigger`와 통일할 것.
-2. **뷰어 런타임**: `viewer-preview.tsx`에 인터랙션 그래프 추가.
-   연속 매핑은 rAF 프레임마다 대상 노드 transform 직접 조작
-   (드래그 프리뷰 `lib/dom-preview.ts`와 같은 패턴). 원본 스토어는 절대 쓰지 않는다.
-3. **2D 충돌 판정**: AABB 우선 → 겹칠 때만 `lib/pathfinder.ts` 외곽선 교차.
+1. **패널 연결**: 로컬 샘플 상태를 기존 `InteractionDefinition`과 요소별
+   스토어 조작에 연결한다. Collision/Multi 선택을 위한 감지 주체·적용 대상
+   참조 구조를 확정하고 SOUND 탭 Trigger 어휘와 통일한다.
+2. **뷰어 런타임 확장**: `viewer-preview.tsx`의 기존 2D 트리거·효과 평가기에
+   조건표, Reset, 우선순위, 키프레임을 단계적으로 추가한다. 관람 효과는
+   런타임 상태에서만 계산하고 원본 요소 속성은 변경하지 않는다.
+3. **2D 충돌 이벤트**: AABB 우선 → 겹칠 때만 `lib/pathfinder.ts` 외곽선 교차.
    참여 요소만 검사.
-4. **3D 충돌·애니메이션 런타임**: 동일한 Object3D 식별자를 사용하는 물리
-   World를 만들고 Collider broad phase → shape 접촉 순으로 판정한다. GLB
-   AnimationMixer와 물리 body의 생명주기는 페이지 진입/이탈에 맞춰 생성·해제한다.
-5. **저장 모델**: 로컬 폼 상태를 `InteractionDefinition` 스키마로 옮기고,
-   2D 전용 필드는 그대로 둔 채 3D 전용 설정은 판별 가능한 하위 객체로 저장한다.
-   구버전 문서는 기본값을 채우는 migration을 거친다.
+4. **3D 충돌·애니메이션 확장**: 기존 Rapier 3D World와 2D 정적 프록시에
+   기획된 충돌 이벤트·물체 간 반응을 연결한다. GLB AnimationMixer와 물리
+   body의 생명주기는 페이지 진입/이탈에 맞춰 생성·해제한다.
+5. **저장 정책**: 공통 `InteractionDefinition`을 패널과 연결하되 프로젝트
+   저장·로드/IndexedDB 정책은 별도 결정 후 통합한다. 구버전 문서 migration을
+   검증하고 3D 전용 설정은 판별 가능한 하위 객체로 저장한다.
 6. **알려진 이슈**: e2e `editor.spec.ts` "draws a shape on the canvas outside
    the artboard"는 드래그 커밋 직후 boundingBox 샘플링 타이밍에 민감한
    기존 측정 레이스로, 번들 크기가 바뀌면 실패할 수 있음(테스트 위 주석 참고).
@@ -794,11 +803,14 @@ undo/redo, IndexedDB 저장, viewer runtime 평가기와 연결해야 한다.
 | 아트보드 WebGL 렌더·선택 | `components/canvas/artboard-3d-scene.tsx` |
 | 페이지별 3D 상태·선택·Undo/Redo | `store/editor-store.ts` |
 | 프로젝트 저장 스키마·복원 | `core/project/schema.ts`, `core/project/editor-document.ts` |
+| 인터랙션 공통 데이터 모델·기본값 | `lib/interaction-model.ts` |
+| 2D 뷰어 트리거·효과 평가 | `lib/interaction-runtime.ts`, `components/viewer/viewer-preview.tsx` |
+| Rapier 2D·3D 물리 기반 | `lib/interaction-physics.ts`, `lib/interaction-physics-3d.ts` |
 | 3D Trigger/Mapping/Effect 허용 정책 | `components/panels/interaction-panel-policy.ts` |
 | Interaction 조건부 폼 | `components/panels/interaction-panel.tsx` |
 | 정밀 타임라인 UI | `components/panels/keyframe-timeline-editor.tsx` |
 | Scene 분기 이벤트 UI | `components/panels/logic-panel.tsx` |
-| 데모 생성·2D/3D 선택 연결 | `components/editor-shell.tsx` |
+| 에디터 2D/3D 선택 연결 | `components/editor-shell.tsx` |
 
 `Object3DElement`의 `source`는 세 종류다.
 
@@ -823,38 +835,27 @@ group, Morph Target 이름을 import 시 메타데이터로 추출한다. 단, �
 - GLB 전용 Trigger/Effect는 단순히 3D라는 이유만으로 표시하지 않는다.
   선택한 asset의 메타데이터에 실제 Animation/Bone/Joint/Mesh/Material/Morph가
   있을 때만 해당 항목을 표시한다.
-- Demo Box/Sphere/Torus는 `primitive`이므로 Collision·XYZ·공간 Transform·3D
-  Physics는 확인할 수 있지만, GLB clip/Bone/Joint/Mesh 전용 목록은 보이지 않는
-  것이 정상이다.
+- `primitive`를 선택하면 Collision·XYZ·공간 Transform·3D Physics 기획 UI는
+  볼 수 있지만, GLB clip/Bone/Joint/Mesh 전용 목록은 보이지 않는 것이 정상이다.
 - GLB blob과 메타데이터는 브라우저 IndexedDB의 로컬 프로젝트에 저장된다. 한
-  PC에서 import한 GLB는 GitHub Pages나 다른 PC로 자동 공유되지 않는다. 공개
-  데모에서 GLB hierarchy 전용 UI를 검증하려면 추후 업로드 UI를 연결하거나,
-  별도의 배포용 fixture asset/metadata를 제공해야 한다.
+  PC에서 import한 GLB는 GitHub Pages나 다른 PC로 자동 공유되지 않는다.
+  GLB hierarchy 전용 UI를 검증하려면 추후 업로드 UI를 연결하거나, 별도의
+  테스트 fixture asset/metadata를 제공해야 한다.
 - 2D와 3D 혼합 다중 선택에서는 두 종류에 안전한 공통 항목만 보여준다. 3D
   전용 Bone/Material/Collider 값을 혼합 선택에 일괄 적용하지 않는다.
 
-### B-4. GitHub Pages와 로컬에서 확인하는 방법
+### B-4. GitHub Pages와 로컬 확인 범위
 
-**GitHub Pages**
+Pages와 로컬 개발 서버 모두 빈 Scene에 샘플 2D/3D 객체를 자동 생성하지
+않는다. `?threeDemo=1`·`?interactionDemo=1` URL도 더 이상 데모를 켜지
+않는다. GLB 업로드 UI와 Interaction 패널→런타임 연결 역시 후속 작업이므로,
+새 빈 프로젝트의 UI만으로 3D 인터랙션 런타임 전체를 시연할 수는 없다.
 
-1. Pages workflow가 `NEXT_PUBLIC_ENABLE_3D_DEMO=1`로 빌드된다.
-2. 빈 Scene으로 접속하면 아트보드 중앙에 보라 Box, 파란 Sphere, 주황 Torus가
-   생성된다.
-3. 원하는 3D 오브젝트를 클릭한다. 보라색 선택 Box가 나타나야 한다.
-4. 오른쪽 `INTERACTION` 탭을 연다.
-5. WHEN의 3D Physics 그룹에서 `Collision Enter / While Colliding /
-   Collision Exit`, DO에서 XYZ Transform과 Spatial 항목, RESET/ADVANCED에서
-   3D scope와 Rigid body/Collider 설정을 확인한다.
-
-**로컬 개발 서버**
-
-1. `web`에서 개발 서버를 실행한다.
-2. `http://localhost:3000/?threeDemo=1`로 접속한다.
-3. 이후 확인 순서는 Pages와 같다. 이미 페이지에 3D 오브젝트가 있으면 데모는
-   중복 생성하지 않는다.
-
-데모 생성 코드는 테스트 편의 기능이다. 실제 3D 생성/업로드 툴바가 완성되면
-Pages 기본 플래그를 제거하고 사용자가 만든 `objects3d`만 사용한다.
+기반을 검증할 때는 `interaction-model`, `interaction-runtime`,
+`interaction-physics`, `interaction-physics-3d`, `editor-store.interactions`
+테스트를 실행한다. 실제 요소/오브젝트에 유효한 `interactions`가 들어 있는
+테스트 fixture가 있으면 관람 Preview에서 지원되는 부분집합을 확인할 수
+있다. 기획 패널의 3D 조건부 필드와 런타임 동작은 별개로 검증한다.
 
 ### B-5. 현재 구현됨 / 아직 미구현
 
@@ -866,13 +867,18 @@ Pages 기본 플래그를 제거하고 사용자가 만든 `objects3d`만 사용
 - 아트보드와 Preview의 Three.js 렌더링, 조명, 그림자, 선택 Box
 - 프로젝트 문서의 `objects3d`/`scene3d` 직렬화·복원
 - 3D/하이브리드 선택에 따른 Interaction 조건부 UI와 타임라인·Logic UI
+- 요소별 `InteractionDefinition` 데이터 모델·스토어 조작·문서 정규화 기반
+- 뷰어의 2D Click/Tap·Hover·Drag·After Delay·Pointer Move·Scroll/Swipe와
+  Move·Rotate·Scale·Opacity·Skew·Blur·Shadow·Show/Hide·Shake 일부 조합
+- Rapier 2D/3D 중력·바운스 기반과 3D World의 정적 2D 충돌 프록시
 
 **아직 UI 기획·프리뷰 상태**
 
-- Interaction 설정의 프로젝트 저장, Undo/Redo, 복제·삭제의 실제 데이터 연결
+- Interaction 패널의 로컬 샘플 설정을 스토어·뷰어·Undo/Redo에 연결하고
+  프로젝트 저장·로드/IndexedDB 정책 확정
 - GLB import API를 호출하는 사용자용 업로드·재연결·삭제 UI
-- Trigger 감지와 Effect 실행, Reset, Conflict/Priority 평가기
-- 실제 2D↔3D/3D↔3D 물리 World와 Collision/Stack/Bounce 런타임
+- 나머지 Trigger·Effect 조합, Reset, Conflict/Priority 평가기
+- 기획된 충돌 Trigger 감지·물체 간 Bounce Off Target·Stack·Liquid Merge
 - Camera/Light/Shadow/Post Processing/Shader Effect의 관람 Preview 실행
 - GLB AnimationMixer, Crossfade/Root motion, Bone/Joint/Mesh/Face 런타임 제어
 - Liquid Merge 메타볼/셰이더, 정밀 Keyframe 재생기
@@ -885,7 +891,7 @@ Logic rule도 컴포넌트 로컬 상태다. Keyframe modal 역시 변경 콜백
 가정하면 안 된다. `Pick face in 3D object`도 현재 캔버스 picking을 시작하지 않는
 UI placeholder다.
 
-Interaction 런타임을 구현할 때는 에디터의 원본 `elements`/`objects3d`를 매
-프레임 수정하지 않는다. 관람 Preview에 별도의 runtime state와 Object3D 인스턴스를
-만들고, 페이지 이탈 시 AnimationMixer·Physics body·GPU resource·event listener를
-모두 해제해야 한다.
+기존 뷰어 런타임은 에디터의 원본 `elements`/`objects3d`를 매 프레임
+변경하지 않고 관람 Preview의 별도 상태·Object3D 인스턴스를 사용한다. 범위를
+확장할 때도 이 원칙을 유지하고, 페이지 이탈 시 AnimationMixer·Physics body·
+GPU resource·event listener를 모두 해제해야 한다.

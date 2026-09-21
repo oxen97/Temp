@@ -71,6 +71,52 @@ describe("editor store interactions", () => {
     expect(list?.[1].moveX).toBe(250);
   });
 
+  it("undoes and redoes an interaction edit without changing another interaction", () => {
+    useEditorStore
+      .getState()
+      .setInteractions("shape-1", [
+        createDefaultInteraction({ id: "int-1", moveX: 10 }),
+        createDefaultInteraction({ id: "int-2", moveX: 20 }),
+      ]);
+    useEditorStore
+      .getState()
+      .updateInteraction("shape-1", "int-2", { moveX: 250 });
+
+    expect(elementInteractions("shape-1")?.map((entry) => entry.moveX)).toEqual(
+      [10, 250],
+    );
+    useEditorStore.getState().undo();
+    expect(elementInteractions("shape-1")?.map((entry) => entry.moveX)).toEqual(
+      [10, 20],
+    );
+    useEditorStore.getState().redo();
+    expect(elementInteractions("shape-1")?.map((entry) => entry.moveX)).toEqual(
+      [10, 250],
+    );
+  });
+
+  it("does not record an edit when the target interaction is missing", () => {
+    const before = useEditorStore.getState();
+    before.updateInteraction("shape-1", "missing", { moveX: 250 });
+    expect(useEditorStore.getState()).toBe(before);
+  });
+
+  it("clones nested interaction data in undo snapshots", () => {
+    useEditorStore
+      .getState()
+      .addInteraction(
+        "shape-1",
+        createDefaultInteraction({ id: "int-1", stackObstacleIds: ["first"] }),
+      );
+    useEditorStore.getState().checkpoint();
+    elementInteractions("shape-1")?.[0].stackObstacleIds.push("later");
+
+    useEditorStore.getState().undo();
+    expect(elementInteractions("shape-1")?.[0].stackObstacleIds).toEqual([
+      "first",
+    ]);
+  });
+
   it("removes an interaction by id", () => {
     useEditorStore
       .getState()
@@ -109,16 +155,14 @@ describe("editor store interactions", () => {
   });
 
   it("persists interactions through the project document round trip", () => {
-    useEditorStore
-      .getState()
-      .addInteraction(
-        "shape-1",
-        createDefaultInteraction({
-          id: "int-1",
-          moveX: 42,
-          name: "Move on click",
-        }),
-      );
+    useEditorStore.getState().addInteraction(
+      "shape-1",
+      createDefaultInteraction({
+        id: "int-1",
+        moveX: 42,
+        name: "Move on click",
+      }),
+    );
     const state = useEditorStore.getState();
     const document = serializeEditorDocument({
       artboard: state.artboard,

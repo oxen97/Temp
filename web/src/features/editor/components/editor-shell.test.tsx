@@ -307,21 +307,6 @@ describe("EditorShell", () => {
     expect(screen.getByLabelText("Layers")).toBeEmptyDOMElement();
   });
 
-  it("offers a 3D asset tab and accepts GLB uploads", () => {
-    const { container } = render(<EditorShell />);
-
-    const threeDTab = screen.getByRole("tab", { name: "3D" });
-    expect(threeDTab).toHaveAttribute("aria-selected", "false");
-    fireEvent.click(threeDTab);
-    expect(threeDTab).toHaveAttribute("aria-selected", "true");
-
-    const uploadInput = container.querySelector(".asset-upload input");
-    expect(uploadInput).toHaveAttribute(
-      "accept",
-      "image/*,video/*,.glb,.gltf,model/gltf-binary",
-    );
-  });
-
   it("scales the editor chrome without changing the canvas zoom", async () => {
     render(<EditorShell />);
 
@@ -1705,6 +1690,13 @@ describe("EditorShell", () => {
           id: "preview-drag-move",
           trigger: "drag",
         }),
+        createDefaultInteraction({
+          effect: "scale",
+          id: "preview-hover-scale",
+          scaleX: 130,
+          scaleY: 130,
+          trigger: "hover",
+        }),
       ],
     };
     useEditorStore.setState({
@@ -1718,6 +1710,10 @@ describe("EditorShell", () => {
       .querySelector<HTMLElement>(`[data-element-id="${shape.id}"]`)!;
     expect(previewElement.classList.contains("is-draggable")).toBe(true);
     const beforeDrag = previewElement.style.transform;
+    fireEvent.pointerEnter(previewElement);
+    expect(previewElement.style.transform).not.toBe(beforeDrag);
+    fireEvent.pointerLeave(previewElement);
+    expect(previewElement.style.transform).toBe(beforeDrag);
 
     fireEvent.pointerDown(previewElement, {
       clientX: 100,

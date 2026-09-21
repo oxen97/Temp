@@ -1229,34 +1229,6 @@ input[type="number"] {
   background-size: cover;
 }
 
-.asset-grid .uploaded-asset--model {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 4px;
-  background: var(--canvas-fill);
-  cursor: pointer;
-}
-
-.asset-grid .uploaded-asset--model .uploaded-asset-label {
-  overflow: hidden;
-  width: 100%;
-  color: var(--text-secondary);
-  font-size: 8px;
-  line-height: 10px;
-  text-align: center;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.asset-upload-error {
-  margin: 0;
-  padding: 4px 13px 0 11px;
-  color: #d64545;
-  font-size: 9px;
-  line-height: 12px;
-}
-
 /* Interaction runtime: shake effect. Animates the standalone `translate`
    property so it combines with the composed `transform` instead of fighting it. */
 @keyframes interaction-shake {

@@ -264,6 +264,8 @@ export function normalizeInteraction(raw: unknown): InteractionDefinition {
 export function normalizeInteractions(raw: unknown): InteractionDefinition[] {
   if (!Array.isArray(raw)) return [];
   return raw
-    .filter((entry) => entry && typeof entry === "object")
+    .filter(
+      (entry) => entry && typeof entry === "object" && !Array.isArray(entry),
+    )
     .map((entry) => normalizeInteraction(entry));
 }

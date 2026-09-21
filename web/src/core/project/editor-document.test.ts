@@ -267,4 +267,111 @@ describe("editor document serialization", () => {
       soundMixer: source.scenes[0].soundMixer,
     });
   });
+
+  it("normalizes malformed 2D and 3D interactions on hydration without dropping other fields", () => {
+    const cube = createPrimitiveObject3D({
+      dimensions: { depth: 80, height: 100, width: 120 },
+      id: "cube-1",
+      name: "Cube 1",
+      position: { x: 100, y: 100, z: 0 },
+      primitive: "box",
+    });
+    const restored = hydrateEditorDocument({
+      artboard,
+      assets: [],
+      id: "project-interactions",
+      name: "Interactions",
+      scenes: [
+        {
+          customSceneField: "retained",
+          elements: [
+            {
+              customElementField: "retained",
+              id: "shape-1",
+              interactions: [
+                null,
+                [],
+                {
+                  id: "move-1",
+                  moveX: "invalid",
+                  trigger: "drag",
+                  futureField: 123,
+                },
+              ],
+              type: "rectangle",
+            },
+          ],
+          id: "scene-1",
+          name: "Scene 1",
+          objects3d: [
+            {
+              ...cube,
+              interactions: [
+                "invalid",
+                { id: "hover-1", scaleX: "invalid", trigger: "hover" },
+              ],
+            },
+          ],
+          scene3d: {
+            ambientLight: 1,
+            cameraPosition: { x: 0, y: 0, z: 1000 },
+            cameraTarget: { x: 0, y: 0, z: 0 },
+            enabled: true,
+            perspective: 35,
+            projection: "orthographic",
+          },
+        },
+      ],
+      schemaVersion: 2,
+      updatedAt: "2026-09-20T00:00:00.000Z",
+    });
+
+    expect(restored.pages[0]).toMatchObject({ customSceneField: "retained" });
+    const element = restored.pages[0].elements[0];
+    expect(element).toMatchObject({ customElementField: "retained" });
+    expect(element.interactions).toHaveLength(1);
+    expect(element.interactions?.[0]).toMatchObject({
+      id: "move-1",
+      moveX: 100,
+      trigger: "drag",
+    });
+    expect(element.interactions?.[0]).not.toHaveProperty("futureField");
+    expect(restored.pages[0].objects3d?.[0].interactions).toHaveLength(1);
+    expect(restored.pages[0].objects3d?.[0].interactions?.[0]).toMatchObject({
+      id: "hover-1",
+      scaleX: 120,
+      trigger: "hover",
+    });
+  });
+
+  it("treats a non-array 3D interaction list as empty instead of rejecting the project", () => {
+    const cube = createPrimitiveObject3D({
+      dimensions: { depth: 80, height: 100, width: 120 },
+      id: "cube-1",
+      name: "Cube 1",
+      position: { x: 100, y: 100, z: 0 },
+      primitive: "box",
+    });
+    const document = serializeEditorDocument({
+      artboard,
+      id: "project-1",
+      name: "Project",
+      pages: [
+        { elements: [], id: "scene-1", name: "Intro", objects3d: [cube] },
+      ],
+      updatedAt: "2026-09-20T00:00:00.000Z",
+    });
+    const restored = hydrateEditorDocument({
+      ...document,
+      scenes: document.scenes.map((scene) => ({
+        ...scene,
+        objects3d: scene.objects3d.map((object) => ({
+          ...object,
+          interactions: "invalid",
+        })),
+      })),
+    });
+
+    expect(restored.pages[0].objects3d?.[0].interactions).toEqual([]);
+  });
 });

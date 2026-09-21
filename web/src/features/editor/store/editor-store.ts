@@ -432,6 +432,9 @@ function clonePages(pages: EditorPage[]) {
         ...sound,
         assets: sound.assets.map((asset) => ({ ...asset })),
       })),
+      interactions: element.interactions
+        ? structuredClone(element.interactions)
+        : undefined,
     })),
   }));
 }
@@ -767,22 +770,32 @@ export const useEditorStore = create<EditorState>((set) => ({
       future: [],
     })),
   updateInteraction: (elementId, interactionId, updates) =>
-    set((state) => ({
-      pages: updateActivePage(state, (elements) =>
-        elements.map((element) =>
-          element.id === elementId
-            ? {
-                ...element,
-                interactions: (element.interactions ?? []).map((interaction) =>
-                  interaction.id === interactionId
-                    ? { ...interaction, ...updates }
-                    : interaction,
-                ),
-              }
-            : element,
+    set((state) => {
+      const page = state.pages.find((item) => item.id === state.activePageId);
+      const target = page?.elements.find((element) => element.id === elementId);
+      if (!target?.interactions?.some((item) => item.id === interactionId)) {
+        return state;
+      }
+      return {
+        pages: updateActivePage(state, (elements) =>
+          elements.map((element) =>
+            element.id === elementId
+              ? {
+                  ...element,
+                  interactions: (element.interactions ?? []).map(
+                    (interaction) =>
+                      interaction.id === interactionId
+                        ? { ...interaction, ...updates }
+                        : interaction,
+                  ),
+                }
+              : element,
+          ),
         ),
-      ),
-    })),
+        past: pushHistory(state),
+        future: [],
+      };
+    }),
   removeInteraction: (elementId, interactionId) =>
     set((state) => ({
       pages: updateActivePage(state, (elements) =>

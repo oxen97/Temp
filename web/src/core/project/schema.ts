@@ -80,7 +80,9 @@ export const object3DElementSchema = z.object({
     depth: z.number().positive(),
   }),
   id: z.string().min(1),
-  interactions: z.array(z.unknown()).optional(),
+  // Malformed legacy interaction lists must not invalidate an otherwise
+  // loadable scene. Entries are normalized at the editor hydration boundary.
+  interactions: z.array(z.unknown()).optional().catch([]),
   locked: z.boolean(),
   material: z.object({
     color: z.string().min(1),

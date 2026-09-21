@@ -95,7 +95,6 @@ import {
   type VectorPointRef,
 } from "@/features/editor/lib/editor-types";
 import { createElementId } from "@/features/editor/lib/element-id";
-import { createDefaultInteraction } from "@/features/editor/lib/interaction-model";
 import { textStyleForElement } from "@/features/editor/lib/element-style";
 import {
   resizedBoundsFromCorner,
@@ -169,15 +168,7 @@ import {
   useEditorStore,
   type VectorPath,
 } from "@/features/editor/store/editor-store";
-import {
-  importModelAsset,
-  LOCAL_PROJECT_ID,
-} from "@/features/editor/three/model-assets";
-import { createAssetObject3D } from "@/features/editor/three/object-factory";
-import {
-  createPrimitiveObject3D,
-  type Model3DAssetMetadata,
-} from "@/features/editor/three/types";
+import { LOCAL_PROJECT_ID } from "@/features/editor/three/model-assets";
 import { assetPath } from "@/lib/asset-path";
 
 export function EditorShell({
@@ -189,7 +180,6 @@ export function EditorShell({
     activePageId,
     activeTool,
     addElement,
-    addObject3D,
     addPage,
     artboard,
     checkpoint,
@@ -228,399 +218,6 @@ export function EditorShell({
   const activePage = pages.find((page) => page.id === activePageId) ?? pages[0];
   const elements = useMemo(() => activePage?.elements ?? [], [activePage]);
   const objects3d = useMemo(() => activePage?.objects3d ?? [], [activePage]);
-  const threeDemoSeededRef = useRef(false);
-  const interactionDemoSeededRef = useRef(false);
-
-  useEffect(() => {
-    if (
-      threeDemoSeededRef.current ||
-      typeof window === "undefined" ||
-      (process.env.NEXT_PUBLIC_ENABLE_3D_DEMO !== "1" &&
-        new URLSearchParams(window.location.search).get("threeDemo") !== "1")
-    ) {
-      return;
-    }
-    threeDemoSeededRef.current = true;
-    if (objects3d.length) return;
-    const centerX = artboard.width / 2;
-    const centerY = artboard.height / 2;
-    const box = createPrimitiveObject3D({
-      dimensions: { depth: 150, height: 150, width: 150 },
-      id: "three-demo-box",
-      name: "Demo Box",
-      position: { x: centerX - 190, y: centerY, z: 10 },
-      primitive: "box",
-    });
-    box.material.color = "#ab51f0";
-    box.transform.rotation = { x: 22, y: 34, z: 0 };
-    box.interactions = [
-      createDefaultInteraction({
-        effect: "scale",
-        id: "three-demo-box-hover",
-        name: "Grow on hover",
-        scaleX: 140,
-        scaleY: 140,
-        trigger: "hover",
-      }),
-      createDefaultInteraction({
-        effect: "rotate",
-        id: "three-demo-box-click",
-        name: "Spin on click",
-        rotateTo: 90,
-        trigger: "click-tap",
-      }),
-    ];
-    addObject3D(box);
-
-    const sphere = createPrimitiveObject3D({
-      dimensions: { depth: 150, height: 150, width: 150 },
-      id: "three-demo-sphere",
-      name: "Demo Sphere",
-      position: { x: centerX, y: centerY, z: 25 },
-      primitive: "sphere",
-    });
-    sphere.material.color = "#67c5ff";
-    sphere.interactions = [
-      createDefaultInteraction({
-        bounciness: 55,
-        effect: "move",
-        id: "three-demo-sphere-drop",
-        motion: "gravity",
-        name: "Drop on click",
-        trigger: "click-tap",
-      }),
-    ];
-    addObject3D(sphere);
-
-    const torus = createPrimitiveObject3D({
-      dimensions: { depth: 150, height: 150, width: 150 },
-      id: "three-demo-torus",
-      name: "Demo Torus",
-      position: { x: centerX + 190, y: centerY, z: 15 },
-      primitive: "torus",
-    });
-    torus.material.color = "#ff8c67";
-    torus.transform.rotation = { x: 55, y: 12, z: 8 };
-    torus.interactions = [
-      createDefaultInteraction({
-        bounciness: 45,
-        effect: "move",
-        id: "three-demo-torus-drop",
-        motion: "gravity",
-        name: "Drop on click",
-        trigger: "click-tap",
-      }),
-    ];
-    addObject3D(torus);
-    // A 2D platform the falling 3D sphere lands on (hybrid 2D<->3D collision).
-    addElement({
-      cornerRadius: 6,
-      fill: "#2b2b2b",
-      height: 40,
-      id: "three-demo-platform",
-      locked: false,
-      name: "Hybrid Platform",
-      opacity: 100,
-      rotation: 0,
-      stroke: "transparent",
-      strokeStyle: "none",
-      strokeWidth: 0,
-      type: "rectangle",
-      visible: true,
-      width: 520,
-      x: centerX - 260,
-      y: centerY + 250,
-    });
-  }, [
-    addElement,
-    addObject3D,
-    artboard.height,
-    artboard.width,
-    objects3d.length,
-  ]);
-
-  useEffect(() => {
-    if (
-      interactionDemoSeededRef.current ||
-      typeof window === "undefined" ||
-      (process.env.NEXT_PUBLIC_ENABLE_INTERACTION_DEMO !== "1" &&
-        new URLSearchParams(window.location.search).get("interactionDemo") !==
-          "1")
-    ) {
-      return;
-    }
-    interactionDemoSeededRef.current = true;
-    if (elements.some((element) => element.id === "interaction-demo")) return;
-    const size = 180;
-    addElement({
-      cornerRadius: 8,
-      fill: "#ab51f0",
-      height: size,
-      id: "interaction-demo",
-      interactions: [
-        createDefaultInteraction({
-          duration: 0.4,
-          effect: "move",
-          id: "interaction-demo-click",
-          moveX: 260,
-          moveY: 0,
-          name: "Move on click",
-          trigger: "click-tap",
-        }),
-        createDefaultInteraction({
-          duration: 0.25,
-          effect: "scale",
-          id: "interaction-demo-hover",
-          name: "Grow on hover",
-          scaleX: 130,
-          scaleY: 130,
-          trigger: "hover",
-        }),
-        createDefaultInteraction({
-          effect: "move",
-          id: "interaction-demo-drag",
-          name: "Drag to move",
-          trigger: "drag",
-        }),
-      ],
-      locked: false,
-      name: "Interaction Demo",
-      opacity: 100,
-      rotation: 0,
-      stroke: "transparent",
-      strokeStyle: "none",
-      strokeWidth: 0,
-      type: "rectangle",
-      visible: true,
-      width: size,
-      x: artboard.width / 2 - size / 2,
-      y: artboard.height / 2 - size / 2,
-    });
-    addElement({
-      cornerRadius: 8,
-      fill: "#ff8c67",
-      height: size,
-      id: "interaction-demo-scrub",
-      interactions: [
-        createDefaultInteraction({
-          effect: "rotate",
-          id: "interaction-demo-scrub-drag",
-          name: "Drag to rotate (mapped)",
-          rotateTo: 180,
-          trackDistance: 240,
-          trigger: "drag",
-        }),
-        createDefaultInteraction({
-          duration: 0.25,
-          effect: "scale",
-          id: "interaction-demo-scrub-hover",
-          name: "Grow on hover",
-          scaleX: 120,
-          scaleY: 120,
-          trigger: "hover",
-        }),
-      ],
-      locked: false,
-      name: "Scrub Demo",
-      opacity: 100,
-      rotation: 0,
-      stroke: "transparent",
-      strokeStyle: "none",
-      strokeWidth: 0,
-      type: "rectangle",
-      visible: true,
-      width: size,
-      x: artboard.width / 2 - size / 2 - 320,
-      y: artboard.height / 2 - size / 2,
-    });
-    addElement({
-      cornerRadius: 8,
-      fill: "#67c5ff",
-      height: size,
-      id: "interaction-demo-timer",
-      interactions: [
-        createDefaultInteraction({
-          duration: 0.6,
-          effect: "move",
-          id: "interaction-demo-timer-delay",
-          moveY: -140,
-          name: "Rise after delay",
-          timeSeconds: 1.5,
-          trigger: "after-delay",
-        }),
-      ],
-      locked: false,
-      name: "Timer Demo",
-      opacity: 100,
-      rotation: 0,
-      stroke: "transparent",
-      strokeStyle: "none",
-      strokeWidth: 0,
-      type: "rectangle",
-      visible: true,
-      width: size,
-      x: artboard.width / 2 - size / 2 + 320,
-      y: artboard.height / 2 - size / 2,
-    });
-    addElement({
-      cornerRadius: 8,
-      fill: "#34c759",
-      height: size,
-      id: "interaction-demo-follow",
-      interactions: [
-        createDefaultInteraction({
-          effect: "move",
-          id: "interaction-demo-follow-pointer",
-          moveX: 120,
-          moveY: 120,
-          name: "Follow the cursor",
-          trackDistance: 360,
-          trigger: "pointer-move",
-        }),
-      ],
-      locked: false,
-      name: "Follow Demo",
-      opacity: 100,
-      rotation: 0,
-      stroke: "transparent",
-      strokeStyle: "none",
-      strokeWidth: 0,
-      type: "rectangle",
-      visible: true,
-      width: size,
-      x: artboard.width / 2 - size / 2,
-      y: artboard.height / 2 - size / 2 + 240,
-    });
-    addElement({
-      cornerRadius: 8,
-      fill: "#ff2d95",
-      height: size,
-      id: "interaction-demo-fx",
-      interactions: [
-        createDefaultInteraction({
-          duration: 0.3,
-          effect: "shadow",
-          id: "interaction-demo-fx-shadow",
-          name: "Lift on hover",
-          shadowBlur: 32,
-          shadowColor: "rgba(0, 0, 0, 0.4)",
-          shadowX: 0,
-          shadowY: 20,
-          trigger: "hover",
-        }),
-        createDefaultInteraction({
-          duration: 0.3,
-          effect: "skew",
-          id: "interaction-demo-fx-skew",
-          name: "Skew on click",
-          skewX: 16,
-          skewY: 0,
-          trigger: "click-tap",
-        }),
-      ],
-      locked: false,
-      name: "FX Demo",
-      opacity: 100,
-      rotation: 0,
-      stroke: "transparent",
-      strokeStyle: "none",
-      strokeWidth: 0,
-      type: "rectangle",
-      visible: true,
-      width: size,
-      x: artboard.width / 2 - size / 2 - 320,
-      y: artboard.height / 2 - size / 2 + 240,
-    });
-    addElement({
-      cornerRadius: 8,
-      fill: "#30d5c8",
-      height: size,
-      id: "interaction-demo-scroll",
-      interactions: [
-        createDefaultInteraction({
-          effect: "rotate",
-          id: "interaction-demo-scroll-rotate",
-          name: "Scroll to rotate",
-          rotateTo: 180,
-          trackDistance: 600,
-          trigger: "scroll-swipe",
-        }),
-      ],
-      locked: false,
-      name: "Scroll Demo",
-      opacity: 100,
-      rotation: 0,
-      stroke: "transparent",
-      strokeStyle: "none",
-      strokeWidth: 0,
-      type: "rectangle",
-      visible: true,
-      width: size,
-      x: artboard.width / 2 - size / 2 + 320,
-      y: artboard.height / 2 - size / 2 + 240,
-    });
-    addElement({
-      cornerRadius: 8,
-      fill: "#ffd60a",
-      height: size,
-      id: "interaction-demo-shake",
-      interactions: [
-        createDefaultInteraction({
-          effect: "shake",
-          id: "interaction-demo-shake-hover",
-          name: "Shake on hover",
-          trigger: "hover",
-        }),
-        createDefaultInteraction({
-          duration: 0.3,
-          effect: "show-hide",
-          id: "interaction-demo-shake-hide",
-          name: "Hide on click",
-          trigger: "click-tap",
-        }),
-      ],
-      locked: false,
-      name: "Shake Demo",
-      opacity: 100,
-      rotation: 0,
-      stroke: "transparent",
-      strokeStyle: "none",
-      strokeWidth: 0,
-      type: "rectangle",
-      visible: true,
-      width: size,
-      x: artboard.width / 2 - size / 2,
-      y: artboard.height / 2 - size / 2 - 260,
-    });
-    addElement({
-      cornerRadius: 8,
-      fill: "#ff6b35",
-      height: size,
-      id: "interaction-demo-physics",
-      interactions: [
-        createDefaultInteraction({
-          bounciness: 55,
-          effect: "move",
-          id: "interaction-demo-physics-drop",
-          motion: "gravity",
-          name: "Drop with gravity on click",
-          trigger: "click-tap",
-        }),
-      ],
-      locked: false,
-      name: "Physics Demo",
-      opacity: 100,
-      rotation: 0,
-      stroke: "transparent",
-      strokeStyle: "none",
-      strokeWidth: 0,
-      type: "rectangle",
-      visible: true,
-      width: size,
-      x: artboard.width / 2 - size / 2 + 320,
-      y: artboard.height / 2 - size / 2 - 260,
-    });
-  }, [addElement, artboard.height, artboard.width, elements]);
   const backgroundMusicSettings: BackgroundMusicSettings = {
     ...defaultBackgroundMusicSettings,
     ...(activePage?.backgroundMusic ?? {}),
@@ -635,15 +232,9 @@ export function EditorShell({
   };
   const selectionToolActive =
     activeTool === "selection" || activeTool === "settings";
-  const [assetTab, setAssetTab] = useState<"image" | "video" | "model3d">(
-    "image",
-  );
+  const [assetTab, setAssetTab] = useState<"image" | "video">("image");
   const [propertyTab, setPropertyTab] = useState<PropertyTab>("design");
   const [uploadedAssets, setUploadedAssets] = useState<string[]>([]);
-  const [uploadedModelAssets, setUploadedModelAssets] = useState<
-    Model3DAssetMetadata[]
-  >([]);
-  const [assetUploadError, setAssetUploadError] = useState<string | null>(null);
   const [lockRatio, setLockRatio] = useState(true);
   const [pan, setPan] = useState<Point>({ x: 0, y: 0 });
   const {
@@ -3358,46 +2949,14 @@ export function EditorShell({
     updateInteractionSoundForElements,
   } = useInteractionSoundAssets();
 
-  const isModelAssetFile = (file: File) =>
-    /\.(glb|gltf)$/i.test(file.name) ||
-    file.type === "model/gltf-binary" ||
-    file.type === "model/gltf+json";
-
-  const importModelAssetFiles = async (files: File[]) => {
-    setAssetUploadError(null);
-    const imported: Model3DAssetMetadata[] = [];
-    const failures: string[] = [];
-    for (const file of files) {
-      try {
-        imported.push(await importModelAsset(projectId, file));
-      } catch (error) {
-        failures.push(
-          error instanceof Error
-            ? error.message
-            : `Could not import ${file.name}.`,
-        );
-      }
-    }
-    if (imported.length) {
-      setUploadedModelAssets((current) => [...imported, ...current]);
-      setAssetTab("model3d");
-    }
-    if (failures.length) setAssetUploadError(failures[0]);
-  };
-
   const handleAssetUpload = (event: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files ?? []);
-    event.target.value = "";
     if (!files.length) return;
-    const modelFiles = files.filter(isModelAssetFile);
-    const mediaFiles = files.filter((file) => !isModelAssetFile(file));
-    if (mediaFiles.length) {
-      setUploadedAssets((current) => [
-        ...mediaFiles.map((file) => URL.createObjectURL(file)),
-        ...current,
-      ]);
-    }
-    if (modelFiles.length) void importModelAssetFiles(modelFiles);
+    setUploadedAssets((current) => [
+      ...files.map((file) => URL.createObjectURL(file)),
+      ...current,
+    ]);
+    event.target.value = "";
   };
 
   const addAssetToPage = (src: string) => {
@@ -3434,18 +2993,6 @@ export function EditorShell({
     };
     image.onerror = () => addImage(280, 200);
     image.src = src;
-  };
-
-  const addModelToPage = (asset: Model3DAssetMetadata) => {
-    addObject3D(
-      createAssetObject3D({
-        asset,
-        id: createElementId("model3d"),
-        position: { x: artboard.width / 2, y: artboard.height / 2, z: 0 },
-      }),
-    );
-    setArtboardSelected(false);
-    setActiveTool("selection");
   };
 
   const artboardStyle = {
@@ -4152,7 +3699,7 @@ export function EditorShell({
                 width={11}
               />
               <input
-                accept="image/*,video/*,.glb,.gltf,model/gltf-binary"
+                accept="image/*,video/*"
                 multiple
                 onChange={handleAssetUpload}
                 type="file"
@@ -4169,7 +3716,7 @@ export function EditorShell({
             />
             <span>Upload</span>
             <input
-              accept="image/*,video/*,.glb,.gltf,model/gltf-binary"
+              accept="image/*,video/*"
               multiple
               onChange={handleAssetUpload}
               type="file"
@@ -4192,69 +3739,26 @@ export function EditorShell({
             >
               Video
             </button>
-            <button
-              aria-selected={assetTab === "model3d"}
-              onClick={() => setAssetTab("model3d")}
-              role="tab"
-              type="button"
-            >
-              3D
-            </button>
           </div>
-          {assetUploadError ? (
-            <p className="asset-upload-error" role="alert">
-              {assetUploadError}
-            </p>
-          ) : null}
           <ScrollArea className="asset-grid">
-            {assetTab === "model3d" ? (
-              <>
-                {uploadedModelAssets.map((asset) => (
-                  <button
-                    aria-label={`Add 3D model ${asset.fileName}`}
-                    className="uploaded-asset uploaded-asset--model"
-                    key={asset.id}
-                    onClick={() => addModelToPage(asset)}
-                    title={asset.fileName}
-                    type="button"
-                  >
-                    <span className="uploaded-asset-label">
-                      {asset.fileName}
-                    </span>
-                  </button>
-                ))}
-                {Array.from({
-                  length: Math.max(9 - uploadedModelAssets.length, 0),
-                }).map((_, index) => (
-                  <span
-                    aria-hidden="true"
-                    className="asset-placeholder"
-                    key={`model-placeholder-${index}`}
-                  />
-                ))}
-              </>
-            ) : (
-              <>
-                {uploadedAssets.map((asset, index) => (
-                  <button
-                    aria-label={`Add uploaded asset ${index + 1}`}
-                    className="uploaded-asset"
-                    key={asset}
-                    onClick={() => addAssetToPage(asset)}
-                    style={{ backgroundImage: `url(${asset})` }}
-                    type="button"
-                  />
-                ))}
-                {Array.from({
-                  length: Math.max(9 - uploadedAssets.length, 0),
-                }).map((_, index) => (
-                  <span
-                    aria-hidden="true"
-                    className="asset-placeholder"
-                    key={`placeholder-${index}`}
-                  />
-                ))}
-              </>
+            {uploadedAssets.map((asset, index) => (
+              <button
+                aria-label={`Add uploaded asset ${index + 1}`}
+                className="uploaded-asset"
+                key={asset}
+                onClick={() => addAssetToPage(asset)}
+                style={{ backgroundImage: `url(${asset})` }}
+                type="button"
+              />
+            ))}
+            {Array.from({ length: Math.max(9 - uploadedAssets.length, 0) }).map(
+              (_, index) => (
+                <span
+                  aria-hidden="true"
+                  className="asset-placeholder"
+                  key={`placeholder-${index}`}
+                />
+              ),
             )}
           </ScrollArea>
         </section>
