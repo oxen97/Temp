@@ -1706,6 +1706,13 @@ describe("EditorShell", () => {
           id: "preview-drag-move",
           trigger: "drag",
         }),
+        createDefaultInteraction({
+          effect: "scale",
+          id: "preview-hover-scale",
+          scaleX: 130,
+          scaleY: 130,
+          trigger: "hover",
+        }),
       ],
     };
     useEditorStore.setState({
@@ -1719,6 +1726,10 @@ describe("EditorShell", () => {
       .querySelector<HTMLElement>(`[data-element-id="${shape.id}"]`)!;
     expect(previewElement.classList.contains("is-draggable")).toBe(true);
     const beforeDrag = previewElement.style.transform;
+    fireEvent.pointerEnter(previewElement);
+    expect(previewElement.style.transform).not.toBe(beforeDrag);
+    fireEvent.pointerLeave(previewElement);
+    expect(previewElement.style.transform).toBe(beforeDrag);
 
     fireEvent.pointerDown(previewElement, {
       clientX: 100,

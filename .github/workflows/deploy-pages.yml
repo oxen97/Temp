@@ -39,7 +39,6 @@ jobs:
         working-directory: web
         env:
           NEXT_PUBLIC_BASE_PATH: /Temp
-          NEXT_PUBLIC_ENABLE_3D_DEMO: "1"
         run: npm run build
 
       - name: Upload Pages artifact

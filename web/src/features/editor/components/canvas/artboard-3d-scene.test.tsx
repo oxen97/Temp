@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import { Plane, Ray, Vector3 } from "three";
 import { describe, expect, it, vi } from "vitest";
 
+import { createDefaultInteraction } from "@/features/editor/lib/interaction-model";
 import { createPrimitiveObject3D } from "@/features/editor/three/types";
 
 import {
@@ -132,5 +133,52 @@ describe("Artboard3DScene selection", () => {
 
     expect(onSelectObject).not.toHaveBeenCalled();
     expect(onArtboardPointerDown).toHaveBeenCalledOnce();
+  });
+
+  it("applies click and hover interactions only in the interactive viewer", () => {
+    const object = createPrimitiveObject3D({
+      dimensions: { depth: 100, height: 100, width: 100 },
+      id: "interactive-object",
+      name: "Interactive object",
+      position: { x: 200, y: 200, z: 0 },
+      primitive: "box",
+    });
+    object.interactions = [
+      createDefaultInteraction({
+        effect: "move",
+        id: "click-move",
+        moveX: 80,
+        trigger: "click-tap",
+      }),
+      createDefaultInteraction({
+        effect: "scale",
+        id: "hover-scale",
+        scaleX: 130,
+        scaleY: 130,
+        trigger: "hover",
+      }),
+    ];
+    const props = {
+      artboardHeight: 679,
+      artboardWidth: 1208,
+      objects: [object],
+      scene: { enabled: true },
+    };
+    const { container, rerender } = render(<Artboard3DScene {...props} />);
+    let objectGroup = container.querySelector(
+      'group[name="Interactive object"]',
+    )!;
+    expect(objectGroup.querySelector("group")).toBeNull();
+
+    rerender(<Artboard3DScene {...props} interactive />);
+    objectGroup = container.querySelector('group[name="Interactive object"]')!;
+    const visualGroup = objectGroup.querySelector("group")!;
+    expect(visualGroup.getAttribute("position")).toBe("0,0,0");
+
+    fireEvent.click(objectGroup);
+    expect(visualGroup.getAttribute("position")).toBe("80,0,0");
+
+    fireEvent.pointerOver(objectGroup);
+    expect(visualGroup.getAttribute("scale")).toBe("1.3,1.3,1.3");
   });
 });
