@@ -306,6 +306,21 @@ describe("EditorShell", () => {
     expect(screen.getByLabelText("Layers")).toBeEmptyDOMElement();
   });
 
+  it("offers a 3D asset tab and accepts GLB uploads", () => {
+    const { container } = render(<EditorShell />);
+
+    const threeDTab = screen.getByRole("tab", { name: "3D" });
+    expect(threeDTab).toHaveAttribute("aria-selected", "false");
+    fireEvent.click(threeDTab);
+    expect(threeDTab).toHaveAttribute("aria-selected", "true");
+
+    const uploadInput = container.querySelector(".asset-upload input");
+    expect(uploadInput).toHaveAttribute(
+      "accept",
+      "image/*,video/*,.glb,.gltf,model/gltf-binary",
+    );
+  });
+
   it("scales the editor chrome without changing the canvas zoom", async () => {
     render(<EditorShell />);
 

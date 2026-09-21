@@ -1,5 +1,6 @@
 import { create } from "zustand";
 
+import type { InteractionDefinition } from "@/features/editor/lib/interaction-model";
 import type { PathPoint, VectorPath } from "@/features/editor/lib/vector-types";
 import {
   cloneObject3D,
@@ -100,6 +101,7 @@ export type CanvasElement = {
   vectorPaths?: VectorPath[];
   interactionSounds?: InteractionSoundSettings[];
   interactionSoundExpanded?: boolean;
+  interactions?: InteractionDefinition[];
 };
 
 export type InteractionSoundTrigger =
@@ -300,6 +302,20 @@ type EditorState = {
   addObject3D: (object: Object3DElement) => void;
   checkpoint: () => void;
   updateElement: (elementId: string, updates: Partial<CanvasElement>) => void;
+  addInteraction: (
+    elementId: string,
+    interaction: InteractionDefinition,
+  ) => void;
+  updateInteraction: (
+    elementId: string,
+    interactionId: string,
+    updates: Partial<InteractionDefinition>,
+  ) => void;
+  removeInteraction: (elementId: string, interactionId: string) => void;
+  setInteractions: (
+    elementId: string,
+    interactions: InteractionDefinition[],
+  ) => void;
   updateObject3D: (objectId: string, updates: Partial<Object3DElement>) => void;
   updateScene3D: (updates: Partial<Scene3DSettings>) => void;
   replaceElements: (
@@ -734,6 +750,65 @@ export const useEditorStore = create<EditorState>((set) => ({
           element.id === elementId ? { ...element, ...updates } : element,
         ),
       ),
+    })),
+  addInteraction: (elementId, interaction) =>
+    set((state) => ({
+      pages: updateActivePage(state, (elements) =>
+        elements.map((element) =>
+          element.id === elementId
+            ? {
+                ...element,
+                interactions: [...(element.interactions ?? []), interaction],
+              }
+            : element,
+        ),
+      ),
+      past: pushHistory(state),
+      future: [],
+    })),
+  updateInteraction: (elementId, interactionId, updates) =>
+    set((state) => ({
+      pages: updateActivePage(state, (elements) =>
+        elements.map((element) =>
+          element.id === elementId
+            ? {
+                ...element,
+                interactions: (element.interactions ?? []).map((interaction) =>
+                  interaction.id === interactionId
+                    ? { ...interaction, ...updates }
+                    : interaction,
+                ),
+              }
+            : element,
+        ),
+      ),
+    })),
+  removeInteraction: (elementId, interactionId) =>
+    set((state) => ({
+      pages: updateActivePage(state, (elements) =>
+        elements.map((element) =>
+          element.id === elementId
+            ? {
+                ...element,
+                interactions: (element.interactions ?? []).filter(
+                  (interaction) => interaction.id !== interactionId,
+                ),
+              }
+            : element,
+        ),
+      ),
+      past: pushHistory(state),
+      future: [],
+    })),
+  setInteractions: (elementId, interactions) =>
+    set((state) => ({
+      pages: updateActivePage(state, (elements) =>
+        elements.map((element) =>
+          element.id === elementId ? { ...element, interactions } : element,
+        ),
+      ),
+      past: pushHistory(state),
+      future: [],
     })),
   updateObject3D: (objectId, updates) =>
     set((state) => ({

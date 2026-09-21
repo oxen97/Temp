@@ -17,6 +17,14 @@ import { ViewerBackgroundMusic } from "@/features/editor/components/viewer/viewe
 import { textStyleForElement } from "@/features/editor/lib/element-style";
 import { clamp } from "@/features/editor/lib/geometry";
 import {
+  activeTransition,
+  composeTransform,
+  type ElementRuntimeState,
+  hasRuntimeInteractions,
+  IDLE_RUNTIME_STATE,
+  runtimeVisualForElement,
+} from "@/features/editor/lib/interaction-runtime";
+import {
   calculateInteractionSoundVolume,
   chooseInteractionSoundAsset,
   fadeInteractionSoundToSilence,
@@ -124,6 +132,11 @@ export function ViewerPreview({
     width: typeof window === "undefined" ? artboard.width : window.innerWidth,
   }));
   const [backgroundMusicDucked, setBackgroundMusicDucked] = useState(false);
+  const [prefersReducedMotion, setPrefersReducedMotion] = useState(
+    () =>
+      typeof window !== "undefined" &&
+      !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches,
+  );
   const interactionAudioRefs = useRef<(HTMLAudioElement | null)[]>([]);
   const activeInteractionRef = useRef<ViewerActiveInteractionSound | null>(
     null,
@@ -143,6 +156,64 @@ export function ViewerPreview({
     new Map<number, ViewerInteractionPointerSession>(),
   );
   const scrollStopTimersRef = useRef(new Map<string, number>());
+  const lastPointerRef = useRef<{ x: number; y: number } | null>(null);
+
+  const [runtimeState, setRuntimeState] = useState<
+    Map<string, ElementRuntimeState>
+  >(() => new Map());
+  const mutateRuntimeState = useCallback(
+    (
+      elementId: string,
+      updater: (state: ElementRuntimeState) => ElementRuntimeState,
+    ) => {
+      setRuntimeState((current) => {
+        const next = new Map(current);
+        next.set(elementId, updater(next.get(elementId) ?? IDLE_RUNTIME_STATE));
+        return next;
+      });
+    },
+    [],
+  );
+  const fireInteractionClick = useCallback(
+    (element: CanvasElement) => {
+      if (!hasRuntimeInteractions(element.interactions)) return;
+      mutateRuntimeState(element.id, (state) => ({
+        ...state,
+        toggled: !state.toggled,
+      }));
+    },
+    [mutateRuntimeState],
+  );
+  const setInteractionHover = useCallback(
+    (element: CanvasElement, hovering: boolean) => {
+      if (!hasRuntimeInteractions(element.interactions)) return;
+      mutateRuntimeState(element.id, (state) => ({ ...state, hovering }));
+    },
+    [mutateRuntimeState],
+  );
+  const setInteractionDrag = useCallback(
+    (element: CanvasElement, drag: ElementRuntimeState["drag"]) => {
+      if (!hasRuntimeInteractions(element.interactions)) return;
+      mutateRuntimeState(element.id, (state) => ({ ...state, drag }));
+    },
+    [mutateRuntimeState],
+  );
+  const commitInteractionDrag = useCallback(
+    (element: CanvasElement) => {
+      if (!hasRuntimeInteractions(element.interactions)) return;
+      mutateRuntimeState(element.id, (state) => ({
+        ...state,
+        drag: null,
+        dragOffset: state.drag
+          ? {
+              x: state.dragOffset.x + state.drag.dx,
+              y: state.dragOffset.y + state.drag.dy,
+            }
+          : state.dragOffset,
+      }));
+    },
+    [mutateRuntimeState],
+  );
 
   const unloadInteractionAudio = useCallback((audio: HTMLAudioElement) => {
     if (advancedSoundRef.current.unloadUnusedSounds) {
@@ -533,6 +604,15 @@ export function ViewerPreview({
     };
   }, []);
 
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return;
+    const query = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const handler = (event: MediaQueryListEvent) =>
+      setPrefersReducedMotion(event.matches);
+    query.addEventListener("change", handler);
+    return () => query.removeEventListener("change", handler);
+  }, []);
+
   const pageType = artboard.pageType ?? "screen";
   const viewportMode = artboard.viewportMode ?? "fit";
   const layout = viewerPreviewLayout(artboard, viewport);
@@ -634,126 +714,188 @@ export function ViewerPreview({
               />
               {elements
                 .filter((element) => element.visible)
-                .map((element) => (
-                  <div
-                    className={`viewer-preview-element element-${element.type}`}
-                    data-element-id={element.id}
-                    key={element.id}
-                    onClick={() =>
-                      playInteractionEvent(element, "click", "click")
-                    }
-                    onDoubleClick={() =>
-                      playInteractionEvent(element, "click", "double-click")
-                    }
-                    onPointerCancel={(event) => {
-                      const session = pointerSessionsRef.current.get(
-                        event.pointerId,
-                      );
-                      pointerSessionsRef.current.delete(event.pointerId);
-                      if (session?.elementId === element.id) {
-                        stopContinuousInteraction(element.id, "press");
-                        stopContinuousInteraction(element.id, "drag");
+                .map((element) => {
+                  const runtime =
+                    runtimeState.get(element.id) ?? IDLE_RUNTIME_STATE;
+                  const runtimeVisual = runtimeVisualForElement(
+                    element.interactions,
+                    runtime,
+                  );
+                  return (
+                    <div
+                      className={`viewer-preview-element element-${element.type}`}
+                      data-element-id={element.id}
+                      key={element.id}
+                      onClick={() => {
+                        playInteractionEvent(element, "click", "click");
+                        fireInteractionClick(element);
+                      }}
+                      onDoubleClick={() =>
+                        playInteractionEvent(element, "click", "double-click")
                       }
-                    }}
-                    onPointerDown={(event) => {
-                      pointerSessionsRef.current.set(event.pointerId, {
-                        dragging: false,
-                        elementId: element.id,
-                        startX: event.clientX,
-                        startY: event.clientY,
-                      });
-                      event.currentTarget.setPointerCapture?.(event.pointerId);
-                      playInteractionEvent(element, "press", "press-start");
-                      playInteractionEvent(
-                        element,
-                        "press",
-                        "while-pressing",
-                        true,
-                      );
-                    }}
-                    onPointerEnter={() => {
-                      playInteractionEvent(element, "hover", "enter");
-                      playInteractionEvent(
-                        element,
-                        "hover",
-                        "while-hovering",
-                        true,
-                      );
-                    }}
-                    onPointerLeave={() => {
-                      stopContinuousInteraction(element.id, "hover");
-                      playInteractionEvent(element, "hover", "leave");
-                    }}
-                    onPointerMove={(event) => {
-                      const session = pointerSessionsRef.current.get(
-                        event.pointerId,
-                      );
-                      if (!session || session.elementId !== element.id) return;
-                      if (!session.dragging) {
-                        const distance = Math.hypot(
-                          event.clientX - session.startX,
-                          event.clientY - session.startY,
-                        );
-                        if (distance < 3) return;
-                        session.dragging = true;
-                        playInteractionEvent(element, "drag", "drag-start");
-                      }
-                      playInteractionEvent(
-                        element,
-                        "drag",
-                        "while-dragging",
-                        true,
-                      );
-                    }}
-                    onPointerUp={(event) => {
-                      if (
-                        event.currentTarget.hasPointerCapture?.(event.pointerId)
-                      ) {
-                        event.currentTarget.releasePointerCapture?.(
+                      onPointerCancel={(event) => {
+                        const session = pointerSessionsRef.current.get(
                           event.pointerId,
                         );
-                      }
-                      endPointerInteraction(element, event.pointerId);
-                    }}
-                    onWheel={() => {
-                      playInteractionEvent(
-                        element,
-                        "scroll",
-                        "while-scrolling",
-                        true,
-                      );
-                      const previousTimer = scrollStopTimersRef.current.get(
-                        element.id,
-                      );
-                      if (previousTimer) window.clearTimeout(previousTimer);
-                      const timer = window.setTimeout(() => {
-                        scrollStopTimersRef.current.delete(element.id);
-                        stopContinuousInteraction(element.id, "scroll");
-                      }, 150);
-                      scrollStopTimersRef.current.set(element.id, timer);
-                    }}
-                    style={{
-                      height: element.height,
-                      left: element.x,
-                      opacity: element.opacity / 100,
-                      top: element.y,
-                      transform: `rotate(${element.rotation}deg)`,
-                      transformOrigin: "center",
-                      width: element.width,
-                    }}
-                  >
-                    {element.type === "text" ? (
-                      <div
-                        className="text-shape"
-                        style={textStyleForElement(element)}
-                      >
-                        {element.text}
-                      </div>
-                    ) : (
-                      <ShapeGraphic element={element} />
-                    )}
-                  </div>
-                ))}
+                        pointerSessionsRef.current.delete(event.pointerId);
+                        if (session?.elementId === element.id) {
+                          stopContinuousInteraction(element.id, "press");
+                          stopContinuousInteraction(element.id, "drag");
+                        }
+                        setInteractionDrag(element, null);
+                      }}
+                      onPointerDown={(event) => {
+                        lastPointerRef.current = {
+                          x: event.clientX,
+                          y: event.clientY,
+                        };
+                        pointerSessionsRef.current.set(event.pointerId, {
+                          dragging: false,
+                          elementId: element.id,
+                          startX: event.clientX,
+                          startY: event.clientY,
+                        });
+                        event.currentTarget.setPointerCapture?.(
+                          event.pointerId,
+                        );
+                        playInteractionEvent(element, "press", "press-start");
+                        playInteractionEvent(
+                          element,
+                          "press",
+                          "while-pressing",
+                          true,
+                        );
+                      }}
+                      onPointerEnter={(event) => {
+                        lastPointerRef.current = {
+                          x: event.clientX,
+                          y: event.clientY,
+                        };
+                        playInteractionEvent(element, "hover", "enter");
+                        playInteractionEvent(
+                          element,
+                          "hover",
+                          "while-hovering",
+                          true,
+                        );
+                        setInteractionHover(element, true);
+                      }}
+                      onPointerLeave={() => {
+                        stopContinuousInteraction(element.id, "hover");
+                        playInteractionEvent(element, "hover", "leave");
+                        setInteractionHover(element, false);
+                      }}
+                      onPointerMove={(event) => {
+                        lastPointerRef.current = {
+                          x: event.clientX,
+                          y: event.clientY,
+                        };
+                        const session = pointerSessionsRef.current.get(
+                          event.pointerId,
+                        );
+                        if (!session || session.elementId !== element.id)
+                          return;
+                        if (!session.dragging) {
+                          const distance = Math.hypot(
+                            event.clientX - session.startX,
+                            event.clientY - session.startY,
+                          );
+                          if (distance < 3) return;
+                          session.dragging = true;
+                          playInteractionEvent(element, "drag", "drag-start");
+                        }
+                        playInteractionEvent(
+                          element,
+                          "drag",
+                          "while-dragging",
+                          true,
+                        );
+                        setInteractionDrag(element, {
+                          dx:
+                            (event.clientX - session.startX) /
+                            Math.max(0.0001, layout.scaleX),
+                          dy:
+                            (event.clientY - session.startY) /
+                            Math.max(0.0001, layout.scaleY),
+                        });
+                      }}
+                      onPointerUp={(event) => {
+                        if (
+                          event.currentTarget.hasPointerCapture?.(
+                            event.pointerId,
+                          )
+                        ) {
+                          event.currentTarget.releasePointerCapture?.(
+                            event.pointerId,
+                          );
+                        }
+                        endPointerInteraction(element, event.pointerId);
+                        commitInteractionDrag(element);
+                      }}
+                      onTransitionEnd={(event) => {
+                        // A relocating effect can slide the element out from
+                        // under a stationary pointer, so neither `pointerleave`
+                        // nor `:hover` updates. Once the move settles, hit-test
+                        // the element's real rect against the tracked pointer
+                        // and clear hover if the pointer is no longer over it.
+                        if (event.propertyName !== "transform") return;
+                        const pointer = lastPointerRef.current;
+                        if (!pointer) return;
+                        const rect =
+                          event.currentTarget.getBoundingClientRect();
+                        const inside =
+                          pointer.x >= rect.left &&
+                          pointer.x <= rect.right &&
+                          pointer.y >= rect.top &&
+                          pointer.y <= rect.bottom;
+                        if (!inside) setInteractionHover(element, false);
+                      }}
+                      onWheel={() => {
+                        playInteractionEvent(
+                          element,
+                          "scroll",
+                          "while-scrolling",
+                          true,
+                        );
+                        const previousTimer = scrollStopTimersRef.current.get(
+                          element.id,
+                        );
+                        if (previousTimer) window.clearTimeout(previousTimer);
+                        const timer = window.setTimeout(() => {
+                          scrollStopTimersRef.current.delete(element.id);
+                          stopContinuousInteraction(element.id, "scroll");
+                        }, 150);
+                        scrollStopTimersRef.current.set(element.id, timer);
+                      }}
+                      style={{
+                        height: element.height,
+                        left: element.x,
+                        opacity: runtimeVisual.opacity ?? element.opacity / 100,
+                        top: element.y,
+                        transform: composeTransform(
+                          element.rotation,
+                          runtimeVisual,
+                        ),
+                        transformOrigin: "center",
+                        transition: prefersReducedMotion
+                          ? "none"
+                          : activeTransition(element.interactions, runtime),
+                        width: element.width,
+                      }}
+                    >
+                      {element.type === "text" ? (
+                        <div
+                          className="text-shape"
+                          style={textStyleForElement(element)}
+                        >
+                          {element.text}
+                        </div>
+                      ) : (
+                        <ShapeGraphic element={element} />
+                      )}
+                    </div>
+                  );
+                })}
             </div>
           </div>
         </div>

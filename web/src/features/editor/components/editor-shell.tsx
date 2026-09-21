@@ -95,6 +95,7 @@ import {
   type VectorPointRef,
 } from "@/features/editor/lib/editor-types";
 import { createElementId } from "@/features/editor/lib/element-id";
+import { createDefaultInteraction } from "@/features/editor/lib/interaction-model";
 import { textStyleForElement } from "@/features/editor/lib/element-style";
 import {
   resizedBoundsFromCorner,
@@ -168,8 +169,15 @@ import {
   useEditorStore,
   type VectorPath,
 } from "@/features/editor/store/editor-store";
-import { createPrimitiveObject3D } from "@/features/editor/three/types";
-import { LOCAL_PROJECT_ID } from "@/features/editor/three/model-assets";
+import {
+  importModelAsset,
+  LOCAL_PROJECT_ID,
+} from "@/features/editor/three/model-assets";
+import { createAssetObject3D } from "@/features/editor/three/object-factory";
+import {
+  createPrimitiveObject3D,
+  type Model3DAssetMetadata,
+} from "@/features/editor/three/types";
 import { assetPath } from "@/lib/asset-path";
 
 export function EditorShell({
@@ -221,6 +229,7 @@ export function EditorShell({
   const elements = useMemo(() => activePage?.elements ?? [], [activePage]);
   const objects3d = useMemo(() => activePage?.objects3d ?? [], [activePage]);
   const threeDemoSeededRef = useRef(false);
+  const interactionDemoSeededRef = useRef(false);
 
   useEffect(() => {
     if (
@@ -267,6 +276,102 @@ export function EditorShell({
     torus.transform.rotation = { x: 55, y: 12, z: 8 };
     addObject3D(torus);
   }, [addObject3D, artboard.height, artboard.width, objects3d.length]);
+
+  useEffect(() => {
+    if (
+      interactionDemoSeededRef.current ||
+      typeof window === "undefined" ||
+      (process.env.NEXT_PUBLIC_ENABLE_INTERACTION_DEMO !== "1" &&
+        new URLSearchParams(window.location.search).get("interactionDemo") !==
+          "1")
+    ) {
+      return;
+    }
+    interactionDemoSeededRef.current = true;
+    if (elements.some((element) => element.id === "interaction-demo")) return;
+    const size = 180;
+    addElement({
+      cornerRadius: 8,
+      fill: "#ab51f0",
+      height: size,
+      id: "interaction-demo",
+      interactions: [
+        createDefaultInteraction({
+          duration: 0.4,
+          effect: "move",
+          id: "interaction-demo-click",
+          moveX: 260,
+          moveY: 0,
+          name: "Move on click",
+          trigger: "click-tap",
+        }),
+        createDefaultInteraction({
+          duration: 0.25,
+          effect: "scale",
+          id: "interaction-demo-hover",
+          name: "Grow on hover",
+          scaleX: 130,
+          scaleY: 130,
+          trigger: "hover",
+        }),
+        createDefaultInteraction({
+          effect: "move",
+          id: "interaction-demo-drag",
+          name: "Drag to move",
+          trigger: "drag",
+        }),
+      ],
+      locked: false,
+      name: "Interaction Demo",
+      opacity: 100,
+      rotation: 0,
+      stroke: "transparent",
+      strokeStyle: "none",
+      strokeWidth: 0,
+      type: "rectangle",
+      visible: true,
+      width: size,
+      x: artboard.width / 2 - size / 2,
+      y: artboard.height / 2 - size / 2,
+    });
+    addElement({
+      cornerRadius: 8,
+      fill: "#ff8c67",
+      height: size,
+      id: "interaction-demo-scrub",
+      interactions: [
+        createDefaultInteraction({
+          effect: "rotate",
+          id: "interaction-demo-scrub-drag",
+          name: "Drag to rotate (mapped)",
+          rotateTo: 180,
+          trackDistance: 240,
+          trigger: "drag",
+        }),
+        createDefaultInteraction({
+          duration: 0.25,
+          effect: "scale",
+          id: "interaction-demo-scrub-hover",
+          name: "Grow on hover",
+          scaleX: 120,
+          scaleY: 120,
+          trigger: "hover",
+        }),
+      ],
+      locked: false,
+      name: "Scrub Demo",
+      opacity: 100,
+      rotation: 0,
+      stroke: "transparent",
+      strokeStyle: "none",
+      strokeWidth: 0,
+      type: "rectangle",
+      visible: true,
+      width: size,
+      x: artboard.width / 2 - size / 2 - 320,
+      y: artboard.height / 2 - size / 2,
+    });
+  }, [addElement, artboard.height, artboard.width, elements]);
   const backgroundMusicSettings: BackgroundMusicSettings = {
     ...defaultBackgroundMusicSettings,
     ...(activePage?.backgroundMusic ?? {}),
@@ -281,9 +386,15 @@ export function EditorShell({
   };
   const selectionToolActive =
     activeTool === "selection" || activeTool === "settings";
-  const [assetTab, setAssetTab] = useState<"image" | "video">("image");
+  const [assetTab, setAssetTab] = useState<"image" | "video" | "model3d">(
+    "image",
+  );
   const [propertyTab, setPropertyTab] = useState<PropertyTab>("design");
   const [uploadedAssets, setUploadedAssets] = useState<string[]>([]);
+  const [uploadedModelAssets, setUploadedModelAssets] = useState<
+    Model3DAssetMetadata[]
+  >([]);
+  const [assetUploadError, setAssetUploadError] = useState<string | null>(null);
   const [lockRatio, setLockRatio] = useState(true);
   const [pan, setPan] = useState<Point>({ x: 0, y: 0 });
   const {
@@ -2998,14 +3109,46 @@ export function EditorShell({
     updateInteractionSoundForElements,
   } = useInteractionSoundAssets();
 
+  const isModelAssetFile = (file: File) =>
+    /\.(glb|gltf)$/i.test(file.name) ||
+    file.type === "model/gltf-binary" ||
+    file.type === "model/gltf+json";
+
+  const importModelAssetFiles = async (files: File[]) => {
+    setAssetUploadError(null);
+    const imported: Model3DAssetMetadata[] = [];
+    const failures: string[] = [];
+    for (const file of files) {
+      try {
+        imported.push(await importModelAsset(projectId, file));
+      } catch (error) {
+        failures.push(
+          error instanceof Error
+            ? error.message
+            : `Could not import ${file.name}.`,
+        );
+      }
+    }
+    if (imported.length) {
+      setUploadedModelAssets((current) => [...imported, ...current]);
+      setAssetTab("model3d");
+    }
+    if (failures.length) setAssetUploadError(failures[0]);
+  };
+
   const handleAssetUpload = (event: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files ?? []);
-    if (!files.length) return;
-    setUploadedAssets((current) => [
-      ...files.map((file) => URL.createObjectURL(file)),
-      ...current,
-    ]);
     event.target.value = "";
+    if (!files.length) return;
+    const modelFiles = files.filter(isModelAssetFile);
+    const mediaFiles = files.filter((file) => !isModelAssetFile(file));
+    if (mediaFiles.length) {
+      setUploadedAssets((current) => [
+        ...mediaFiles.map((file) => URL.createObjectURL(file)),
+        ...current,
+      ]);
+    }
+    if (modelFiles.length) void importModelAssetFiles(modelFiles);
   };
 
   const addAssetToPage = (src: string) => {
@@ -3042,6 +3185,18 @@ export function EditorShell({
     };
     image.onerror = () => addImage(280, 200);
     image.src = src;
+  };
+
+  const addModelToPage = (asset: Model3DAssetMetadata) => {
+    addObject3D(
+      createAssetObject3D({
+        asset,
+        id: createElementId("model3d"),
+        position: { x: artboard.width / 2, y: artboard.height / 2, z: 0 },
+      }),
+    );
+    setArtboardSelected(false);
+    setActiveTool("selection");
   };
 
   const artboardStyle = {
@@ -3748,7 +3903,7 @@ export function EditorShell({
                 width={11}
               />
               <input
-                accept="image/*,video/*"
+                accept="image/*,video/*,.glb,.gltf,model/gltf-binary"
                 multiple
                 onChange={handleAssetUpload}
                 type="file"
@@ -3765,7 +3920,7 @@ export function EditorShell({
             />
             <span>Upload</span>
             <input
-              accept="image/*,video/*"
+              accept="image/*,video/*,.glb,.gltf,model/gltf-binary"
               multiple
               onChange={handleAssetUpload}
               type="file"
@@ -3788,26 +3943,69 @@ export function EditorShell({
             >
               Video
             </button>
+            <button
+              aria-selected={assetTab === "model3d"}
+              onClick={() => setAssetTab("model3d")}
+              role="tab"
+              type="button"
+            >
+              3D
+            </button>
           </div>
+          {assetUploadError ? (
+            <p className="asset-upload-error" role="alert">
+              {assetUploadError}
+            </p>
+          ) : null}
           <ScrollArea className="asset-grid">
-            {uploadedAssets.map((asset, index) => (
-              <button
-                aria-label={`Add uploaded asset ${index + 1}`}
-                className="uploaded-asset"
-                key={asset}
-                onClick={() => addAssetToPage(asset)}
-                style={{ backgroundImage: `url(${asset})` }}
-                type="button"
-              />
-            ))}
-            {Array.from({ length: Math.max(9 - uploadedAssets.length, 0) }).map(
-              (_, index) => (
-                <span
-                  aria-hidden="true"
-                  className="asset-placeholder"
-                  key={`placeholder-${index}`}
-                />
-              ),
+            {assetTab === "model3d" ? (
+              <>
+                {uploadedModelAssets.map((asset) => (
+                  <button
+                    aria-label={`Add 3D model ${asset.fileName}`}
+                    className="uploaded-asset uploaded-asset--model"
+                    key={asset.id}
+                    onClick={() => addModelToPage(asset)}
+                    title={asset.fileName}
+                    type="button"
+                  >
+                    <span className="uploaded-asset-label">
+                      {asset.fileName}
+                    </span>
+                  </button>
+                ))}
+                {Array.from({
+                  length: Math.max(9 - uploadedModelAssets.length, 0),
+                }).map((_, index) => (
+                  <span
+                    aria-hidden="true"
+                    className="asset-placeholder"
+                    key={`model-placeholder-${index}`}
+                  />
+                ))}
+              </>
+            ) : (
+              <>
+                {uploadedAssets.map((asset, index) => (
+                  <button
+                    aria-label={`Add uploaded asset ${index + 1}`}
+                    className="uploaded-asset"
+                    key={asset}
+                    onClick={() => addAssetToPage(asset)}
+                    style={{ backgroundImage: `url(${asset})` }}
+                    type="button"
+                  />
+                ))}
+                {Array.from({
+                  length: Math.max(9 - uploadedAssets.length, 0),
+                }).map((_, index) => (
+                  <span
+                    aria-hidden="true"
+                    className="asset-placeholder"
+                    key={`placeholder-${index}`}
+                  />
+                ))}
+              </>
             )}
           </ScrollArea>
         </section>
