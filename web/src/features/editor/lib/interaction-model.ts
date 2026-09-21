@@ -67,7 +67,18 @@ export type InteractionDefinition = {
   shadowY: number;
   shadowBlur: number;
   bridgeWidth: number;
+  /** Pairwise magnetic pull while the shapes remain within join/release range (0..100). */
+  liquidAttraction: number;
   liquidSmoothness: number;
+  strandAnchor: "top" | "bottom" | "left" | "right";
+  strandStiffness: number;
+  strandDamping: number;
+  strandInfluenceRadius: number;
+  strandMaxDisplacement: number;
+  /** Artboard-pixel radius within which neighboring strands follow the pointer. */
+  strandNeighborRadius: number;
+  /** Neighbor response as a percent of the directly touched strand (0..100). */
+  strandNeighborStrength: number;
   affectedObjects: string;
   impactBounciness: number;
   impactMass: number;
@@ -177,7 +188,15 @@ export function createDefaultInteraction(
     shadowY: 12,
     shadowBlur: 24,
     bridgeWidth: 50,
+    liquidAttraction: 0,
     liquidSmoothness: 60,
+    strandAnchor: "top",
+    strandStiffness: 0.45,
+    strandDamping: 0.82,
+    strandInfluenceRadius: 90,
+    strandMaxDisplacement: 140,
+    strandNeighborRadius: 0,
+    strandNeighborStrength: 0,
     affectedObjects: "selected",
     impactBounciness: 65,
     impactMass: 1,

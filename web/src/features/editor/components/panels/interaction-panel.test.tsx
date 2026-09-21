@@ -1,6 +1,8 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { useState } from "react";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { createDefaultInteraction, type InteractionDefinition } from "@/features/editor/lib/interaction-model";
 import { InteractionPanel } from "./interaction-panel";
 
 afterEach(cleanup);
@@ -59,6 +61,97 @@ function renderModel3DPanel() {
 }
 
 describe("InteractionPanel conditional UI", () => {
+  it("authors a selected strand through canonical interaction callbacks", () => {
+    let saved: InteractionDefinition[] = [];
+    function Harness() {
+      const [interactions, setInteractions] = useState<InteractionDefinition[]>([]);
+      saved = interactions;
+      return (
+        <InteractionPanel
+          elements={[{ id: "strand", name: "Strand", type: "line" }]}
+          interactionsByElement={{ strand: interactions }}
+          onAddInteraction={(_, interaction) => setInteractions((current) => [...current, interaction])}
+          onRemoveInteraction={(_, interactionId) => setInteractions((current) => current.filter((item) => item.id !== interactionId))}
+          onUpdateInteraction={(_, interactionId, updates) => setInteractions((current) => current.map((item) => item.id === interactionId ? { ...item, ...updates } : item))}
+          selectedElementIds={["strand"]}
+          selectedName="Strand"
+          selectedTypes={["line"]}
+        />
+      );
+    }
+    render(<Harness />);
+    expect(screen.queryByText("sample-move")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "+ Add interaction" }));
+    expect(saved).toHaveLength(1);
+    choose("Trigger", "Drag");
+    choose("Effect", "Strand Bend");
+    expect(saved[0]).toMatchObject({ trigger: "drag", effect: "strand-bend", name: "Strand Bend" });
+    fireEvent.change(screen.getByRole("spinbutton", { name: "Strand max displacement" }), { target: { value: "75" } });
+    expect(saved[0].strandMaxDisplacement).toBe(75);
+    fireEvent.change(screen.getByRole("spinbutton", { name: "Strand neighbor radius" }), { target: { value: "180" } });
+    fireEvent.change(screen.getByRole("slider", { name: "Strand neighbor pull" }), { target: { value: "65" } });
+    expect(saved[0]).toMatchObject({ strandNeighborRadius: 180, strandNeighborStrength: 65 });
+    expect(screen.getByText(/Nearby lines and open pen paths with Strand Bend follow the pointer/i)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Strand Bend options" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete Strand Bend" }));
+    expect(saved).toHaveLength(0);
+  });
+
+  it("hydrates and saves Liquid Merge settings from the selected shape", () => {
+    let saved = createDefaultInteraction({
+      id: "merge",
+      trigger: "near-target",
+      effect: "liquid-merge",
+      name: "Liquid Merge",
+      collisionTarget: "circle",
+      joinDistance: 42,
+      releaseDistance: 57,
+      bridgeWidth: 63,
+      liquidSmoothness: 71,
+    });
+    function Harness() {
+      const [interaction, setInteraction] = useState(saved);
+      saved = interaction;
+      return (
+        <InteractionPanel
+          elements={[
+            { id: "rect", name: "Rectangle", type: "rectangle" },
+            { id: "circle", name: "Circle", type: "circle" },
+          ]}
+          interactionsByElement={{ rect: [interaction] }}
+          onUpdateInteraction={(_, __, updates) => setInteraction((current) => ({ ...current, ...updates }))}
+          selectedElementIds={["rect"]}
+          selectedName="Rectangle"
+          selectedTypes={["rectangle"]}
+        />
+      );
+    }
+    render(<Harness />);
+    expect(screen.getByRole("spinbutton", { name: "Join distance" })).toHaveProperty("value", "42");
+    expect(screen.getByRole("slider", { name: "Liquid bridge width" })).toHaveProperty("value", "63");
+    expect(screen.getByRole("button", { name: "Collision target element" })).toHaveTextContent("Circle");
+    fireEvent.change(screen.getByRole("slider", { name: "Liquid smoothness" }), { target: { value: "80" } });
+    expect(saved.liquidSmoothness).toBe(80);
+    fireEvent.change(screen.getByRole("slider", { name: "Liquid attraction" }), { target: { value: "72" } });
+    expect(saved.liquidAttraction).toBe(72);
+  });
+
+  it("offers another strand as a Liquid Merge target", () => {
+    render(
+      <InteractionPanel
+        elements={[
+          { id: "one", name: "Red strand 1", type: "line" },
+          { id: "two", name: "Red strand 2", type: "pen" },
+        ]}
+        selectedElementIds={["one"]}
+        selectedName="Red strand 1"
+        selectedTypes={["line"]}
+      />,
+    );
+    choose("Trigger", "Near Target");
+    choose("Effect", "Liquid Merge");
+    expect(screen.getByRole("button", { name: "Collision target element" })).toHaveTextContent("Red strand 2");
+  });
   it("shows Long Press duration and hides area for page, time, and media triggers", () => {
     render(
       <InteractionPanel
@@ -223,7 +316,7 @@ describe("InteractionPanel conditional UI", () => {
     );
     choose("Trigger", "Near Target");
     expect(
-      screen.getByText(/Liquid Merge needs one selected rectangle/i),
+      screen.getByText(/Liquid Merge needs one selected 2D vector shape or strand/i),
     ).toBeTruthy();
   });
 

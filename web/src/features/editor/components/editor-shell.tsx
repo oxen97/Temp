@@ -4,6 +4,7 @@
 /* eslint-disable react-hooks/refs */
 
 import {
+  Box,
   Check,
   ChevronDown,
   Eye,
@@ -42,13 +43,17 @@ import { PenEditControls } from "@/features/editor/components/canvas/pen-edit-co
 import { SelectionOutlineSvg } from "@/features/editor/components/canvas/selection-outline-svg";
 import { ShapeGraphic } from "@/features/editor/components/canvas/shape-graphic";
 import { DesignPanel } from "@/features/editor/components/panels/design-panel";
+import { Design3DPanel } from "@/features/editor/components/panels/design-3d-panel";
+import { DesignMixedPanel } from "@/features/editor/components/panels/design-mixed-panel";
 import { InteractionPanel } from "@/features/editor/components/panels/interaction-panel";
 import { LogicPanel } from "@/features/editor/components/panels/logic-panel";
 import { ScenePanel } from "@/features/editor/components/panels/scene-panel";
 import { SoundPanel } from "@/features/editor/components/sound/sound-panel";
 import { LayerSymbol } from "@/features/editor/components/ui/layer-symbol";
+import { ModelAssetThumbnail } from "@/features/editor/components/ui/model-asset-thumbnail";
 import { ScrollArea } from "@/features/editor/components/ui/scroll-area";
 import { ShapePicker } from "@/features/editor/components/ui/shape-picker";
+import { MonDemoExperience } from "@/features/editor/components/viewer/mon-demo-experience";
 import { ScenePreview } from "@/features/editor/components/viewer/scene-preview";
 import { ViewerPreview } from "@/features/editor/components/viewer/viewer-preview";
 import {
@@ -96,6 +101,8 @@ import {
 } from "@/features/editor/lib/editor-types";
 import { createElementId } from "@/features/editor/lib/element-id";
 import { createDefaultInteraction } from "@/features/editor/lib/interaction-model";
+import { createMonDemoElements } from "@/features/editor/lib/mon-demo-elements";
+import { createPinocchioDemoElements } from "@/features/editor/lib/pinocchio-demo-elements";
 import { textStyleForElement } from "@/features/editor/lib/element-style";
 import {
   resizedBoundsFromCorner,
@@ -174,9 +181,16 @@ import {
   LOCAL_PROJECT_ID,
 } from "@/features/editor/three/model-assets";
 import { createAssetObject3D } from "@/features/editor/three/object-factory";
+import type { ProjectedBounds } from "@/features/editor/three/coordinate-system";
+import {
+  resizeObject3DFromScreen,
+  resizeObject3DWithinSelection,
+} from "@/features/editor/three/object-resize";
 import {
   createPrimitiveObject3D,
+  resolveScene3DSettings,
   type Model3DAssetMetadata,
+  type Object3DElement,
 } from "@/features/editor/three/types";
 import { assetPath } from "@/lib/asset-path";
 
@@ -189,6 +203,7 @@ export function EditorShell({
     activePageId,
     activeTool,
     addElement,
+    addInteraction,
     addObject3D,
     addPage,
     artboard,
@@ -200,6 +215,7 @@ export function EditorShell({
     pasteClipboard,
     past,
     redo,
+    removeInteraction,
     removePage,
     removeSelected,
     replaceElements,
@@ -211,6 +227,7 @@ export function EditorShell({
     setActivePageId,
     setActiveTool,
     setSelectedElementIds,
+    setSelectedItems,
     setSelectedObject3DIds,
     setSelectedShape,
     setZoom,
@@ -222,6 +239,8 @@ export function EditorShell({
     updateBackgroundMusic,
     updateElement,
     updateElements,
+    updateInteraction,
+    updateObject3D,
     updateSoundMixer,
     zoom,
   } = useEditorStore();
@@ -230,11 +249,18 @@ export function EditorShell({
   const objects3d = useMemo(() => activePage?.objects3d ?? [], [activePage]);
   const threeDemoSeededRef = useRef(false);
   const interactionDemoSeededRef = useRef(false);
+  const monDemoSeededRef = useRef(false);
+  const pinocchioDemoSeededRef = useRef(false);
+  const monDemoFitRef = useRef(false);
 
   useEffect(() => {
     if (
       threeDemoSeededRef.current ||
       typeof window === "undefined" ||
+      ["1", "mon-native", "mon-art", "pinocchio-native"].includes(
+        new URLSearchParams(window.location.search).get("interactionDemo") ??
+          "",
+      ) ||
       (process.env.NEXT_PUBLIC_ENABLE_3D_DEMO !== "1" &&
         new URLSearchParams(window.location.search).get("threeDemo") !== "1")
     ) {
@@ -343,9 +369,13 @@ export function EditorShell({
     if (
       interactionDemoSeededRef.current ||
       typeof window === "undefined" ||
+      ["1", "mon-native", "mon-art", "pinocchio-native"].includes(
+        new URLSearchParams(window.location.search).get("interactionDemo") ??
+          "",
+      ) ||
       (process.env.NEXT_PUBLIC_ENABLE_INTERACTION_DEMO !== "1" &&
         new URLSearchParams(window.location.search).get("interactionDemo") !==
-          "1")
+          "classic")
     ) {
       return;
     }
@@ -638,6 +668,12 @@ export function EditorShell({
   const [assetTab, setAssetTab] = useState<"image" | "video" | "model3d">(
     "image",
   );
+  const assetUploadAccept =
+    assetTab === "model3d"
+      ? ".glb,.gltf,model/gltf-binary,model/gltf+json"
+      : assetTab === "video"
+        ? "video/*"
+        : "image/*";
   const [propertyTab, setPropertyTab] = useState<PropertyTab>("design");
   const [uploadedAssets, setUploadedAssets] = useState<string[]>([]);
   const [uploadedModelAssets, setUploadedModelAssets] = useState<
@@ -656,6 +692,64 @@ export function EditorShell({
   } = useInterfaceScale();
   const [viewMenuOpen, setViewMenuOpen] = useState(false);
   const [previewVisible, setPreviewVisible] = useState(false);
+  const [monDemoMode, setMonDemoMode] = useState(false);
+  useEffect(() => {
+    if (monDemoSeededRef.current || typeof window === "undefined") return;
+    const requestedDemo = new URLSearchParams(window.location.search).get(
+      "interactionDemo",
+    );
+    if (
+      requestedDemo !== "1" &&
+      requestedDemo !== "mon-native" &&
+      requestedDemo !== "mon-art"
+    )
+      return;
+    monDemoSeededRef.current = true;
+    if (elements.length === 0) {
+      for (const element of createMonDemoElements(
+        artboard.width,
+        artboard.height,
+      )) {
+        addElement(element);
+      }
+      setSelectedElementIds([]);
+    }
+    queueMicrotask(() => {
+      setMonDemoMode(requestedDemo === "mon-art");
+      setPreviewVisible(true);
+    });
+  }, [
+    addElement,
+    artboard.height,
+    artboard.width,
+    elements.length,
+    setSelectedElementIds,
+  ]);
+  useEffect(() => {
+    if (pinocchioDemoSeededRef.current || typeof window === "undefined") return;
+    if (
+      new URLSearchParams(window.location.search).get("interactionDemo") !==
+      "pinocchio-native"
+    )
+      return;
+    pinocchioDemoSeededRef.current = true;
+    if (elements.length === 0) {
+      for (const element of createPinocchioDemoElements(
+        artboard.width,
+        artboard.height,
+      )) {
+        addElement(element);
+      }
+      setSelectedElementIds([]);
+    }
+    queueMicrotask(() => setPreviewVisible(true));
+  }, [
+    addElement,
+    artboard.height,
+    artboard.width,
+    elements.length,
+    setSelectedElementIds,
+  ]);
   const [navigatorVisible, setNavigatorVisible] = useState(false);
   const [navigatorViewport, setNavigatorViewport] = useState<NavigatorViewport>(
     {
@@ -695,6 +789,9 @@ export function EditorShell({
     position: number;
   } | null>(null);
   const [selectedGuideIds, setSelectedGuideIds] = useState<string[]>([]);
+  const [projected3DBounds, setProjected3DBounds] = useState<
+    Record<string, ProjectedBounds>
+  >({});
   const [guideClipboard, setGuideClipboard] = useState<EditorGuide[]>([]);
   const [artboardSelected, setArtboardSelected] = useState(false);
   const [editingTextId, setEditingTextId] = useState<string | null>(null);
@@ -707,7 +804,18 @@ export function EditorShell({
   const verticalRulerRef = useRef<HTMLCanvasElement>(null);
   const guideDragRef = useRef<GuideDrag | null>(null);
   const gestureRef = useRef<Gesture | null>(null);
+  const objectDragGroupRef = useRef<{
+    activeObjectId: string;
+    activeStart: { x: number; y: number };
+    elementIds: string[];
+    lastDelta: { x: number; y: number };
+    objects: Object3DElement[];
+  } | null>(null);
   const rawDragActiveRef = useRef(false);
+  const pending3DResizeRef = useRef<{
+    frame: number | null;
+    sample: DragPointerSample | null;
+  }>({ frame: null, sample: null });
   const renderDragPreviewRef = useRef<(sample: DragPointerSample) => void>(
     () => undefined,
   );
@@ -759,6 +867,11 @@ export function EditorShell({
     setZoom(nextZoom);
     return true;
   }, [artboard.height, artboard.width, setZoom]);
+
+  useEffect(() => {
+    if (!monDemoMode || previewVisible || monDemoFitRef.current) return;
+    monDemoFitRef.current = applyZoomToFit();
+  }, [applyZoomToFit, monDemoMode, previewVisible]);
 
   useEffect(() => {
     if (!viewMenuOpen) return;
@@ -839,6 +952,36 @@ export function EditorShell({
   const selectedObjects3D = useMemo(
     () => objects3d.filter((object) => selectedObject3DIds.includes(object.id)),
     [objects3d, selectedObject3DIds],
+  );
+  const selected3DObject =
+    selectedObjects3D.length === 1 ? selectedObjects3D[0] : null;
+  const selected3DBounds =
+    selected3DObject?.visible
+      ? projected3DBounds[selected3DObject.id] ?? null
+      : null;
+  const handle3DProjectedBoundsChange = useCallback(
+    (objectId: string, bounds: ProjectedBounds | null) => {
+      setProjected3DBounds((current) => {
+        if (!bounds) {
+          if (!current[objectId]) return current;
+          const next = { ...current };
+          delete next[objectId];
+          return next;
+        }
+        const previous = current[objectId];
+        if (
+          previous &&
+          Math.abs(previous.x - bounds.x) < 0.01 &&
+          Math.abs(previous.y - bounds.y) < 0.01 &&
+          Math.abs(previous.width - bounds.width) < 0.01 &&
+          Math.abs(previous.height - bounds.height) < 0.01
+        ) {
+          return current;
+        }
+        return { ...current, [objectId]: bounds };
+      });
+    },
+    [],
   );
   const interactionElements = useMemo(
     () => [
@@ -1571,7 +1714,8 @@ export function EditorShell({
           setArtboardSelected(false);
           return;
         }
-        const hasElementSelection = selectedElementIds.length > 0;
+        const hasElementSelection =
+          selectedElementIds.length > 0 || selectedObject3DIds.length > 0;
         const hasGuideSelection = selectedGuideIds.length > 0;
         if (hasElementSelection) removeSelected();
         if (hasGuideSelection) {
@@ -1667,6 +1811,7 @@ export function EditorShell({
     selectedElements,
     selectedGuideIds,
     selectedElementIds,
+    selectedObject3DIds,
     selectedPenHandles,
     selectedPenNodes,
     setStableDistanceMeasurements,
@@ -2405,7 +2550,7 @@ export function EditorShell({
       nextSelection = allSelected
         ? selectedElementIds.filter((id) => !targetSelectionSet.has(id))
         : [...new Set([...selectedElementIds, ...targetSelectionIds])];
-      setSelectedElementIds(nextSelection);
+      setSelectedItems(nextSelection, selectedObject3DIds);
     } else if (
       !targetSelectionIds.every((id) => selectedElementIds.includes(id))
     ) {
@@ -2435,9 +2580,13 @@ export function EditorShell({
         .map(rectFromElement),
       kind: "move",
       initialElements,
+      initialObjects3D: selectedObjects3D.filter((object) => !object.locked),
       pointerId: event.pointerId,
       previewTargets: collectMovePreviewTargets(initialElements),
-      selectionBounds: boundsFromElements(initialElements),
+      selectionBounds:
+        selectedObjects3D.length > 0
+          ? selectionDimensionsBounds
+          : boundsFromElements(initialElements),
       selectionIds: movableSelection,
       startClient: { x: event.clientX, y: event.clientY },
     };
@@ -2471,6 +2620,29 @@ export function EditorShell({
     canvasRef.current?.setPointerCapture(event.pointerId);
   };
 
+  const handle3DResizePointerDown = (
+    event: ReactPointerEvent<HTMLButtonElement>,
+    object: Object3DElement,
+    bounds: ProjectedBounds,
+    handle: ResizeHandle,
+  ) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (object.locked || !selectionToolActive || spacePressed) return;
+    checkpoint();
+    rawDragActiveRef.current = false;
+    gestureRef.current = {
+      kind: "resize-3d",
+      pointerId: event.pointerId,
+      handle,
+      initial: object,
+      initialBounds: bounds,
+      scale: totalScale,
+      startClient: { x: event.clientX, y: event.clientY },
+    };
+    canvasRef.current?.setPointerCapture(event.pointerId);
+  };
+
   const handleMultiResizePointerDown = (
     event: ReactPointerEvent<HTMLButtonElement>,
     handle: ResizeHandle,
@@ -2478,13 +2650,22 @@ export function EditorShell({
     event.preventDefault();
     event.stopPropagation();
     if (
-      selectedElements.length < 2 ||
-      selectedElements.some((element) => element.locked)
+      selectedElements.length + selectedObjects3D.length < 2 ||
+      selectedElements.some((element) => element.locked) ||
+      selectedObjects3D.some((object) => object.locked)
     ) {
       return;
     }
-    const initialBounds = boundsFromElements(selectedElements);
+    const initialBounds = selectionDimensionsBounds;
     if (!initialBounds) return;
+    const initialObjectBounds = Object.fromEntries(
+      selectedObjects3D.flatMap((object) => {
+        const bounds = projected3DBounds[object.id];
+        return bounds ? [[object.id, bounds]] : [];
+      }),
+    );
+    if (Object.keys(initialObjectBounds).length !== selectedObjects3D.length)
+      return;
     checkpoint();
     rawDragActiveRef.current = false;
     gestureRef.current = {
@@ -2492,6 +2673,8 @@ export function EditorShell({
       handle,
       initialBounds,
       initialElements: selectedElements,
+      initialObjects3D: selectedObjects3D,
+      initialObjectBounds,
       kind: "multi-resize",
       pointerId: event.pointerId,
       previewTargets: collectMultiResizePreviewTargets(
@@ -2715,6 +2898,18 @@ export function EditorShell({
         gesture.initialElements.length === 1,
       );
       previewElementMove(gesture.previewTargets, snap.delta);
+      gesture.initialObjects3D.forEach((object) => {
+        updateObject3D(object.id, {
+          transform: {
+            ...object.transform,
+            position: {
+              ...object.transform.position,
+              x: object.transform.position.x + snap.delta.x,
+              y: object.transform.position.y + snap.delta.y,
+            },
+          },
+        });
+      });
       previewSmartGuides(
         {
           horizontal: horizontalSmartGuideRef.current,
@@ -2840,7 +3035,39 @@ export function EditorShell({
       return;
     }
 
+    if (gesture.kind === "resize-3d") {
+      if (
+        gesture.lastSample?.x === sample.x &&
+        gesture.lastSample?.y === sample.y &&
+        gesture.lastSample?.ctrlKey === sample.ctrlKey &&
+        gesture.lastSample?.shiftKey === sample.shiftKey
+      ) {
+        return;
+      }
+      const transform = resizeObject3DFromScreen({
+        artboardHeight: artboard.height,
+        deltaX: (sample.x - gesture.startClient.x) / gesture.scale,
+        deltaY: (sample.y - gesture.startClient.y) / gesture.scale,
+        handle: gesture.handle,
+        initial: gesture.initial,
+        initialBounds: gesture.initialBounds,
+        preserveRatio: lockRatio || sample.ctrlKey || sample.shiftKey,
+        scene: resolveScene3DSettings(activePage?.scene3d),
+      });
+      gestureRef.current = { ...gesture, lastSample: sample };
+      updateObject3D(gesture.initial.id, { transform });
+      return;
+    }
+
     if (gesture.kind === "multi-resize") {
+      if (
+        gesture.lastSample?.x === sample.x &&
+        gesture.lastSample?.y === sample.y &&
+        gesture.lastSample?.ctrlKey === sample.ctrlKey &&
+        gesture.lastSample?.shiftKey === sample.shiftKey
+      ) {
+        return;
+      }
       const resizedBounds = resizedBoundsFromCorner(
         gesture.initialBounds,
         gesture.handle,
@@ -2866,7 +3093,25 @@ export function EditorShell({
       gestureRef.current = {
         ...gesture,
         appliedElements: resizedElements,
+        lastSample: sample,
       };
+      if (gesture.initialObjects3D.length) {
+        const scene = resolveScene3DSettings(activePage?.scene3d);
+        gesture.initialObjects3D.forEach((object) => {
+          const objectBounds = gesture.initialObjectBounds[object.id];
+          if (!objectBounds) return;
+          updateObject3D(object.id, {
+            transform: resizeObject3DWithinSelection({
+              artboardHeight: artboard.height,
+              initial: object,
+              objectBounds,
+              resizedSelectionBounds: resizedBounds,
+              scene,
+              selectionBounds: gesture.initialBounds,
+            }),
+          });
+        });
+      }
       return;
     }
 
@@ -2911,6 +3156,7 @@ export function EditorShell({
       gesture.kind === "draw" ||
       gesture.kind === "move" ||
       gesture.kind === "resize" ||
+      gesture.kind === "resize-3d" ||
       gesture.kind === "multi-resize" ||
       gesture.kind === "marquee"
     ) {
@@ -3190,6 +3436,7 @@ export function EditorShell({
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
+    const pending3DResize = pending3DResizeRef.current;
 
     const handleRawDrag = (rawEvent: Event) => {
       if (!(rawEvent instanceof PointerEvent)) return;
@@ -3202,6 +3449,7 @@ export function EditorShell({
           gesture.kind === "draw" ||
           gesture.kind === "move" ||
           gesture.kind === "resize" ||
+          gesture.kind === "resize-3d" ||
           gesture.kind === "multi-resize" ||
           gesture.kind === "marquee"
         )
@@ -3213,16 +3461,43 @@ export function EditorShell({
         x: rawEvent.clientX,
         y: rawEvent.clientY,
       };
-      renderDragPreviewRef.current(dragPointerSample(rawEvent));
+      const sample = dragPointerSample(rawEvent);
+      if (
+        gesture.kind === "resize-3d" ||
+        (gesture.kind === "multi-resize" &&
+          gesture.initialObjects3D.length > 0)
+      ) {
+        pending3DResize.sample = sample;
+        if (pending3DResize.frame === null) {
+          pending3DResize.frame = window.requestAnimationFrame(() => {
+            pending3DResize.frame = null;
+            const latest = pending3DResize.sample;
+            pending3DResize.sample = null;
+            if (latest) renderDragPreviewRef.current(latest);
+          });
+        }
+      } else {
+        renderDragPreviewRef.current(sample);
+      }
     };
 
     canvas.addEventListener("pointerrawupdate", handleRawDrag, {
       passive: true,
     });
-    return () => canvas.removeEventListener("pointerrawupdate", handleRawDrag);
+    return () => {
+      canvas.removeEventListener("pointerrawupdate", handleRawDrag);
+      if (pending3DResize.frame !== null)
+        window.cancelAnimationFrame(pending3DResize.frame);
+      pending3DResize.frame = null;
+      pending3DResize.sample = null;
+    };
   }, []);
 
   const handleCanvasPointerUp = (event: ReactPointerEvent<HTMLElement>) => {
+    const pending = pending3DResizeRef.current;
+    if (pending.frame !== null) window.cancelAnimationFrame(pending.frame);
+    pending.frame = null;
+    pending.sample = null;
     const pendingGesture = gestureRef.current;
     if (
       pendingGesture?.pointerId === event.pointerId &&
@@ -3230,6 +3505,7 @@ export function EditorShell({
         pendingGesture.kind === "draw" ||
         pendingGesture.kind === "move" ||
         pendingGesture.kind === "resize" ||
+        pendingGesture.kind === "resize-3d" ||
         pendingGesture.kind === "multi-resize" ||
         pendingGesture.kind === "marquee")
     ) {
@@ -3290,10 +3566,21 @@ export function EditorShell({
         )
         .map((element) => element.id);
       const expandedHitIds = expandGroupedSelection(elements, hitIds);
-      setSelectedElementIds(
+      const hit3DIds = objects3d
+        .filter(
+          (object) =>
+            object.visible &&
+            projected3DBounds[object.id] &&
+            intersects(selectionBounds, projected3DBounds[object.id]),
+        )
+        .map((object) => object.id);
+      setSelectedItems(
         gesture.additive
           ? [...new Set([...selectedElementIds, ...expandedHitIds])]
           : expandedHitIds,
+        gesture.additive
+          ? [...new Set([...selectedObject3DIds, ...hit3DIds])]
+          : hit3DIds,
       );
       setSelectedGuideIds([]);
       setArtboardSelected(false);
@@ -3539,15 +3826,42 @@ export function EditorShell({
   const groupedSelectionBounds = groupedSelectionId
     ? boundsFromElements(selectedElements)
     : null;
+  const selectionRects = [
+    ...selectedElements.map(rectFromElement),
+    ...selectedObjects3D.flatMap((object) => {
+      const bounds = projected3DBounds[object.id];
+      return object.visible && bounds ? [bounds] : [];
+    }),
+  ];
   const selectionDimensionsBounds =
-    !artboardSelected && selectedElements.length
-      ? boundsFromElements(selectedElements)
+    !artboardSelected && selectionRects.length
+      ? (() => {
+          const left = Math.min(...selectionRects.map((rect) => rect.x));
+          const top = Math.min(...selectionRects.map((rect) => rect.y));
+          const right = Math.max(
+            ...selectionRects.map((rect) => rect.x + rect.width),
+          );
+          const bottom = Math.max(
+            ...selectionRects.map((rect) => rect.y + rect.height),
+          );
+          return {
+            x: left,
+            y: top,
+            width: right - left,
+            height: bottom - top,
+          };
+        })()
       : null;
   const combinedSelectionBounds =
-    selectedElements.length > 1 ? selectionDimensionsBounds : null;
+    selectedElements.length + selectedObjects3D.length > 1
+      ? selectionDimensionsBounds
+      : null;
   const combinedSelectionResizable =
     Boolean(combinedSelectionBounds) &&
-    selectedElements.every((element) => !element.locked);
+    selectedElements.every((element) => !element.locked) &&
+    selectedObjects3D.every(
+      (object) => !object.locked && Boolean(projected3DBounds[object.id]),
+    );
   const selectionDimensionsPlacement = selectionDimensionsBounds
     ? selectionDimensionsBounds.y +
         selectionDimensionsBounds.height +
@@ -3567,7 +3881,9 @@ export function EditorShell({
         }
     : null;
   const selectionDimensionsValue = selectionDimensionsBounds
-    ? selectedElements.length === 1 && selectedElements[0].type === "line"
+    ? selectedElements.length === 1 &&
+      selectedObjects3D.length === 0 &&
+      selectedElements[0].type === "line"
       ? {
           height: Math.max(1, Math.round(selectedElements[0].strokeWidth)),
           width: Math.round(selectionDimensionsBounds.width),
@@ -3991,6 +4307,133 @@ export function EditorShell({
               className="layer-list-content"
               role="listbox"
             >
+              {[...objects3d].reverse().map((object) => {
+                const selected = selectedObject3DIds.includes(object.id);
+                return (
+                  <div
+                    aria-selected={selected}
+                    className="layer-row"
+                    key={object.id}
+                    onClick={(event) => {
+                      if (event.shiftKey) {
+                        setSelectedItems(
+                          selectedElementIds,
+                          selected
+                            ? selectedObject3DIds.filter(
+                                (id) => id !== object.id,
+                              )
+                            : [...selectedObject3DIds, object.id],
+                        );
+                      } else {
+                        setSelectedObject3DIds([object.id]);
+                      }
+                      setSelectedGuideIds([]);
+                      setNodeEditElementId(null);
+                      setArtboardSelected(false);
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key !== "Enter" && event.key !== " ") return;
+                      event.preventDefault();
+                      setSelectedObject3DIds([object.id]);
+                      setSelectedGuideIds([]);
+                      setNodeEditElementId(null);
+                      setArtboardSelected(false);
+                    }}
+                    role="option"
+                    tabIndex={0}
+                  >
+                    <span className="layer-symbol symbol-object3d">
+                      {object.source.kind === "asset" ? (
+                        <ModelAssetThumbnail
+                          assetId={object.source.assetId}
+                          projectId={projectId}
+                        />
+                      ) : (
+                        <Box aria-hidden="true" size={15} strokeWidth={1} />
+                      )}
+                    </span>
+                    {editingElementId === object.id ? (
+                      <input
+                        aria-label={`Rename ${object.name}`}
+                        autoFocus
+                        className="inline-name-input"
+                        data-cancel="false"
+                        onBlur={(event) => {
+                          if (event.currentTarget.dataset.cancel === "true") {
+                            setEditingElementId(null);
+                            return;
+                          }
+                          const nextName = elementNameDraft.trim();
+                          if (nextName && nextName !== object.name) {
+                            checkpoint();
+                            updateObject3D(object.id, { name: nextName });
+                          }
+                          setEditingElementId(null);
+                        }}
+                        onChange={(event) =>
+                          setElementNameDraft(event.target.value)
+                        }
+                        onClick={(event) => event.stopPropagation()}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") {
+                            event.preventDefault();
+                            event.currentTarget.blur();
+                          }
+                          if (event.key === "Escape") {
+                            event.preventDefault();
+                            event.currentTarget.dataset.cancel = "true";
+                            event.currentTarget.blur();
+                          }
+                        }}
+                        onPointerDown={(event) => event.stopPropagation()}
+                        type="text"
+                        value={elementNameDraft}
+                      />
+                    ) : (
+                      <span
+                        className="layer-name"
+                        onDoubleClick={(event) => {
+                          event.stopPropagation();
+                          setEditingElementId(object.id);
+                          setElementNameDraft(object.name);
+                        }}
+                      >
+                        {object.name}
+                      </span>
+                    )}
+                    <span className="layer-controls">
+                      <button
+                        aria-label={`${object.locked ? "Unlock" : "Lock"} ${object.name}`}
+                        className={`layer-action ${object.locked ? "is-persistent" : ""}`}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          checkpoint();
+                          updateObject3D(object.id, {
+                            locked: !object.locked,
+                          });
+                        }}
+                        type="button"
+                      >
+                        {object.locked ? <Lock size={11} /> : <Unlock size={11} />}
+                      </button>
+                      <button
+                        aria-label={`${object.visible ? "Hide" : "Show"} ${object.name}`}
+                        className={`layer-action ${!object.visible ? "is-persistent" : ""}`}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          checkpoint();
+                          updateObject3D(object.id, {
+                            visible: !object.visible,
+                          });
+                        }}
+                        type="button"
+                      >
+                        {object.visible ? <Eye size={12} /> : <EyeOff size={12} />}
+                      </button>
+                    </span>
+                  </div>
+                );
+              })}
               {[...elements].reverse().map((element) => {
                 const selected = selectedElementIds.includes(element.id);
                 const hasSound =
@@ -4012,7 +4455,7 @@ export function EditorShell({
                         const allSelected = targetIds.every((id) =>
                           selectedElementIds.includes(id),
                         );
-                        setSelectedElementIds(
+                        setSelectedItems(
                           allSelected
                             ? selectedElementIds.filter(
                                 (id) => !targetSet.has(id),
@@ -4023,6 +4466,7 @@ export function EditorShell({
                                   ...targetIds,
                                 ]),
                               ],
+                          selectedObject3DIds,
                         );
                         return;
                       }
@@ -4152,7 +4596,7 @@ export function EditorShell({
                 width={11}
               />
               <input
-                accept="image/*,video/*,.glb,.gltf,model/gltf-binary"
+                accept={assetUploadAccept}
                 multiple
                 onChange={handleAssetUpload}
                 type="file"
@@ -4169,7 +4613,7 @@ export function EditorShell({
             />
             <span>Upload</span>
             <input
-              accept="image/*,video/*,.glb,.gltf,model/gltf-binary"
+              accept={assetUploadAccept}
               multiple
               onChange={handleAssetUpload}
               type="file"
@@ -4218,6 +4662,10 @@ export function EditorShell({
                     title={asset.fileName}
                     type="button"
                   >
+                    <ModelAssetThumbnail
+                      assetId={asset.id}
+                      projectId={projectId}
+                    />
                     <span className="uploaded-asset-label">
                       {asset.fileName}
                     </span>
@@ -4315,10 +4763,82 @@ export function EditorShell({
           <Artboard3DScene
             artboardHeight={artboard.height}
             artboardWidth={artboard.width}
+            editable={selectionToolActive && !spacePressed}
             objects={objects3d}
             onClearSelection={() => setSelectedObject3DIds([])}
-            onSelectObject={(objectId) => {
-              setSelectedObject3DIds([objectId]);
+            onObjectDragStart={(objectId) => {
+              checkpoint();
+              const state = useEditorStore.getState();
+              const page = state.pages.find(
+                (candidate) => candidate.id === state.activePageId,
+              );
+              const active = page?.objects3d?.find(
+                (candidate) => candidate.id === objectId,
+              );
+              if (!active) return;
+              objectDragGroupRef.current = {
+                activeObjectId: objectId,
+                activeStart: {
+                  x: active.transform.position.x,
+                  y: active.transform.position.y,
+                },
+                elementIds: state.selectedElementIds.filter((id) =>
+                  page?.elements.some(
+                    (element) => element.id === id && !element.locked,
+                  ),
+                ),
+                lastDelta: { x: 0, y: 0 },
+                objects: (page?.objects3d ?? []).filter(
+                  (object) =>
+                    state.selectedObject3DIds.includes(object.id) &&
+                    !object.locked,
+                ),
+              };
+            }}
+            onObjectDrag={(objectId, position) => {
+              const drag = objectDragGroupRef.current;
+              if (!drag || drag.activeObjectId !== objectId) return;
+              const delta = {
+                x: position.x - drag.activeStart.x,
+                y: position.y - drag.activeStart.y,
+              };
+              drag.objects.forEach((object) => {
+                updateObject3D(object.id, {
+                  transform: {
+                    ...object.transform,
+                    position: {
+                      ...object.transform.position,
+                      x: object.transform.position.x + delta.x,
+                      y: object.transform.position.y + delta.y,
+                    },
+                  },
+                });
+              });
+              if (drag.elementIds.length) {
+                updateElements(
+                  drag.elementIds,
+                  delta.x - drag.lastDelta.x,
+                  delta.y - drag.lastDelta.y,
+                );
+              }
+              drag.lastDelta = delta;
+            }}
+            onProjectedBoundsChange={handle3DProjectedBoundsChange}
+            onSelectObject={(objectId, additive) => {
+              if (additive) {
+                setSelectedItems(
+                  selectedElementIds,
+                  selectedObject3DIds.includes(objectId)
+                    ? selectedObject3DIds.filter((id) => id !== objectId)
+                    : [...selectedObject3DIds, objectId],
+                );
+              } else if (
+                !selectedObject3DIds.includes(objectId) ||
+                (selectedObject3DIds.length === 1 &&
+                  selectedElementIds.length === 0)
+              ) {
+                setSelectedObject3DIds([objectId]);
+              }
               setSelectedGuideIds([]);
               setNodeEditElementId(null);
               setSelectedPenNodes([]);
@@ -4328,8 +4848,53 @@ export function EditorShell({
             }}
             scene={activePage?.scene3d}
             projectId={projectId}
-            selectedObjectIds={selectedObject3DIds}
           />
+          {selected3DObject && selected3DBounds ? (
+            <div
+              aria-label={`3D selection ${selected3DObject.name}`}
+              className="object-3d-selection"
+              style={
+                {
+                  height: selected3DBounds.height,
+                  left: selected3DBounds.x,
+                  top: selected3DBounds.y,
+                  width: selected3DBounds.width,
+                  "--selection-handle-outset": "0px",
+                } as CSSProperties
+              }
+            >
+              <SelectionOutlineSvg
+                centerOutset={0}
+                controlScale={selectionControlScale}
+                height={selected3DBounds.height}
+                lineWidth={selectionOutlineWidth}
+                showCornerHandles={
+                  !selected3DObject.locked && selectedElements.length === 0
+                }
+                width={selected3DBounds.width}
+              />
+              {!selected3DObject.locked && selectedElements.length === 0
+                ? (["nw", "ne", "se", "sw"] as ResizeHandle[]).map(
+                    (handle) => (
+                      <button
+                        aria-label={`Resize 3D ${selected3DObject.name} ${handle}`}
+                        className={`resize-handle handle-${handle}`}
+                        key={handle}
+                        onPointerDown={(event) =>
+                          handle3DResizePointerDown(
+                            event,
+                            selected3DObject,
+                            selected3DBounds,
+                            handle,
+                          )
+                        }
+                        type="button"
+                      />
+                    ),
+                  )
+                : null}
+            </div>
+          ) : null}
           {elements.map((element) => {
             if (!element.visible) return null;
             const selected = selectedElementIds.includes(element.id);
@@ -4472,6 +5037,7 @@ export function EditorShell({
                     showCornerHandles={
                       nodeEditElementId !== element.id &&
                       selectedElements.length === 1 &&
+                      selectedObjects3D.length === 0 &&
                       !element.locked
                     }
                     strokePlacement={
@@ -4493,6 +5059,7 @@ export function EditorShell({
 
                 {nodeEditElementId !== element.id &&
                 selectedElements.length === 1 &&
+                selectedObjects3D.length === 0 &&
                 selected &&
                 !element.locked ? (
                   <>
@@ -5046,6 +5613,12 @@ export function EditorShell({
         {visiblePropertyTab === "interaction" ? (
           <InteractionPanel
             elements={interactionElements}
+            interactionsByElement={Object.fromEntries(
+              elements.map((element) => [element.id, element.interactions ?? []]),
+            )}
+            onAddInteraction={addInteraction}
+            onRemoveInteraction={removeInteraction}
+            onUpdateInteraction={updateInteraction}
             projectId={projectId}
             selectedElementIds={[
               ...selectedElements.map((element) => element.id),
@@ -5118,6 +5691,30 @@ export function EditorShell({
             selectedElements={selectedElements}
             settings={backgroundMusicSettings}
           />
+        ) : visiblePropertyTab === "design" &&
+          selectedObjects3D.length > 0 &&
+          selectedElements.length > 0 ? (
+          <DesignMixedPanel
+            artboardHeight={artboard.height}
+            bounds={selectionDimensionsBounds}
+            lockRatio={lockRatio}
+            objectBounds={projected3DBounds}
+            onCheckpoint={checkpoint}
+            onLockRatioChange={setLockRatio}
+            onUpdateElement={updateElement}
+            onUpdateObject={updateObject3D}
+            scene={resolveScene3DSettings(activePage?.scene3d)}
+            selectedElements={selectedElements}
+            selectedObjects={selectedObjects3D}
+          />
+        ) : visiblePropertyTab === "design" && selectedObjects3D.length > 0 ? (
+          <Design3DPanel
+            lockRatio={lockRatio}
+            onCheckpoint={checkpoint}
+            onLockRatioChange={setLockRatio}
+            onUpdateObject={updateObject3D}
+            selectedObjects={selectedObjects3D}
+          />
         ) : visiblePropertyTab === "design" ? (
           <DesignPanel
             artboard={artboard}
@@ -5138,17 +5735,21 @@ export function EditorShell({
         </output>
       </aside>
       {previewVisible ? (
-        <ViewerPreview
-          advancedSound={advancedSoundSettings}
-          artboard={artboard}
-          backgroundMusic={backgroundMusicSettings}
-          elements={elements}
-          mixer={soundMixerSettings}
-          objects3d={objects3d}
-          onClose={() => setPreviewVisible(false)}
-          projectId={projectId}
-          scene3d={activePage?.scene3d}
-        />
+        monDemoMode ? (
+          <MonDemoExperience onClose={() => setPreviewVisible(false)} />
+        ) : (
+          <ViewerPreview
+            advancedSound={advancedSoundSettings}
+            artboard={artboard}
+            backgroundMusic={backgroundMusicSettings}
+            elements={elements}
+            mixer={soundMixerSettings}
+            objects3d={objects3d}
+            onClose={() => setPreviewVisible(false)}
+            projectId={projectId}
+            scene3d={activePage?.scene3d}
+          />
+        )
       ) : null}
     </main>
   );

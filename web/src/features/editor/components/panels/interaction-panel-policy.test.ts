@@ -78,7 +78,10 @@ describe("effect options by selected element", () => {
     expect(values(getEffectOptions(["rectangle"], "click-tap"))).not.toContain(
       "liquid-merge",
     );
-    expect(values(getEffectOptions(["line"], "near-target"))).not.toContain(
+    expect(values(getEffectOptions(["line"], "near-target"))).toContain(
+      "liquid-merge",
+    );
+    expect(values(getEffectOptions(["pen"], "near-target"))).toContain(
       "liquid-merge",
     );
     expect(values(getEffectOptions(["text"], "near-target"))).not.toContain(
@@ -87,6 +90,14 @@ describe("effect options by selected element", () => {
     expect(
       values(getEffectOptions(["rectangle", "circle"], "near-target")),
     ).not.toContain("liquid-merge");
+  });
+
+  it("offers Strand Bend to vector strands on pointer input", () => {
+    expect(values(getEffectOptions(["line"], "drag"))).toContain("strand-bend");
+    expect(values(getEffectOptions(["pen"], "pointer-move"))).toContain("strand-bend");
+    expect(values(getEffectOptions(["image"], "drag"))).not.toContain("strand-bend");
+    expect(values(getEffectOptions(["line"], "click-tap"))).not.toContain("strand-bend");
+    expect(values(getMotionOptions("drag", "drag-progress", "strand-bend"))).toEqual(["direct", "spring"]);
   });
 });
 

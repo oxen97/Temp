@@ -6,6 +6,7 @@ import {
   type PathPoint,
   type ShapeType,
 } from "@/features/editor/store/editor-store";
+import type { Object3DElement } from "@/features/editor/three/types";
 
 export type ToolDefinition = {
   id: EditorTool;
@@ -188,6 +189,7 @@ export type Gesture =
       fixedElements: CanvasElement[];
       fixedRects: ElementRect[];
       initialElements: CanvasElement[];
+      initialObjects3D: Object3DElement[];
       previewTargets: MovePreviewTargets;
       selectionBounds: ElementRect | null;
       selectionIds: string[];
@@ -205,12 +207,25 @@ export type Gesture =
       startClient: Point;
     }
   | {
+      kind: "resize-3d";
+      pointerId: number;
+      handle: ResizeHandle;
+      initial: Object3DElement;
+      initialBounds: ElementRect;
+      lastSample?: DragPointerSample;
+      scale: number;
+      startClient: Point;
+    }
+  | {
       kind: "multi-resize";
       pointerId: number;
       appliedElements: CanvasElement[];
       handle: ResizeHandle;
       initialBounds: ElementRect;
       initialElements: CanvasElement[];
+      initialObjects3D: Object3DElement[];
+      initialObjectBounds: Record<string, ElementRect>;
+      lastSample?: DragPointerSample;
       previewTargets: MultiResizePreviewTargets;
       scale: number;
       startClient: Point;

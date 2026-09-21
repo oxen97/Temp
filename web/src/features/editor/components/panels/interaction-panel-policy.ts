@@ -108,11 +108,14 @@ const threeDMappingAdditions: Record<string, InteractionOption[]> = {
 };
 
 const liquidMergeTriggers = new Set(["near-target", "while-overlapping"]);
+const strandBendTriggers = new Set(["drag", "pointer-move"]);
 const collisionBounceTriggers = new Set(["overlap-start", "drop-on-target"]);
-const closedShapeTypes = new Set(["rectangle", "circle", "triangle", "star"]);
+const mergeable2DTypes = new Set([
+  "rectangle", "circle", "triangle", "star", "line", "pen",
+]);
 
 export function isLiquidMergeShape(type: string): boolean {
-  return closedShapeTypes.has(type);
+  return mergeable2DTypes.has(type);
 }
 
 const commonEffects: InteractionOption[] = [
@@ -339,6 +342,11 @@ export function getEffectOptions(
     ...cameraEffects,
     ...visualPipelineEffects,
     ...(type !== undefined &&
+    (type === "line" || type === "pen") &&
+    strandBendTriggers.has(trigger)
+      ? [{ label: "Strand Bend", value: "strand-bend" }]
+      : []),
+    ...(type !== undefined &&
     isLiquidMergeShape(type) &&
     liquidMergeTriggers.has(trigger)
       ? [{ label: "Liquid Merge", value: "liquid-merge" }]
@@ -398,6 +406,7 @@ export function getMotionOptions(
     skew: ["direct", "spring"],
     distort: ["direct", "spring"],
     "liquid-merge": ["direct", "spring"],
+    "strand-bend": ["direct", "spring"],
     "look-at-target": ["direct", "spring"],
     "orbit-around-target": ["direct", "spring", "inertia"],
     "attach-to-target": ["direct", "spring"],

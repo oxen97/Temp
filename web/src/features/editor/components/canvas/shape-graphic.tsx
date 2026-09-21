@@ -1,4 +1,4 @@
-import { type CSSProperties } from "react";
+import { useId, type CSSProperties } from "react";
 
 import {
   colorWithOpacity,
@@ -7,6 +7,10 @@ import {
 import { clamp, visualFlipTransform } from "@/features/editor/lib/geometry";
 import { imageCropForElement } from "@/features/editor/lib/image-crop";
 import { ringWithoutClosingPoint } from "@/features/editor/lib/pathfinder";
+import {
+  bendOpenPath,
+  type StrandBendVisual,
+} from "@/features/editor/lib/strand-bend";
 import {
   polygonCornerRadii,
   polygonPointsForElement,
@@ -23,16 +27,59 @@ import { type CanvasElement } from "@/features/editor/store/editor-store";
 export function ShapeGraphic({
   element,
   imageScale = 1,
+  strandBend,
+  strandPathData,
+  strandRibbonPathData,
 }: {
   element: CanvasElement;
   imageScale?: number;
+  strandBend?: StrandBendVisual;
+  strandPathData?: string;
+  strandRibbonPathData?: string;
 }) {
+  const ribbonGradientId = useId().replaceAll(":", "");
   const fill = colorWithOpacity(element.fill, element.fillOpacity);
   const strokeVisible = element.strokeStyle !== "none";
   const stroke = strokeVisible
     ? colorWithOpacity(element.stroke, element.strokeOpacity)
     : "none";
   const visibleStrokeWidth = strokeVisible ? element.strokeWidth : 0;
+  const ribbonOpacity = Math.max(0, Math.min(1, (element.strokeOpacity ?? 100) / 100));
+  const pinocchioNose = element.id === "pinocchio-demo-nose";
+  const ribbonGradient = strandRibbonPathData ? (
+    <defs>
+      <linearGradient
+        id={ribbonGradientId}
+        x1="0%"
+        x2={pinocchioNose ? "0%" : "100%"}
+        y1="0%"
+        y2={pinocchioNose ? "100%" : "0%"}
+      >
+        {pinocchioNose ? (
+          <>
+            <stop offset="0%" stopColor="#ffe0aa" />
+            <stop offset="30%" stopColor="#f4b57e" />
+            <stop offset="72%" stopColor="#dc9164" />
+            <stop offset="100%" stopColor="#aa5e49" />
+          </>
+        ) : (
+          <>
+            <stop offset="0%" stopColor={element.stroke} stopOpacity={ribbonOpacity * 0.84} />
+            <stop offset="30%" stopColor={element.stroke} stopOpacity={ribbonOpacity} />
+            <stop offset="70%" stopColor={element.stroke} stopOpacity={ribbonOpacity * 0.98} />
+            <stop offset="100%" stopColor={element.stroke} stopOpacity={ribbonOpacity * 0.87} />
+          </>
+        )}
+      </linearGradient>
+      {pinocchioNose ? (
+        <radialGradient id={`${ribbonGradientId}-root`}>
+          <stop offset="0%" stopColor="#f7c58f" />
+          <stop offset="58%" stopColor="#eeb07d" stopOpacity=".94" />
+          <stop offset="100%" stopColor="#e4a071" stopOpacity="0" />
+        </radialGradient>
+      ) : null}
+    </defs>
+  ) : null;
   const innerTransform: CSSProperties = {
     transform: visualFlipTransform(element),
     transformOrigin: "center",
@@ -287,6 +334,9 @@ export function ShapeGraphic({
             ],
           },
         ];
+    const renderedPaths = strandBend && !strandPathData
+      ? paths.map((path) => bendOpenPath(path, strandBend))
+      : paths;
     return (
       <svg
         aria-hidden="true"
@@ -296,27 +346,32 @@ export function ShapeGraphic({
         style={innerTransform}
         viewBox={`0 0 ${Math.max(1, element.width)} ${Math.max(1, element.height)}`}
       >
-        {paths.map((path, index) => (
+        {ribbonGradient}
+        {renderedPaths.map((path, index) => (
           <path
             aria-hidden="true"
             className="pen-hit-area"
-            d={pathData(path.points, path.closed)}
+            d={index === 0 && strandPathData ? strandPathData : pathData(path.points, path.closed)}
             fill="none"
             key={`hit-${index}`}
             pointerEvents="stroke"
             stroke="transparent"
             strokeLinecap="round"
             strokeLinejoin="round"
-            strokeWidth={Math.max(10, visibleStrokeWidth + 8)}
+            strokeWidth={
+              (strandBend || strandPathData) && !path.closed
+                ? Math.max(24, visibleStrokeWidth + 16)
+                : Math.max(10, visibleStrokeWidth + 8)
+            }
             vectorEffect="non-scaling-stroke"
           />
         ))}
-        {paths.map((path, index) => (
+        {renderedPaths.map((path, index) => (
           <path
             className="pen-visible-path"
-            d={pathData(path.points, path.closed)}
+            d={index === 0 && strandPathData ? strandPathData : pathData(path.points, path.closed)}
             key={`visible-${index}`}
-            stroke={stroke}
+            stroke={index === 0 && strandRibbonPathData ? "none" : stroke}
             strokeDasharray={strokeDasharrayForElement(element)}
             strokeOpacity={(element.strokeOpacity ?? 100) / 100}
             strokeLinecap="round"
@@ -326,11 +381,46 @@ export function ShapeGraphic({
             vectorEffect="non-scaling-stroke"
           />
         ))}
+        {strandRibbonPathData ? (
+          <>
+            <path
+              className="strand-ribbon"
+              d={strandRibbonPathData}
+              fill={`url(#${ribbonGradientId})`}
+              pointerEvents="none"
+              stroke={pinocchioNose ? "#9b604b" : undefined}
+              strokeWidth={pinocchioNose ? 3.5 : undefined}
+            />
+            {pinocchioNose ? (
+              <ellipse
+                cx={0}
+                cy={element.height / 2}
+                fill={`url(#${ribbonGradientId}-root)`}
+                pointerEvents="none"
+                rx={element.strokeWidth * 0.95}
+                ry={element.strokeWidth * 0.78}
+              />
+            ) : null}
+          </>
+        ) : null}
       </svg>
     );
   }
 
   if (element.type === "line") {
+    const bentPath = strandPathData ?? (strandBend
+      ? pathData(
+          bendOpenPath(
+            {
+              points: [
+                { x: 0, y: element.height / 2 },
+                { x: element.width, y: element.height / 2 },
+              ],
+            },
+            strandBend,
+          ).points,
+        )
+      : null);
     return (
       <svg
         aria-hidden="true"
@@ -338,19 +428,58 @@ export function ShapeGraphic({
         preserveAspectRatio="none"
         shapeRendering="geometricPrecision"
         style={innerTransform}
-        viewBox="0 0 100 24"
+        viewBox={
+          bentPath
+            ? `0 0 ${Math.max(1, element.width)} ${Math.max(1, element.height)}`
+            : "0 0 100 24"
+        }
       >
-        <line
-          stroke={stroke}
-          strokeDasharray={strokeDasharrayForElement(element)}
-          strokeLinecap="round"
-          strokeWidth={visibleStrokeWidth}
-          vectorEffect="non-scaling-stroke"
-          x1="0"
-          x2="100"
-          y1="12"
-          y2="12"
-        />
+        {ribbonGradient}
+        {bentPath ? (
+          <>
+            <path
+              className="strand-hit-area"
+              d={bentPath}
+              fill="none"
+              pointerEvents="stroke"
+              stroke="transparent"
+              strokeLinecap="round"
+              strokeWidth={Math.max(24, visibleStrokeWidth + 16)}
+              vectorEffect="non-scaling-stroke"
+            />
+            <path
+              className="strand-visible-path"
+              d={bentPath}
+              fill="none"
+              pointerEvents="none"
+              stroke={strandRibbonPathData ? "none" : stroke}
+              strokeDasharray={strokeDasharrayForElement(element)}
+              strokeLinecap="round"
+              strokeWidth={visibleStrokeWidth}
+              vectorEffect="non-scaling-stroke"
+            />
+            {strandRibbonPathData ? (
+              <path
+                className="strand-ribbon"
+                d={strandRibbonPathData}
+                fill={`url(#${ribbonGradientId})`}
+                pointerEvents="none"
+              />
+            ) : null}
+          </>
+        ) : (
+          <line
+            stroke={stroke}
+            strokeDasharray={strokeDasharrayForElement(element)}
+            strokeLinecap="round"
+            strokeWidth={visibleStrokeWidth}
+            vectorEffect="non-scaling-stroke"
+            x1="0"
+            x2="100"
+            y1="12"
+            y2="12"
+          />
+        )}
       </svg>
     );
   }

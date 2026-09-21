@@ -132,7 +132,7 @@ export type Model3DAssetMetadata = {
   materialNames: string[];
   meshFaceGroupNames: string[];
   meshNames: string[];
-  mimeType: "model/gltf-binary";
+  mimeType: "model/gltf-binary" | "model/gltf+json";
   morphTargetNames: string[];
 };
 

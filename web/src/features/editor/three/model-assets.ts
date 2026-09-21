@@ -54,6 +54,61 @@ export async function parseGlb(buffer: ArrayBuffer) {
   return new GLTFLoader().parseAsync(buffer, "");
 }
 
+export function validateGltfJson(source: string) {
+  if (new TextEncoder().encode(source).byteLength > MAX_MODEL_ASSET_BYTES) {
+    throw new Error("glTF file exceeds the 100 MB project limit.");
+  }
+  let document: unknown;
+  try {
+    document = JSON.parse(source);
+  } catch {
+    throw new Error("glTF file does not contain valid JSON.");
+  }
+  if (!document || typeof document !== "object" || Array.isArray(document)) {
+    throw new Error("glTF file must contain a JSON object.");
+  }
+  const gltf = document as {
+    asset?: { version?: unknown };
+    buffers?: { uri?: unknown }[];
+    images?: { uri?: unknown }[];
+  };
+  if (gltf.asset?.version !== "2.0") {
+    throw new Error("Only glTF 2.0 files are supported.");
+  }
+  for (const [kind, resources] of [
+    ["buffer", gltf.buffers],
+    ["image", gltf.images],
+  ] as const) {
+    if (resources !== undefined && !Array.isArray(resources)) {
+      throw new Error(`glTF ${kind} list is invalid.`);
+    }
+    for (const resource of resources ?? []) {
+      if (!resource || typeof resource !== "object") {
+        throw new Error(`glTF ${kind} is invalid.`);
+      }
+      if (kind === "buffer" && resource.uri === undefined) {
+        throw new Error(
+          "A .gltf buffer must be embedded as a data URI. For a binary chunk, upload a .glb file.",
+        );
+      }
+      if (
+        resource.uri !== undefined &&
+        (typeof resource.uri !== "string" || !/^data:/i.test(resource.uri))
+      ) {
+        throw new Error(
+          `External glTF ${kind} files are not supported. Embed them as data URIs or upload a .glb file.`,
+        );
+      }
+    }
+  }
+  return gltf;
+}
+
+export async function parseGltfJson(source: string) {
+  validateGltfJson(source);
+  return new GLTFLoader().parseAsync(source, "");
+}
+
 export function extractModelAssetSceneMetadata(scene: Object3D): {
   boneNames: string[];
   jointNames: string[];
@@ -137,13 +192,18 @@ export function extractModelAssetSceneMetadata(scene: Object3D): {
 
 export async function importModelAsset(projectId: string, file: File) {
   const lowerName = file.name.toLowerCase();
-  if (!lowerName.endsWith(".glb")) {
-    throw new Error(
-      "Choose a .glb file. Multi-file .gltf is not supported yet.",
-    );
+  const isGlb = lowerName.endsWith(".glb");
+  const isGltf = lowerName.endsWith(".gltf");
+  if (!isGlb && !isGltf) {
+    throw new Error("Choose a .glb or .gltf file.");
   }
-  const buffer = await file.arrayBuffer();
-  const gltf = await parseGlb(buffer.slice(0));
+  if (isGltf && file.size > MAX_MODEL_ASSET_BYTES) {
+    throw new Error("glTF file exceeds the 100 MB project limit.");
+  }
+  const gltf = isGlb
+    ? await parseGlb(await file.arrayBuffer())
+    : await parseGltfJson(await file.text());
+  const mimeType = isGlb ? "model/gltf-binary" : "model/gltf+json";
   const sceneMetadata = extractModelAssetSceneMetadata(gltf.scene);
   const metadata: Model3DAssetMetadata = {
     animationNames: gltf.animations.map(
@@ -158,11 +218,11 @@ export async function importModelAsset(projectId: string, file: File) {
     materialNames: sceneMetadata.materialNames,
     meshFaceGroupNames: sceneMetadata.meshFaceGroupNames,
     meshNames: sceneMetadata.meshNames,
-    mimeType: "model/gltf-binary",
+    mimeType,
     morphTargetNames: sceneMetadata.morphTargetNames,
   };
   const record: StoredModel3DAsset = {
-    blob: file.slice(0, file.size, "model/gltf-binary"),
+    blob: file.slice(0, file.size, mimeType),
     metadata,
     projectId,
   };
@@ -213,7 +273,9 @@ export async function loadModelAsset(projectId: string, assetId: string) {
     pending = (async () => {
       const record = await getModelAsset(projectId, assetId);
       if (!record) throw new Error(`3D asset ${assetId} is unavailable.`);
-      return parseGlb(await record.blob.arrayBuffer());
+      return record.metadata.mimeType === "model/gltf+json"
+        ? parseGltfJson(await record.blob.text())
+        : parseGlb(await record.blob.arrayBuffer());
     })();
     cache.set(key, pending);
   }

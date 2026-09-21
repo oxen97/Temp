@@ -1,9 +1,9 @@
-/* UI preview of the Interaction tab. All state is local to the panel —
-   nothing is persisted and no runtime behavior is wired yet. */
+/* Interaction authoring panel. The 2D fields are bound to the selected
+   element's persisted definitions; the remaining 3D planning UI is local. */
 
 import { ChevronDown } from "lucide-react";
 import Image from "next/image";
-import { type ReactNode, useEffect, useMemo, useState } from "react";
+import { type ReactNode, type SetStateAction, useEffect, useMemo, useState } from "react";
 
 import {
   DesignDropdown,
@@ -38,6 +38,10 @@ import {
   getModelAsset,
   LOCAL_PROJECT_ID,
 } from "@/features/editor/three/model-assets";
+import {
+  createDefaultInteraction,
+  type InteractionDefinition,
+} from "@/features/editor/lib/interaction-model";
 import type { Model3DAssetMetadata } from "@/features/editor/three/types";
 import { assetPath } from "@/lib/asset-path";
 
@@ -173,6 +177,51 @@ const sampleInteractions = [
     trigger: "drop-on-target",
   },
 ];
+
+function interactionLabel(effect: string) {
+  if (effect === "liquid-merge") return "Liquid Merge";
+  if (effect === "strand-bend") return "Strand Bend";
+  return effect
+    .split("-")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function interactionMeta(interaction: InteractionDefinition) {
+  if (interaction.effect === "liquid-merge")
+    return `Bridge ${interaction.bridgeWidth} px`;
+  if (interaction.effect === "strand-bend")
+    return `${interaction.strandMaxDisplacement} px`;
+  if (interaction.effect === "move") return `X ${interaction.moveX >= 0 ? "+" : ""}${interaction.moveX} px`;
+  if (interaction.effect === "scale") return `${interaction.scaleX} %`;
+  if (interaction.effect === "opacity") return `→ ${interaction.opacityTo} %`;
+  return "";
+}
+
+function useInteractionField<Key extends keyof InteractionDefinition>(
+  key: Key,
+  initialValue: InteractionDefinition[Key],
+  binding: {
+    interaction: InteractionDefinition | undefined;
+    elementId: string | undefined;
+    onUpdateInteraction: ((elementId: string, interactionId: string, updates: Partial<InteractionDefinition>) => void) | undefined;
+  },
+) {
+  const { interaction, elementId, onUpdateInteraction } = binding;
+  const [localValue, setLocalValue] = useState(initialValue);
+  const value = interaction?.[key] ?? localValue;
+  const setValue = (next: SetStateAction<InteractionDefinition[Key]>) => {
+    const resolved = typeof next === "function"
+      ? (next as (previous: InteractionDefinition[Key]) => InteractionDefinition[Key])(value)
+      : next;
+    if (interaction && elementId && onUpdateInteraction) {
+      onUpdateInteraction(elementId, interaction.id, { [key]: resolved } as Partial<InteractionDefinition>);
+    } else {
+      setLocalValue(resolved);
+    }
+  };
+  return [value, setValue] as const;
+}
 
 function GroupedDropdown({
   ariaLabel,
@@ -607,12 +656,20 @@ function numericTimelineTrack(
 
 export function InteractionPanel({
   elements = [],
+  interactionsByElement,
+  onAddInteraction,
+  onRemoveInteraction,
+  onUpdateInteraction,
   projectId = LOCAL_PROJECT_ID,
   selectedElementIds = [],
   selectedName,
   selectedTypes = [],
 }: {
   elements?: readonly InteractionPanelElement[];
+  interactionsByElement?: Record<string, InteractionDefinition[]>;
+  onAddInteraction?: (elementId: string, interaction: InteractionDefinition) => void;
+  onRemoveInteraction?: (elementId: string, interactionId: string) => void;
+  onUpdateInteraction?: (elementId: string, interactionId: string, updates: Partial<InteractionDefinition>) => void;
   projectId?: string;
   selectedElementIds?: readonly string[];
   selectedName: string | null;
@@ -778,84 +835,129 @@ export function InteractionPanel({
     ...(is3DSelection || isHybridCollisionAvailable ? threeDTriggerGroups : []),
     ...(is3DSelection && animationNames.length > 0 ? modelTriggerGroups : []),
   ];
-  const [interactions, setInteractions] = useState(sampleInteractions);
+  const [sampleRows, setSampleRows] = useState(sampleInteractions);
   const [selectedId, setSelectedId] = useState("sample-move");
+  const [openMoreId, setOpenMoreId] = useState<string | null>(null);
+  const selectedElementId = selectedElementIds[0];
+  const authoredInteractions = selectedElementId
+    ? (interactionsByElement?.[selectedElementId] ?? [])
+    : [];
+  const authoredMode = interactionsByElement !== undefined;
+  const activeSelectedId = authoredMode && !authoredInteractions.some((item) => item.id === selectedId)
+    ? (authoredInteractions[0]?.id ?? "")
+    : selectedId;
+  const authoredInteraction = authoredInteractions.find((item) => item.id === activeSelectedId);
+  const binding = { interaction: authoredInteraction, elementId: selectedElementId, onUpdateInteraction };
+  const interactions = authoredMode
+    ? authoredInteractions.map((item) => ({
+        enabled: item.enabled,
+        id: item.id,
+        meta: interactionMeta(item),
+        name: item.name || interactionLabel(item.effect),
+        trigger: item.trigger,
+      }))
+    : sampleRows;
+  const addInteraction = (nextTrigger = "click-tap") => {
+    if (!selectedElementId || !onAddInteraction) return;
+    const interaction = createDefaultInteraction({
+      trigger: nextTrigger,
+      mapping: getMappingOptions(nextTrigger, threeDContext)[0]?.value ?? "",
+      name: "Move",
+    });
+    onAddInteraction(selectedElementId, interaction);
+    setSelectedId(interaction.id);
+  };
 
-  const [trigger, setTrigger] = useState("click-tap");
-  const [triggerArea, setTriggerArea] = useState("selected-object");
-  const [sourceVideo, setSourceVideo] = useState("");
-  const [fallback, setFallback] = useState("tap");
-  const [longPressSeconds, setLongPressSeconds] = useState(0.5);
-  const [collisionTarget, setCollisionTarget] = useState("");
-  const [detection, setDetection] = useState("bounding-box");
-  const [joinDistance, setJoinDistance] = useState(30);
-  const [releaseDistance, setReleaseDistance] = useState(45);
-  const [timeSeconds, setTimeSeconds] = useState(5);
+  const [trigger, setTrigger] = useInteractionField("trigger", "click-tap", binding);
+  const [triggerArea, setTriggerArea] = useInteractionField("triggerArea", "selected-object", binding);
+  const [sourceVideo, setSourceVideo] = useInteractionField("sourceVideo", "", binding);
+  const [fallback, setFallback] = useInteractionField("fallback", "tap", binding);
+  const [longPressSeconds, setLongPressSeconds] = useInteractionField("longPressSeconds", 0.5, binding);
+  const [collisionTarget, setCollisionTarget] = useInteractionField("collisionTarget", "", binding);
+  const [detection, setDetection] = useInteractionField("detection", "bounding-box", binding);
+  const [joinDistance, setJoinDistance] = useInteractionField("joinDistance", 30, binding);
+  const [releaseDistance, setReleaseDistance] = useInteractionField("releaseDistance", 45, binding);
+  const [timeSeconds, setTimeSeconds] = useInteractionField("timeSeconds", 5, binding);
 
-  const [mapping, setMapping] = useState("drag-progress");
-  const [pointerAxis, setPointerAxis] = useState("both");
-  const [mappingMode, setMappingMode] = useState("follow");
-  const [trackDistance, setTrackDistance] = useState(300);
-  const [dragAxis, setDragAxis] = useState("free");
-  const [rangeMin, setRangeMin] = useState(0);
-  const [rangeMax, setRangeMax] = useState(100);
-  const [threshold, setThreshold] = useState(80);
+  const [mapping, setMapping] = useInteractionField("mapping", "drag-progress", binding);
+  const [pointerAxis, setPointerAxis] = useInteractionField("pointerAxis", "both", binding);
+  const [mappingMode, setMappingMode] = useInteractionField("mappingMode", "follow", binding);
+  const [trackDistance, setTrackDistance] = useInteractionField("trackDistance", 300, binding);
+  const [dragAxis, setDragAxis] = useInteractionField("dragAxis", "free", binding);
+  const [rangeMin, setRangeMin] = useInteractionField("rangeMin", 0, binding);
+  const [rangeMax, setRangeMax] = useInteractionField("rangeMax", 100, binding);
+  const [threshold, setThreshold] = useInteractionField("threshold", 80, binding);
 
-  const [effect, setEffect] = useState("move");
-  const [groupEffect, setGroupEffect] = useState("move");
-  const [moveX, setMoveX] = useState(100);
-  const [moveY, setMoveY] = useState(0);
-  const [movePath, setMovePath] = useState("straight");
-  const [referencePoint, setReferencePoint] = useState("center");
-  const [scaleX, setScaleX] = useState(120);
-  const [scaleY, setScaleY] = useState(120);
-  const [opacityTo, setOpacityTo] = useState(40);
-  const [bridgeWidth, setBridgeWidth] = useState(50);
-  const [liquidSmoothness, setLiquidSmoothness] = useState(60);
-  const [affectedObjects, setAffectedObjects] = useState("selected");
-  const [impactBounciness, setImpactBounciness] = useState(65);
-  const [impactMass, setImpactMass] = useState(1);
-  const [targetMass, setTargetMass] = useState(1);
-  const [impactFriction, setImpactFriction] = useState(20);
+  const [effect, setEffect] = useInteractionField("effect", "move", binding);
+  const [groupEffect, setGroupEffect] = useInteractionField("groupEffect", "move", binding);
+  const [moveX, setMoveX] = useInteractionField("moveX", 100, binding);
+  const [moveY, setMoveY] = useInteractionField("moveY", 0, binding);
+  const [movePath, setMovePath] = useInteractionField("movePath", "straight", binding);
+  const [referencePoint, setReferencePoint] = useInteractionField("referencePoint", "center", binding);
+  const [scaleX, setScaleX] = useInteractionField("scaleX", 120, binding);
+  const [scaleY, setScaleY] = useInteractionField("scaleY", 120, binding);
+  const [rotateTo, setRotateTo] = useInteractionField("rotateTo", 45, binding);
+  const [skewX, setSkewX] = useInteractionField("skewX", 12, binding);
+  const [skewY, setSkewY] = useInteractionField("skewY", 0, binding);
+  const [opacityTo, setOpacityTo] = useInteractionField("opacityTo", 40, binding);
+  const [blurAmount, setBlurAmount] = useInteractionField("blurAmount", 6, binding);
+  const [shadowX, setShadowX] = useInteractionField("shadowX", 0, binding);
+  const [shadowY, setShadowY] = useInteractionField("shadowY", 12, binding);
+  const [shadowBlur, setShadowBlur] = useInteractionField("shadowBlur", 24, binding);
+  const [bridgeWidth, setBridgeWidth] = useInteractionField("bridgeWidth", 50, binding);
+  const [liquidAttraction, setLiquidAttraction] = useInteractionField("liquidAttraction", 0, binding);
+  const [liquidSmoothness, setLiquidSmoothness] = useInteractionField("liquidSmoothness", 60, binding);
+  const [strandAnchor, setStrandAnchor] = useInteractionField("strandAnchor", "top", binding);
+  const [strandStiffness, setStrandStiffness] = useInteractionField("strandStiffness", 0.45, binding);
+  const [strandDamping, setStrandDamping] = useInteractionField("strandDamping", 0.82, binding);
+  const [strandInfluenceRadius, setStrandInfluenceRadius] = useInteractionField("strandInfluenceRadius", 90, binding);
+  const [strandMaxDisplacement, setStrandMaxDisplacement] = useInteractionField("strandMaxDisplacement", 140, binding);
+  const [strandNeighborRadius, setStrandNeighborRadius] = useInteractionField("strandNeighborRadius", 0, binding);
+  const [strandNeighborStrength, setStrandNeighborStrength] = useInteractionField("strandNeighborStrength", 0, binding);
+  const [affectedObjects, setAffectedObjects] = useInteractionField("affectedObjects", "selected", binding);
+  const [impactBounciness, setImpactBounciness] = useInteractionField("impactBounciness", 65, binding);
+  const [impactMass, setImpactMass] = useInteractionField("impactMass", 1, binding);
+  const [targetMass, setTargetMass] = useInteractionField("targetMass", 1, binding);
+  const [impactFriction, setImpactFriction] = useInteractionField("impactFriction", 20, binding);
 
-  const [motion, setMotion] = useState("spring");
-  const [springStrength, setSpringStrength] = useState(100);
-  const [springMass, setSpringMass] = useState(1);
-  const [springDamping, setSpringDamping] = useState(12);
-  const [initialVelocity, setInitialVelocity] = useState(100);
-  const [friction, setFriction] = useState(50);
-  const [deceleration, setDeceleration] = useState(50);
-  const [bounceStrength, setBounceStrength] = useState(100);
-  const [bounceCount, setBounceCount] = useState(2);
-  const [bounceDamping, setBounceDamping] = useState(12);
-  const [bounceOff, setBounceOff] = useState("artboard");
-  const [gravityContact, setGravityContact] = useState("bounce");
-  const [stackColliders, setStackColliders] = useState("physics");
-  const [stackObstacleIds, setStackObstacleIds] = useState<string[]>([]);
-  const [stackMass, setStackMass] = useState(1);
-  const [stackFriction, setStackFriction] = useState(25);
-  const [stackSleepSpeed, setStackSleepSpeed] = useState(5);
-  const [gravityStrength, setGravityStrength] = useState(100);
-  const [bounciness, setBounciness] = useState(50);
-  const [gravityDirection, setGravityDirection] = useState("down");
+  const [motion, setMotion] = useInteractionField("motion", "spring", binding);
+  const [springStrength, setSpringStrength] = useInteractionField("springStrength", 100, binding);
+  const [springMass, setSpringMass] = useInteractionField("springMass", 1, binding);
+  const [springDamping, setSpringDamping] = useInteractionField("springDamping", 12, binding);
+  const [initialVelocity, setInitialVelocity] = useInteractionField("initialVelocity", 100, binding);
+  const [friction, setFriction] = useInteractionField("friction", 50, binding);
+  const [deceleration, setDeceleration] = useInteractionField("deceleration", 50, binding);
+  const [bounceStrength, setBounceStrength] = useInteractionField("bounceStrength", 100, binding);
+  const [bounceCount, setBounceCount] = useInteractionField("bounceCount", 2, binding);
+  const [bounceDamping, setBounceDamping] = useInteractionField("bounceDamping", 12, binding);
+  const [bounceOff, setBounceOff] = useInteractionField("bounceOff", "artboard", binding);
+  const [gravityContact, setGravityContact] = useInteractionField("gravityContact", "bounce", binding);
+  const [stackColliders, setStackColliders] = useInteractionField("stackColliders", "physics", binding);
+  const [stackObstacleIds, setStackObstacleIds] = useInteractionField("stackObstacleIds", [] as string[], binding);
+  const [stackMass, setStackMass] = useInteractionField("stackMass", 1, binding);
+  const [stackFriction, setStackFriction] = useInteractionField("stackFriction", 25, binding);
+  const [stackSleepSpeed, setStackSleepSpeed] = useInteractionField("stackSleepSpeed", 5, binding);
+  const [gravityStrength, setGravityStrength] = useInteractionField("gravityStrength", 100, binding);
+  const [bounciness, setBounciness] = useInteractionField("bounciness", 50, binding);
+  const [gravityDirection, setGravityDirection] = useInteractionField("gravityDirection", "down", binding);
 
-  const [duration, setDuration] = useState(0.3);
-  const [delay, setDelay] = useState(0);
-  const [stagger, setStagger] = useState(0.05);
-  const [easing, setEasing] = useState("ease-out");
-  const [smoothing, setSmoothing] = useState(0.1);
-  const [continuousEasing, setContinuousEasing] = useState("linear");
+  const [duration, setDuration] = useInteractionField("duration", 0.3, binding);
+  const [delay, setDelay] = useInteractionField("delay", 0, binding);
+  const [stagger, setStagger] = useInteractionField("stagger", 0.05, binding);
+  const [easing, setEasing] = useInteractionField("easing", "ease-out", binding);
+  const [smoothing, setSmoothing] = useInteractionField("smoothing", 0.1, binding);
+  const [continuousEasing, setContinuousEasing] = useInteractionField("continuousEasing", "linear", binding);
 
-  const [resetMode, setResetMode] = useState("contextual");
+  const [resetMode, setResetMode] = useInteractionField("resetMode", "contextual", binding);
 
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [keyframeEditorOpen, setKeyframeEditorOpen] = useState(false);
-  const [sameProperty, setSameProperty] = useState("replace");
-  const [otherProperty, setOtherProperty] = useState("parallel");
-  const [repeat, setRepeat] = useState(1);
-  const [yoyo, setYoyo] = useState(false);
-  const [hold, setHold] = useState(0);
-  const [cursor, setCursor] = useState("pointer");
+  const [sameProperty, setSameProperty] = useInteractionField("sameProperty", "replace", binding);
+  const [otherProperty, setOtherProperty] = useInteractionField("otherProperty", "parallel", binding);
+  const [repeat, setRepeat] = useInteractionField("repeat", 1, binding);
+  const [yoyo, setYoyo] = useInteractionField("yoyo", false, binding);
+  const [hold, setHold] = useInteractionField("hold", 0, binding);
+  const [cursor, setCursor] = useInteractionField("cursor", "pointer", binding);
   const [threeD, setThreeD] = useState(defaultThreeDInteractionState);
   const setThreeDValue = <Key extends keyof ThreeDInteractionState>(
     key: Key,
@@ -1265,7 +1367,12 @@ export function InteractionPanel({
             </span>
           ) : null}
         </div>
-        <button className="interaction-add-button" type="button">
+        <button
+          className="interaction-add-button"
+          disabled={authoredMode && !selectedElementId}
+          onClick={() => addInteraction()}
+          type="button"
+        >
           + Add interaction
         </button>
       </div>
@@ -1275,7 +1382,11 @@ export function InteractionPanel({
           <div className="interaction-group" key={groupTrigger}>
             <div className="interaction-group-head">
               <span>{triggerLabels.get(groupTrigger)}</span>
-              <button className="interaction-add-effect" type="button">
+              <button
+                className="interaction-add-effect"
+                onClick={() => addInteraction(groupTrigger)}
+                type="button"
+              >
                 + Add effect
               </button>
             </div>
@@ -1285,7 +1396,7 @@ export function InteractionPanel({
                 <div
                   className={[
                     "interaction-row",
-                    interaction.id === selectedId ? "is-selected" : "",
+                    interaction.id === activeSelectedId ? "is-selected" : "",
                     interaction.enabled ? "" : "is-disabled",
                   ]
                     .filter(Boolean)
@@ -1307,13 +1418,11 @@ export function InteractionPanel({
                     }
                     onClick={(event) => {
                       event.stopPropagation();
-                      setInteractions((current) =>
-                        current.map((item) =>
-                          item.id === interaction.id
-                            ? { ...item, enabled: !item.enabled }
-                            : item,
-                        ),
-                      );
+                      if (authoredMode && selectedElementId && onUpdateInteraction)
+                        onUpdateInteraction(selectedElementId, interaction.id, { enabled: !interaction.enabled });
+                      else setSampleRows((current) => current.map((item) =>
+                        item.id === interaction.id ? { ...item, enabled: !item.enabled } : item,
+                      ));
                     }}
                     type="button"
                   >
@@ -1328,11 +1437,30 @@ export function InteractionPanel({
                   <button
                     aria-label={`${interaction.name} options`}
                     className="interaction-row-more"
-                    onClick={(event) => event.stopPropagation()}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setOpenMoreId((current) => current === interaction.id ? null : interaction.id);
+                    }}
                     type="button"
                   >
                     ⋯
                   </button>
+                  {openMoreId === interaction.id ? (
+                    <button
+                      aria-label={`Delete ${interaction.name}`}
+                      className="interaction-row-more"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        if (authoredMode && selectedElementId && onRemoveInteraction)
+                          onRemoveInteraction(selectedElementId, interaction.id);
+                        else setSampleRows((current) => current.filter((item) => item.id !== interaction.id));
+                        setOpenMoreId(null);
+                      }}
+                      type="button"
+                    >
+                      Delete
+                    </button>
+                  ) : null}
                 </div>
               ))}
           </div>
@@ -1345,19 +1473,27 @@ export function InteractionPanel({
             ariaLabel="Trigger"
             groups={triggerGroups}
             onChange={(nextTrigger) => {
+              const nextMapping = getMappingOptions(nextTrigger, threeDContext)[0]?.value ?? "";
+              const effectIsSupported = getEffectOptions(
+                selectedTypes,
+                nextTrigger,
+                threeDContext,
+              ).some((option) => option.value === effect);
+              if (authoredInteraction && selectedElementId && onUpdateInteraction) {
+                onUpdateInteraction(selectedElementId, authoredInteraction.id, {
+                  trigger: nextTrigger,
+                  mapping: nextMapping,
+                  mappingMode: "follow",
+                  resetMode: "contextual",
+                  ...(!effectIsSupported ? { effect: "move", name: "Move" } : {}),
+                });
+                return;
+              }
               setTrigger(nextTrigger);
-              setMapping(
-                getMappingOptions(nextTrigger, threeDContext)[0]?.value ?? "",
-              );
+              setMapping(nextMapping);
               setMappingMode("follow");
               setResetMode("contextual");
-              if (
-                !getEffectOptions(
-                  selectedTypes,
-                  nextTrigger,
-                  threeDContext,
-                ).some((option) => option.value === effect)
-              ) {
+              if (!effectIsSupported) {
                 setEffect("move");
               }
             }}
@@ -1611,7 +1747,11 @@ export function InteractionPanel({
                 </p>
               </>
             ) : null}
-            {isPairEffect ? (
+            {isLiquidMerge ? (
+              <p className="interaction-note">
+                Merge proximity updates as the strands bend.
+              </p>
+            ) : isPairEffect ? (
               <p className="interaction-note">
                 Precise outline is used for this two-object effect.
               </p>
@@ -1917,7 +2057,27 @@ export function InteractionPanel({
           <DesignDropdown
             ariaLabel="Effect"
             className="interaction-dropdown interaction-effect-dropdown"
-            onChange={setEffect}
+            onChange={(nextEffect) => {
+              const firstMergeTarget = nextEffect === "liquid-merge"
+                ? obstacleChoices.find((item) => is3DSelection ? item.type === "object3d" : isLiquidMergeShape(item.type))?.id
+                : undefined;
+              const currentMergeTargetIsValid = obstacleChoices.some((item) =>
+                item.id === collisionTarget &&
+                (is3DSelection ? item.type === "object3d" : isLiquidMergeShape(item.type)),
+              );
+              if (authoredInteraction && selectedElementId && onUpdateInteraction)
+                onUpdateInteraction(selectedElementId, authoredInteraction.id, {
+                  effect: nextEffect,
+                  name: interactionLabel(nextEffect),
+                  ...(firstMergeTarget && !currentMergeTargetIsValid
+                    ? { collisionTarget: firstMergeTarget, detection: "precise-outline" }
+                    : {}),
+                });
+              else {
+                setEffect(nextEffect);
+                if (firstMergeTarget && !currentMergeTargetIsValid) setCollisionTarget(firstMergeTarget);
+              }
+            }}
             options={effectChoices}
             scrollToEndOnOpen={effectChoices.some(
               (option) =>
@@ -1930,8 +2090,7 @@ export function InteractionPanel({
         {(trigger === "near-target" || trigger === "while-overlapping") &&
         !effectChoices.some((option) => option.value === "liquid-merge") ? (
           <p className="interaction-note">
-            Liquid Merge needs one selected rectangle, circle, triangle, or
-            star.
+            Liquid Merge needs one selected 2D vector shape or strand.
           </p>
         ) : null}
         {selectedEffect === "group-animation" ? (
@@ -2077,6 +2236,25 @@ export function InteractionPanel({
               />
             ) : null}
           </>
+        ) : null}
+        {activeEffect === "rotate" && !is3DSelection ? (
+          <Row label="Rotate to">
+            <DesignNumberField
+              ariaLabel="Rotate to"
+              label=""
+              onChange={setRotateTo}
+              unit="°"
+              value={rotateTo}
+            />
+          </Row>
+        ) : null}
+        {activeEffect === "skew" && !is3DSelection ? (
+          <Row label="Skew">
+            <div className="interaction-field-pair">
+              <DesignNumberField ariaLabel="Skew X" label="X" onChange={setSkewX} unit="°" value={skewX} />
+              <DesignNumberField ariaLabel="Skew Y" label="Y" onChange={setSkewY} unit="°" value={skewY} />
+            </div>
+          </Row>
         ) : null}
         {activeEffect === "rotate" && is3DSelection ? (
           <>
@@ -2538,11 +2716,11 @@ export function InteractionPanel({
               max={100}
               min={0}
               onBegin={noop}
-              onChange={(value) => setExtendedValue("blurAmount", value)}
-              value={extended.blurAmount}
+              onChange={(value) => is3DSelection ? setExtendedValue("blurAmount", value) : setBlurAmount(value)}
+              value={is3DSelection ? extended.blurAmount : blurAmount}
             />
             <span className="interaction-value-caption">
-              {extended.blurAmount} px
+              {is3DSelection ? extended.blurAmount : blurAmount} px
             </span>
           </Row>
         ) : null}
@@ -2593,14 +2771,14 @@ export function InteractionPanel({
                 <DesignNumberField
                   ariaLabel="Shadow X"
                   label="X"
-                  onChange={(value) => setExtendedValue("shadowX", value)}
-                  value={extended.shadowX}
+                  onChange={(value) => is3DSelection ? setExtendedValue("shadowX", value) : setShadowX(value)}
+                  value={is3DSelection ? extended.shadowX : shadowX}
                 />
                 <DesignNumberField
                   ariaLabel="Shadow Y"
                   label="Y"
-                  onChange={(value) => setExtendedValue("shadowY", value)}
-                  value={extended.shadowY}
+                  onChange={(value) => is3DSelection ? setExtendedValue("shadowY", value) : setShadowY(value)}
+                  value={is3DSelection ? extended.shadowY : shadowY}
                 />
                 {is3DSelection ? (
                   <DesignNumberField
@@ -2618,8 +2796,8 @@ export function InteractionPanel({
                   ariaLabel="Shadow blur"
                   label="B"
                   min={0}
-                  onChange={(value) => setExtendedValue("shadowBlur", value)}
-                  value={extended.shadowBlur}
+                  onChange={(value) => is3DSelection ? setExtendedValue("shadowBlur", value) : setShadowBlur(value)}
+                  value={is3DSelection ? extended.shadowBlur : shadowBlur}
                 />
                 <DesignNumberField
                   ariaLabel="Shadow spread"
@@ -3066,12 +3244,23 @@ export function InteractionPanel({
               <DesignRange
                 ariaLabel="Liquid bridge width"
                 className="sound-slider"
-                max={100}
+                max={300}
                 min={0}
                 onChange={setBridgeWidth}
                 value={bridgeWidth}
               />
-              <span className="interaction-value-caption">{bridgeWidth} %</span>
+              <span className="interaction-value-caption">{bridgeWidth} px</span>
+            </Row>
+            <Row label="Attraction">
+              <DesignRange
+                ariaLabel="Liquid attraction"
+                className="sound-slider"
+                max={100}
+                min={0}
+                onChange={setLiquidAttraction}
+                value={liquidAttraction}
+              />
+              <span className="interaction-value-caption">{liquidAttraction} %</span>
             </Row>
             <Row label="Smoothness">
               <DesignRange
@@ -3087,8 +3276,92 @@ export function InteractionPanel({
               </span>
             </Row>
             <p className="interaction-note">
-              Visually join the selected shape and target; keep both source
-              objects editable.
+              Paired shapes or strands pull together inside Join / Release distance and visually merge; both source objects stay editable.
+            </p>
+          </>
+        ) : null}
+        {activeEffect === "strand-bend" ? (
+          <>
+            <Row label="Anchor end">
+              <DesignDropdown
+                ariaLabel="Strand anchor"
+                className="interaction-dropdown"
+                noScroll
+                onChange={(value) => setStrandAnchor(value as InteractionDefinition["strandAnchor"])}
+                options={[
+                  { label: "Top", value: "top" },
+                  { label: "Bottom", value: "bottom" },
+                  { label: "Left", value: "left" },
+                  { label: "Right", value: "right" },
+                ]}
+                value={strandAnchor}
+              />
+            </Row>
+            <Row label="Stiffness">
+              <DesignRange
+                ariaLabel="Strand stiffness"
+                className="sound-slider"
+                max={100}
+                min={0}
+                onChange={(value) => setStrandStiffness(value / 100)}
+                value={Math.round(strandStiffness * 100)}
+              />
+              <span className="interaction-value-caption">{Math.round(strandStiffness * 100)} %</span>
+            </Row>
+            <Row label="Damping">
+              <DesignRange
+                ariaLabel="Strand damping"
+                className="sound-slider"
+                max={100}
+                min={0}
+                onChange={(value) => setStrandDamping(value / 100)}
+                value={Math.round(strandDamping * 100)}
+              />
+              <span className="interaction-value-caption">{Math.round(strandDamping * 100)} %</span>
+            </Row>
+            <Row label="Influence radius">
+              <DesignNumberField
+                ariaLabel="Strand influence radius"
+                label=""
+                min={1}
+                onChange={(value) => setStrandInfluenceRadius(Math.max(1, value))}
+                unit="px"
+                value={strandInfluenceRadius}
+              />
+            </Row>
+            <Row label="Max. bend">
+              <DesignNumberField
+                ariaLabel="Strand max displacement"
+                label=""
+                min={0}
+                onChange={(value) => setStrandMaxDisplacement(Math.max(0, value))}
+                unit="px"
+                value={strandMaxDisplacement}
+              />
+            </Row>
+            <Row label="Neighbor radius">
+              <DesignNumberField
+                ariaLabel="Strand neighbor radius"
+                label=""
+                min={0}
+                onChange={(value) => setStrandNeighborRadius(Math.max(0, value))}
+                unit="px"
+                value={strandNeighborRadius}
+              />
+            </Row>
+            <Row label="Neighbor pull">
+              <DesignRange
+                ariaLabel="Strand neighbor pull"
+                className="sound-slider"
+                max={100}
+                min={0}
+                onChange={setStrandNeighborStrength}
+                value={strandNeighborStrength}
+              />
+              <span className="interaction-value-caption">{strandNeighborStrength} %</span>
+            </Row>
+            <p className="interaction-note">
+              Nearby lines and open pen paths with Strand Bend follow the pointer during Drag or Pointer Move; each keeps its own anchor, stiffness, and damping.
             </p>
           </>
         ) : null}
@@ -3112,7 +3385,7 @@ export function InteractionPanel({
             </p>
           </>
         ) : null}
-        {isPairEffect ? (
+        {isPairEffect && !isLiquidMerge ? (
           <p className="interaction-note">
             Settings preview only — interaction playback is not connected yet.
           </p>

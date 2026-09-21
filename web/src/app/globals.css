@@ -1043,6 +1043,24 @@ input[type="number"] {
   place-items: center;
 }
 
+.layer-symbol.symbol-object3d {
+  display: grid;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  place-items: center;
+}
+
+.layer-symbol.symbol-object3d .uploaded-asset-thumbnail {
+  display: grid;
+  width: 15px;
+  height: 15px;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: contain;
+  place-items: center;
+}
+
 .layer-image-preview {
   display: block;
   width: 15px;
@@ -1181,6 +1199,7 @@ input[type="number"] {
 }
 
 .asset-tabs button {
+  flex: none;
   padding: 0;
   border: 0;
   background: transparent;
@@ -1193,14 +1212,6 @@ input[type="number"] {
 
 .asset-tabs button[aria-selected="true"] {
   color: var(--text);
-}
-
-.asset-tabs button:first-child {
-  width: 30px;
-}
-
-.asset-tabs button:last-child {
-  width: 28px;
 }
 
 .asset-grid {
@@ -1230,21 +1241,36 @@ input[type="number"] {
 }
 
 .asset-grid .uploaded-asset--model {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 4px;
+  position: relative;
+  overflow: hidden;
   background: var(--canvas-fill);
   cursor: pointer;
 }
 
-.asset-grid .uploaded-asset--model .uploaded-asset-label {
-  overflow: hidden;
-  width: 100%;
+.asset-grid .uploaded-asset--model .uploaded-asset-thumbnail {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: contain;
   color: var(--text-secondary);
+}
+
+.asset-grid .uploaded-asset--model .uploaded-asset-label {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  overflow: hidden;
+  padding: 2px 3px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
   font-size: 8px;
   line-height: 10px;
-  text-align: center;
+  text-align: left;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -4909,6 +4935,61 @@ input[type="number"] {
   margin-left: 25px;
 }
 
+.design-3d-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+  width: 295px;
+}
+
+.design-3d-grid .number-field {
+  min-width: 0;
+}
+
+.design-3d-grid .number-prefix {
+  min-width: 20px;
+  padding-inline: 6px 4px;
+}
+
+.design-3d-grid .number-field input {
+  padding-inline: 5px 2px;
+}
+
+.design-3d-grid .number-unit {
+  padding-right: 5px;
+}
+
+.design-3d-group-label {
+  display: block;
+  margin: 12px 0 6px;
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.design-3d-selection-count {
+  margin: 0 0 4px;
+  color: var(--text-secondary);
+  font-size: 9px;
+}
+
+.design-3d-ratio,
+.design-3d-source-material {
+  margin-top: 12px;
+}
+
+.design-3d-material {
+  padding-top: 13px;
+}
+
+.design-3d-properties .design-3d-source-material {
+  width: 175px;
+  white-space: nowrap;
+}
+
+.design-3d-material .appearance-row {
+  margin-top: 10px;
+}
+
 .number-field {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
@@ -5762,6 +5843,16 @@ input[type="number"] {
   border-radius: 0 2px 2px 0;
 }
 
+.design-3d-color-control {
+  grid-template-columns: 89px;
+  width: 89px;
+}
+
+.design-3d-color-control .color-field {
+  border-right: 1px solid var(--border);
+  border-radius: 2px;
+}
+
 .color-field {
   display: grid;
   grid-template-columns: 21px minmax(0, 1fr);
@@ -6518,6 +6609,34 @@ input[type="number"] {
   display: block;
   width: 100% !important;
   height: 100% !important;
+}
+
+.object-3d-selection {
+  position: absolute;
+  z-index: 14;
+  pointer-events: none;
+}
+
+.object-3d-selection .resize-handle {
+  width: calc(14px * var(--selection-control-scale, 1));
+  height: calc(14px * var(--selection-control-scale, 1));
+  pointer-events: auto;
+}
+
+.object-3d-selection .handle-nw {
+  transform: translate(-50%, -50%);
+}
+
+.object-3d-selection .handle-ne {
+  transform: translate(50%, -50%);
+}
+
+.object-3d-selection .handle-sw {
+  transform: translate(-50%, 50%);
+}
+
+.object-3d-selection .handle-se {
+  transform: translate(50%, 50%);
 }
 
 .interaction-obstacle-list {

@@ -285,6 +285,7 @@ type EditorState = {
   setActivePageId: (pageId: string) => void;
   setSelectedElementIds: (ids: string[]) => void;
   setSelectedObject3DIds: (ids: string[]) => void;
+  setSelectedItems: (elementIds: string[], object3DIds: string[]) => void;
   setZoom: (zoom: number) => void;
   updateArtboard: (updates: Partial<ArtboardSettings>) => void;
   updateBackgroundMusic: (updates: Partial<BackgroundMusicSettings>) => void;
@@ -551,6 +552,8 @@ export const useEditorStore = create<EditorState>((set) => ({
     set({ selectedElementIds, selectedObject3DIds: [] }),
   setSelectedObject3DIds: (selectedObject3DIds) =>
     set({ selectedElementIds: [], selectedObject3DIds }),
+  setSelectedItems: (selectedElementIds, selectedObject3DIds) =>
+    set({ selectedElementIds, selectedObject3DIds }),
   setZoom: (zoom) => set({ zoom: Math.min(500, Math.max(5, zoom)) }),
   updateArtboard: (updates) =>
     set((state) => {

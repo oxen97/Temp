@@ -77,6 +77,91 @@ test("starts with one page, no layers, and nine square assets", async ({
   );
 });
 
+test("offers equally spaced Image, Video, and 3D asset tabs and imports glTF files", async ({
+  page,
+}) => {
+  test.skip(
+    (page.viewportSize()?.width ?? 0) <= 960,
+    "Asset panel is desktop-only",
+  );
+  await waitForEditor(page);
+
+  const tabs = page.locator(".assets-section .asset-tabs");
+  const imageTab = tabs.getByRole("tab", { name: "Image" });
+  const videoTab = tabs.getByRole("tab", { name: "Video" });
+  const modelTab = tabs.getByRole("tab", { name: "3D" });
+  await expect(imageTab).toHaveAttribute("aria-selected", "true");
+  await expect(videoTab).toBeVisible();
+  await expect(modelTab).toBeVisible();
+
+  const tabGaps = await tabs.evaluate((tabList) => {
+    const [image, video, model] = Array.from(tabList.children).map((child) => {
+      const text = document.createRange();
+      text.selectNodeContents(child);
+      return text.getBoundingClientRect();
+    });
+    return [video.left - image.right, model.left - video.right];
+  });
+  expect(tabGaps[0]).toBeGreaterThan(0);
+  expect(tabGaps[1]).toBeCloseTo(tabGaps[0], 1);
+
+  await videoTab.click();
+  await expect(videoTab).toHaveAttribute("aria-selected", "true");
+  await modelTab.click();
+  await expect(modelTab).toHaveAttribute("aria-selected", "true");
+
+  const uploadInput = page.locator(".assets-section .asset-upload input");
+  await expect(uploadInput).toHaveAttribute("accept", /\.glb.*\.gltf/);
+
+  const sceneJson = JSON.stringify({
+    asset: { version: "2.0" },
+    scene: 0,
+    scenes: [{ nodes: [] }],
+  });
+  const paddedJson = Buffer.from(
+    sceneJson.padEnd(Math.ceil(sceneJson.length / 4) * 4, " "),
+  );
+  const glb = Buffer.alloc(20 + paddedJson.length);
+  glb.write("glTF", 0, "ascii");
+  glb.writeUInt32LE(2, 4);
+  glb.writeUInt32LE(glb.length, 8);
+  glb.writeUInt32LE(paddedJson.length, 12);
+  glb.write("JSON", 16, "ascii");
+  paddedJson.copy(glb, 20);
+
+  await uploadInput.setInputFiles({
+    name: "simple.glb",
+    mimeType: "model/gltf-binary",
+    buffer: glb,
+  });
+  await expect(
+    page.getByRole("button", { name: "Add 3D model simple.glb" }),
+  ).toBeVisible();
+
+  await uploadInput.setInputFiles({
+    name: "simple.gltf",
+    mimeType: "model/gltf+json",
+    buffer: Buffer.from(sceneJson),
+  });
+  await expect(
+    page.getByRole("button", { name: "Add 3D model simple.gltf" }),
+  ).toBeVisible();
+  await expect(page.locator(".assets-section [role=alert]")).toHaveCount(0);
+
+  await page.getByRole("button", { name: "Add 3D model simple.glb" }).click();
+  await expect(page.getByLabel("3D scene")).toBeVisible();
+  await page.getByRole("tab", { name: "INTERACTION" }).click();
+  const interactionSettings = page.getByRole("tabpanel", {
+    name: "Interaction settings",
+  });
+  await expect(
+    interactionSettings.locator(".interaction-selected strong"),
+  ).toHaveText("simple");
+  await expect(interactionSettings.locator(".interaction-3d-badge")).toHaveText(
+    "3D · asset",
+  );
+});
+
 test("keeps the artboard unselected when its empty area is clicked", async ({
   page,
 }) => {

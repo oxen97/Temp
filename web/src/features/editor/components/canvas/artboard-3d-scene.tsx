@@ -13,7 +13,6 @@ import {
 } from "@react-three/fiber";
 import {
   Box3,
-  type BoxHelper,
   type Color,
   DoubleSide,
   FrontSide,
@@ -21,7 +20,9 @@ import {
   type Material,
   type Mesh,
   type Object3D,
+  Plane,
   PerspectiveCamera,
+  type Ray,
   Vector3,
 } from "three";
 import {
@@ -60,6 +61,7 @@ import {
   type Material3DSettings,
   type Object3DElement,
   type Scene3DSettings,
+  type Vector3Value,
 } from "@/features/editor/three/types";
 
 /**
@@ -190,19 +192,22 @@ type Artboard3DSceneProps = {
   className?: string;
   /** 2D-element proxies (world px) that 3D bodies can collide with. */
   collisionProxies?: CollisionProxy3D[];
+  /** Enables selection and authoring gestures; never enabled in the viewer. */
+  editable?: boolean;
   /** When true (viewer preview), objects play their authored interactions. */
   interactive?: boolean;
   objects: Object3DElement[];
   onClearSelection?: () => void;
   onLoadError?: (objectId: string, error: Error) => void;
+  onObjectDrag?: (objectId: string, position: Vector3Value) => void;
+  onObjectDragStart?: (objectId: string) => void;
   onProjectedBoundsChange?: (
     objectId: string,
     bounds: ProjectedBounds | null,
   ) => void;
-  onSelectObject?: (objectId: string) => void;
+  onSelectObject?: (objectId: string, additive?: boolean) => void;
   projectId?: string;
   scene?: Partial<Scene3DSettings>;
-  selectedObjectIds?: readonly string[];
 };
 
 function SceneCamera({
@@ -260,6 +265,19 @@ function BoundsReporter({
 }) {
   const { camera, size } = useThree();
   const previousRef = useRef("");
+  const pendingRef = useRef<{
+    bounds: ProjectedBounds | null;
+    frame: number | null;
+  }>({ bounds: null, frame: null });
+
+  useEffect(
+    () => () => {
+      if (pendingRef.current.frame !== null) {
+        cancelAnimationFrame(pendingRef.current.frame);
+      }
+    },
+    [],
+  );
 
   useFrame(() => {
     if (!onChange) return;
@@ -274,40 +292,134 @@ function BoundsReporter({
       : "none";
     if (key !== previousRef.current) {
       previousRef.current = key;
-      onChange(objectId, bounds);
+      pendingRef.current.bounds = bounds;
+      if (pendingRef.current.frame === null) {
+        pendingRef.current.frame = requestAnimationFrame(() => {
+          pendingRef.current.frame = null;
+          onChange(objectId, pendingRef.current.bounds);
+        });
+      }
     }
   });
   return null;
 }
 
-function SelectedBox({ object }: { object: Object3D }) {
-  const helperRef = useRef<BoxHelper>(null);
-  useFrame(() => helperRef.current?.update());
-  return <boxHelper args={[object, 0xab51f0]} ref={helperRef} />;
+type ThreePointerCaptureTarget = {
+  hasPointerCapture: (pointerId: number) => boolean;
+  releasePointerCapture: (pointerId: number) => void;
+  setPointerCapture: (pointerId: number) => void;
+};
+
+/** Convert a captured pointer ray back to authoring coordinates at fixed Z. */
+export function positionOnObjectDragPlane(
+  ray: Ray,
+  plane: Plane,
+  grabOffset: Vector3,
+  z: number,
+): Vector3Value | null {
+  const hit = ray.intersectPlane(plane, new Vector3());
+  if (!hit) return null;
+  hit.add(grabOffset);
+  return { x: hit.x, y: -hit.y, z };
 }
 
 function ObjectGroup({
   children,
+  editable,
   object,
+  onObjectDrag,
+  onObjectDragStart,
   onProjectedBoundsChange,
   onSelectObject,
-  selected,
 }: {
   children: ReactNode;
+  editable: boolean;
   object: Object3DElement;
+  onObjectDrag: Artboard3DSceneProps["onObjectDrag"];
+  onObjectDragStart: Artboard3DSceneProps["onObjectDragStart"];
   onProjectedBoundsChange: Artboard3DSceneProps["onProjectedBoundsChange"];
   onSelectObject: Artboard3DSceneProps["onSelectObject"];
-  selected: boolean;
 }) {
   const interactive = useContext(Interactive3DContext);
   const [group, setGroup] = useState<Group | null>(null);
   const [toggled, setToggled] = useState(false);
   const [hovering, setHovering] = useState(false);
   const world = spatialTransformToWorld(object.transform);
+  const dragRef = useRef<{
+    grabOffset: Vector3;
+    plane: Plane;
+    pointerId: number;
+    startClientX: number;
+    startClientY: number;
+    started: boolean;
+    z: number;
+  } | null>(null);
   const handlePointerDown = (event: ThreeEvent<PointerEvent>) => {
+    if (!editable) return;
     event.stopPropagation();
     event.nativeEvent.stopPropagation();
-    if (!object.locked) onSelectObject?.(object.id);
+    if (object.locked) return;
+    if (event.nativeEvent.shiftKey) {
+      onSelectObject?.(object.id, true);
+      return;
+    }
+    onSelectObject?.(object.id);
+    if (!onObjectDrag) return;
+
+    // The mesh hit may be on its front or side. Intersect a fixed-depth plane
+    // instead so the object follows the pointer without jumping in Z.
+    const position = new Vector3(...world.position);
+    const plane = new Plane().setFromNormalAndCoplanarPoint(
+      new Vector3(0, 0, 1),
+      position,
+    );
+    const hit = event.ray.intersectPlane(plane, new Vector3());
+    if (!hit) return;
+    dragRef.current = {
+      grabOffset: position.sub(hit),
+      plane,
+      pointerId: event.pointerId,
+      startClientX: event.nativeEvent.clientX,
+      startClientY: event.nativeEvent.clientY,
+      started: false,
+      z: object.transform.position.z,
+    };
+    (event.target as unknown as ThreePointerCaptureTarget).setPointerCapture(
+      event.pointerId,
+    );
+  };
+  const handlePointerMove = (event: ThreeEvent<PointerEvent>) => {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    event.stopPropagation();
+    event.nativeEvent.stopPropagation();
+    if (!drag.started) {
+      const distance = Math.hypot(
+        event.nativeEvent.clientX - drag.startClientX,
+        event.nativeEvent.clientY - drag.startClientY,
+      );
+      if (distance < 2) return;
+      drag.started = true;
+      onObjectDragStart?.(object.id);
+    }
+    const position = positionOnObjectDragPlane(
+      event.ray,
+      drag.plane,
+      drag.grabOffset,
+      drag.z,
+    );
+    if (position) onObjectDrag?.(object.id, position);
+  };
+  const handlePointerEnd = (event: ThreeEvent<PointerEvent>) => {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    event.stopPropagation();
+    event.nativeEvent.stopPropagation();
+    dragRef.current = null;
+    const target = event.target as unknown as ThreePointerCaptureTarget;
+    if (target.hasPointerCapture(event.pointerId)) {
+      target.releasePointerCapture(event.pointerId);
+    }
   };
 
   const interactions =
@@ -356,6 +468,9 @@ function ObjectGroup({
             : undefined
         }
         onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerEnd}
+        onPointerCancel={handlePointerEnd}
         onPointerOut={interactions ? () => setHovering(false) : undefined}
         onPointerOver={
           interactions
@@ -391,8 +506,7 @@ function ObjectGroup({
           children
         )}
       </group>
-      {selected && group ? <SelectedBox object={group} /> : null}
-      {selected && group ? (
+      {group && onProjectedBoundsChange ? (
         <BoundsReporter
           object={group}
           objectId={object.id}
@@ -404,17 +518,21 @@ function ObjectGroup({
 }
 
 function GeneratedObject({
+  editable,
   object,
   onLoadError,
+  onObjectDrag,
+  onObjectDragStart,
   onProjectedBoundsChange,
   onSelectObject,
-  selected,
 }: {
+  editable: boolean;
   object: Object3DElement;
   onLoadError: Artboard3DSceneProps["onLoadError"];
+  onObjectDrag: Artboard3DSceneProps["onObjectDrag"];
+  onObjectDragStart: Artboard3DSceneProps["onObjectDragStart"];
   onProjectedBoundsChange: Artboard3DSceneProps["onProjectedBoundsChange"];
   onSelectObject: Artboard3DSceneProps["onSelectObject"];
-  selected: boolean;
 }) {
   const { dimensions, source } = object;
   const result = useMemo(() => {
@@ -437,10 +555,12 @@ function GeneratedObject({
   if (!result.geometry) return null;
   return (
     <ObjectGroup
+      editable={editable}
       object={object}
+      onObjectDrag={onObjectDrag}
+      onObjectDragStart={onObjectDragStart}
       onProjectedBoundsChange={onProjectedBoundsChange}
       onSelectObject={onSelectObject}
-      selected={selected}
     >
       <mesh
         castShadow={object.castShadow}
@@ -488,19 +608,23 @@ function overrideAssetMaterials(
 }
 
 function AssetObject({
+  editable,
   object,
   onLoadError,
+  onObjectDrag,
+  onObjectDragStart,
   onProjectedBoundsChange,
   onSelectObject,
   projectId,
-  selected,
 }: {
+  editable: boolean;
   object: Object3DElement & { source: { assetId: string; kind: "asset" } };
   onLoadError: Artboard3DSceneProps["onLoadError"];
+  onObjectDrag: Artboard3DSceneProps["onObjectDrag"];
+  onObjectDragStart: Artboard3DSceneProps["onObjectDragStart"];
   onProjectedBoundsChange: Artboard3DSceneProps["onProjectedBoundsChange"];
   onSelectObject: Artboard3DSceneProps["onSelectObject"];
   projectId: string;
-  selected: boolean;
 }) {
   const [model, setModel] = useState<Object3D | null>(null);
   const assetId = object.source.assetId;
@@ -575,10 +699,12 @@ function AssetObject({
   if (!model) return null;
   return (
     <ObjectGroup
+      editable={editable}
       object={object}
+      onObjectDrag={onObjectDrag}
+      onObjectDragStart={onObjectDragStart}
       onProjectedBoundsChange={onProjectedBoundsChange}
       onSelectObject={onSelectObject}
-      selected={selected}
     >
       <primitive
         object={model}
@@ -594,17 +720,19 @@ export function Artboard3DScene({
   artboardWidth,
   className,
   collisionProxies = [],
+  editable = false,
   interactive = false,
   objects,
   onClearSelection,
   onLoadError,
+  onObjectDrag,
+  onObjectDragStart,
   onProjectedBoundsChange,
   onSelectObject,
   projectId = "local-project",
   scene,
-  selectedObjectIds = [],
 }: Artboard3DSceneProps) {
-  const settings = resolveScene3DSettings(scene);
+  const settings = useMemo(() => resolveScene3DSettings(scene), [scene]);
   const visibleObjects = objects.filter((object) => object.visible);
   // Physics needs a continuous frameloop to step; keep it on demand otherwise.
   const usesPhysics =
@@ -667,6 +795,7 @@ export function Artboard3DScene({
             {visibleObjects.map((object) =>
               object.source.kind === "asset" ? (
                 <AssetObject
+                  editable={editable}
                   key={`${object.id}:${object.source.assetId}:${object.material.useSourceMaterial}`}
                   object={
                     object as Object3DElement & {
@@ -674,19 +803,22 @@ export function Artboard3DScene({
                     }
                   }
                   onLoadError={onLoadError}
+                  onObjectDrag={onObjectDrag}
+                  onObjectDragStart={onObjectDragStart}
                   onProjectedBoundsChange={onProjectedBoundsChange}
                   onSelectObject={onSelectObject}
                   projectId={projectId}
-                  selected={selectedObjectIds.includes(object.id)}
                 />
               ) : (
                 <GeneratedObject
+                  editable={editable}
                   key={object.id}
                   object={object}
                   onLoadError={onLoadError}
+                  onObjectDrag={onObjectDrag}
+                  onObjectDragStart={onObjectDragStart}
                   onProjectedBoundsChange={onProjectedBoundsChange}
                   onSelectObject={onSelectObject}
-                  selected={selectedObjectIds.includes(object.id)}
                 />
               ),
             )}

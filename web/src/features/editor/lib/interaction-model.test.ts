@@ -15,6 +15,12 @@ describe("interaction model", () => {
     expect(interaction.motion).toBe("spring");
     expect(interaction.resetMode).toBe("contextual");
     expect(interaction.stackObstacleIds).toEqual([]);
+    expect(interaction.strandAnchor).toBe("top");
+    expect(interaction.strandStiffness).toBe(0.45);
+    expect(interaction.strandDamping).toBe(0.82);
+    expect(interaction.strandNeighborRadius).toBe(0);
+    expect(interaction.strandNeighborStrength).toBe(0);
+    expect(interaction.liquidAttraction).toBe(0);
     expect(interaction.id).toBeTruthy();
   });
 
@@ -77,6 +83,30 @@ describe("interaction model", () => {
       JSON.parse(JSON.stringify(interaction)),
     );
     expect(restored).toEqual(interaction);
+  });
+
+  it("normalizes strand authoring fields through saved data", () => {
+    const interaction = createDefaultInteraction({
+      effect: "strand-bend",
+      strandAnchor: "left",
+      strandStiffness: 0.6,
+      strandDamping: 0.7,
+      strandInfluenceRadius: 120,
+      strandMaxDisplacement: 80,
+      strandNeighborRadius: 160,
+      strandNeighborStrength: 55,
+    });
+    expect(normalizeInteraction(JSON.parse(JSON.stringify(interaction)))).toEqual(interaction);
+    expect(normalizeInteraction({ effect: "strand-bend" })).toMatchObject({
+      strandNeighborRadius: 0,
+      strandNeighborStrength: 0,
+    });
+  });
+
+  it("keeps magnetic pairing opt-in for old projects and round-trips its strength", () => {
+    expect(normalizeInteraction({ effect: "liquid-merge" }).liquidAttraction).toBe(0);
+    const authored = createDefaultInteraction({ effect: "liquid-merge", liquidAttraction: 72 });
+    expect(normalizeInteraction(JSON.parse(JSON.stringify(authored))).liquidAttraction).toBe(72);
   });
 
   it("normalizes a list, dropping non-objects", () => {

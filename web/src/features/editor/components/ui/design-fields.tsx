@@ -260,6 +260,7 @@ export function DesignRange({
   min,
   onBegin,
   onChange,
+  step,
   value,
 }: {
   ariaLabel: string;
@@ -269,6 +270,7 @@ export function DesignRange({
   min: number;
   onBegin?: () => void;
   onChange: (value: number) => void;
+  step?: number;
   value: number;
 }) {
   const progress = clamp((value - min) / Math.max(1, max - min), 0, 1);
@@ -305,6 +307,7 @@ export function DesignRange({
           }
         }}
         onPointerDown={onBegin}
+        step={step}
         type="range"
         value={value}
       />

@@ -307,18 +307,19 @@ describe("EditorShell", () => {
     expect(screen.getByLabelText("Layers")).toBeEmptyDOMElement();
   });
 
-  it("offers a 3D asset tab and accepts GLB uploads", () => {
+  it("offers a 3D asset tab with GLB and glTF uploads", () => {
     const { container } = render(<EditorShell />);
 
+    const uploadInput = container.querySelector(".asset-upload input");
+    expect(uploadInput).toHaveAttribute("accept", "image/*");
     const threeDTab = screen.getByRole("tab", { name: "3D" });
     expect(threeDTab).toHaveAttribute("aria-selected", "false");
     fireEvent.click(threeDTab);
     expect(threeDTab).toHaveAttribute("aria-selected", "true");
 
-    const uploadInput = container.querySelector(".asset-upload input");
     expect(uploadInput).toHaveAttribute(
       "accept",
-      "image/*,video/*,.glb,.gltf,model/gltf-binary",
+      ".glb,.gltf,model/gltf-binary,model/gltf+json",
     );
   });
 
