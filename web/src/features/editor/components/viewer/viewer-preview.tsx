@@ -949,6 +949,10 @@ export function ViewerPreview({
                         }
                       }}
                       style={{
+                        animation:
+                          runtimeVisual.shake && !prefersReducedMotion
+                            ? "interaction-shake 0.35s ease-in-out infinite"
+                            : undefined,
                         filter: composeFilter(runtimeVisual),
                         height: element.height,
                         left: element.x,

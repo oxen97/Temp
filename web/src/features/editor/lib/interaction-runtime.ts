@@ -31,6 +31,7 @@ export type RuntimeVisual = {
   blur: number;
   shadow: string | null;
   opacity: number | null;
+  shake: boolean;
 };
 
 export const IDENTITY_VISUAL: RuntimeVisual = {
@@ -44,6 +45,7 @@ export const IDENTITY_VISUAL: RuntimeVisual = {
   blur: 0,
   shadow: null,
   opacity: null,
+  shake: false,
 };
 
 export type ElementRuntimeState = {
@@ -176,6 +178,11 @@ export function accumulateEffect(
           interaction.shadowColor
         })`,
       };
+    case "show-hide":
+      // Hide proportionally: fully visible at 0, hidden at 1.
+      return { ...visual, opacity: 1 - intensity };
+    case "shake":
+      return { ...visual, shake: visual.shake || intensity > 0 };
     default:
       return visual;
   }

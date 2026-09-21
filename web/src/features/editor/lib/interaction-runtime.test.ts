@@ -223,6 +223,26 @@ describe("interaction runtime", () => {
     expect(full.rotate).toBeCloseTo(90);
   });
 
+  it("hides proportionally for show-hide and flags shake while active", () => {
+    const hide = runtimeVisualForElement(
+      [createDefaultInteraction({ trigger: "hover", effect: "show-hide" })],
+      { ...IDLE_RUNTIME_STATE, hovering: true },
+    );
+    expect(hide.opacity).toBe(0);
+
+    const shaking = runtimeVisualForElement(
+      [createDefaultInteraction({ trigger: "hover", effect: "shake" })],
+      { ...IDLE_RUNTIME_STATE, hovering: true },
+    );
+    expect(shaking.shake).toBe(true);
+
+    const still = runtimeVisualForElement(
+      [createDefaultInteraction({ trigger: "hover", effect: "shake" })],
+      IDLE_RUNTIME_STATE,
+    );
+    expect(still.shake).toBe(false);
+  });
+
   it("makes pointer-move follow the cursor, bounded by moveX/Y", () => {
     const follow = createDefaultInteraction({
       trigger: "pointer-move",

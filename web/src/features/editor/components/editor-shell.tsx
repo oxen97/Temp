@@ -497,6 +497,39 @@ export function EditorShell({
       x: artboard.width / 2 - size / 2 + 320,
       y: artboard.height / 2 - size / 2 + 240,
     });
+    addElement({
+      cornerRadius: 8,
+      fill: "#ffd60a",
+      height: size,
+      id: "interaction-demo-shake",
+      interactions: [
+        createDefaultInteraction({
+          effect: "shake",
+          id: "interaction-demo-shake-hover",
+          name: "Shake on hover",
+          trigger: "hover",
+        }),
+        createDefaultInteraction({
+          duration: 0.3,
+          effect: "show-hide",
+          id: "interaction-demo-shake-hide",
+          name: "Hide on click",
+          trigger: "click-tap",
+        }),
+      ],
+      locked: false,
+      name: "Shake Demo",
+      opacity: 100,
+      rotation: 0,
+      stroke: "transparent",
+      strokeStyle: "none",
+      strokeWidth: 0,
+      type: "rectangle",
+      visible: true,
+      width: size,
+      x: artboard.width / 2 - size / 2,
+      y: artboard.height / 2 - size / 2 - 260,
+    });
   }, [addElement, artboard.height, artboard.width, elements]);
   const backgroundMusicSettings: BackgroundMusicSettings = {
     ...defaultBackgroundMusicSettings,
