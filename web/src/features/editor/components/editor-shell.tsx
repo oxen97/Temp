@@ -280,6 +280,16 @@ export function EditorShell({
       primitive: "sphere",
     });
     sphere.material.color = "#67c5ff";
+    sphere.interactions = [
+      createDefaultInteraction({
+        bounciness: 55,
+        effect: "move",
+        id: "three-demo-sphere-drop",
+        motion: "gravity",
+        name: "Drop on click",
+        trigger: "click-tap",
+      }),
+    ];
     addObject3D(sphere);
 
     const torus = createPrimitiveObject3D({

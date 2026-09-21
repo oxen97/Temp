@@ -17,6 +17,7 @@ import {
 } from "three";
 import {
   createContext,
+  useCallback,
   useContext,
   useEffect,
   useMemo,
@@ -26,7 +27,13 @@ import {
 } from "react";
 
 import {
+  InteractionPhysics3DWorld,
+  loadRapier3D,
+  type Physics3DReadout,
+} from "@/features/editor/lib/interaction-physics-3d";
+import {
   IDLE_RUNTIME_STATE,
+  isRuntimeInteractionActive,
   runtimeVisualForElement,
 } from "@/features/editor/lib/interaction-runtime";
 import {
@@ -49,6 +56,94 @@ import {
  * inside the Canvas so it crosses the R3F reconciler boundary to ObjectGroup.
  */
 const Interactive3DContext = createContext(false);
+
+type Physics3DApi = {
+  readouts: Map<string, Physics3DReadout>;
+  release: (object: Object3DElement) => void;
+};
+
+const Physics3DContext = createContext<Physics3DApi | null>(null);
+
+/**
+ * Owns the Rapier 3D world (inside the Canvas so its useFrame can step it).
+ * Objects are released into the sim on a gravity trigger; each frame the bodies'
+ * readouts are published so ObjectGroup can drive the released objects.
+ */
+function Physics3DProvider({
+  artboardHeight,
+  artboardWidth,
+  children,
+}: {
+  artboardHeight: number;
+  artboardWidth: number;
+  children: ReactNode;
+}) {
+  const [readouts, setReadouts] = useState<Map<string, Physics3DReadout>>(
+    () => new Map(),
+  );
+  const worldRef = useRef<InteractionPhysics3DWorld | null>(null);
+  const releasedRef = useRef<Set<string>>(new Set());
+
+  const release = useCallback(
+    (object: Object3DElement) => {
+      if (releasedRef.current.has(object.id)) return;
+      releasedRef.current.add(object.id);
+      const gravity = (object.interactions ?? []).find(
+        (interaction) =>
+          interaction.enabled !== false && interaction.motion === "gravity",
+      );
+      const world = spatialTransformToWorld(object.transform);
+      void loadRapier3D().then((rapier) => {
+        if (!releasedRef.current.has(object.id)) return;
+        if (!worldRef.current) {
+          worldRef.current = new InteractionPhysics3DWorld(rapier, {
+            height: artboardHeight,
+            width: artboardWidth,
+          });
+        }
+        worldRef.current.addBody({
+          bounciness: (gravity?.bounciness ?? 50) / 100,
+          depth: object.dimensions.depth,
+          height: object.dimensions.height,
+          id: object.id,
+          width: object.dimensions.width,
+          x: world.position[0],
+          y: world.position[1],
+          z: world.position[2],
+        });
+      });
+    },
+    [artboardHeight, artboardWidth],
+  );
+
+  useFrame(() => {
+    const world = worldRef.current;
+    if (!world || releasedRef.current.size === 0) return;
+    world.step();
+    const next = new Map<string, Physics3DReadout>();
+    for (const id of releasedRef.current) {
+      const readout = world.read(id);
+      if (readout) next.set(id, readout);
+    }
+    setReadouts(next);
+  });
+
+  useEffect(
+    () => () => {
+      worldRef.current?.dispose();
+      worldRef.current = null;
+      releasedRef.current.clear();
+    },
+    [],
+  );
+
+  const api = useMemo(() => ({ readouts, release }), [readouts, release]);
+  return (
+    <Physics3DContext.Provider value={api}>
+      {children}
+    </Physics3DContext.Provider>
+  );
+}
 
 type Artboard3DSceneProps = {
   artboardHeight: number;
@@ -187,6 +282,26 @@ function ObjectGroup({
       })
     : null;
 
+  const physics = useContext(Physics3DContext);
+  const readout = physics?.readouts.get(object.id) ?? null;
+
+  // Release into the physics sim once a gravity-motion trigger is active; from
+  // then on the simulation drives the object's world transform.
+  useEffect(() => {
+    if (!physics || !interactions) return;
+    const shouldFall = (object.interactions ?? []).some(
+      (interaction) =>
+        interaction.enabled !== false &&
+        interaction.motion === "gravity" &&
+        isRuntimeInteractionActive(interaction, {
+          ...IDLE_RUNTIME_STATE,
+          hovering,
+          toggled,
+        }),
+    );
+    if (shouldFall) physics.release(object);
+  }, [physics, interactions, object, toggled, hovering]);
+
   return (
     <>
       <group
@@ -209,13 +324,17 @@ function ObjectGroup({
               }
             : undefined
         }
-        position={world.position}
+        position={readout ? readout.position : world.position}
         ref={setGroup}
-        rotation={world.rotation}
         scale={world.scale}
         userData={{ amousObjectId: object.id }}
+        {...(readout
+          ? { quaternion: readout.quaternion }
+          : { rotation: world.rotation })}
       >
-        {visual ? (
+        {readout ? (
+          children
+        ) : visual ? (
           <group
             position={[visual.tx, -visual.ty, 0]}
             rotation={[0, 0, (visual.rotate * Math.PI) / 180]}
@@ -445,6 +564,15 @@ export function Artboard3DScene({
 }: Artboard3DSceneProps) {
   const settings = resolveScene3DSettings(scene);
   const visibleObjects = objects.filter((object) => object.visible);
+  // Physics needs a continuous frameloop to step; keep it on demand otherwise.
+  const usesPhysics =
+    interactive &&
+    visibleObjects.some((object) =>
+      (object.interactions ?? []).some(
+        (interaction) =>
+          interaction.enabled !== false && interaction.motion === "gravity",
+      ),
+    );
   if (!settings.enabled || !visibleObjects.length) return null;
 
   return (
@@ -463,7 +591,7 @@ export function Artboard3DScene({
         }}
         dpr={[1, 2]}
         flat
-        frameloop="demand"
+        frameloop={usesPhysics ? "always" : "demand"}
         gl={{ alpha: true, antialias: true }}
         onPointerMissed={onClearSelection}
         orthographic={settings.projection === "orthographic"}
@@ -488,32 +616,37 @@ export function Artboard3DScene({
           shadow-mapSize-width={2048}
         />
         <Interactive3DContext.Provider value={interactive}>
-          {visibleObjects.map((object) =>
-            object.source.kind === "asset" ? (
-              <AssetObject
-                key={`${object.id}:${object.source.assetId}:${object.material.useSourceMaterial}`}
-                object={
-                  object as Object3DElement & {
-                    source: { assetId: string; kind: "asset" };
+          <Physics3DProvider
+            artboardHeight={artboardHeight}
+            artboardWidth={artboardWidth}
+          >
+            {visibleObjects.map((object) =>
+              object.source.kind === "asset" ? (
+                <AssetObject
+                  key={`${object.id}:${object.source.assetId}:${object.material.useSourceMaterial}`}
+                  object={
+                    object as Object3DElement & {
+                      source: { assetId: string; kind: "asset" };
+                    }
                   }
-                }
-                onLoadError={onLoadError}
-                onProjectedBoundsChange={onProjectedBoundsChange}
-                onSelectObject={onSelectObject}
-                projectId={projectId}
-                selected={selectedObjectIds.includes(object.id)}
-              />
-            ) : (
-              <GeneratedObject
-                key={object.id}
-                object={object}
-                onLoadError={onLoadError}
-                onProjectedBoundsChange={onProjectedBoundsChange}
-                onSelectObject={onSelectObject}
-                selected={selectedObjectIds.includes(object.id)}
-              />
-            ),
-          )}
+                  onLoadError={onLoadError}
+                  onProjectedBoundsChange={onProjectedBoundsChange}
+                  onSelectObject={onSelectObject}
+                  projectId={projectId}
+                  selected={selectedObjectIds.includes(object.id)}
+                />
+              ) : (
+                <GeneratedObject
+                  key={object.id}
+                  object={object}
+                  onLoadError={onLoadError}
+                  onProjectedBoundsChange={onProjectedBoundsChange}
+                  onSelectObject={onSelectObject}
+                  selected={selectedObjectIds.includes(object.id)}
+                />
+              ),
+            )}
+          </Physics3DProvider>
         </Interactive3DContext.Provider>
       </Canvas>
     </div>
