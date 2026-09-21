@@ -162,6 +162,7 @@ export function ViewerPreview({
   const pointerSessionsRef = useRef(
     new Map<number, ViewerInteractionPointerSession>(),
   );
+  const suppressDragClickRef = useRef(new Set<string>());
   const scrollStopTimersRef = useRef(new Map<string, number>());
   const lastPointerRef = useRef<{ x: number; y: number } | null>(null);
   const pageRef = useRef<HTMLDivElement>(null);
@@ -894,12 +895,25 @@ export function ViewerPreview({
                       pointer: pagePointer,
                     },
                   );
+                  const dragEnabled = (element.interactions ?? []).some(
+                    (interaction) =>
+                      interaction.enabled !== false &&
+                      interaction.trigger === "drag",
+                  );
                   return (
                     <div
-                      className={`viewer-preview-element element-${element.type}`}
+                      className={[
+                        "viewer-preview-element",
+                        `element-${element.type}`,
+                        dragEnabled ? "is-draggable" : "",
+                      ]
+                        .filter(Boolean)
+                        .join(" ")}
                       data-element-id={element.id}
                       key={element.id}
                       onClick={() => {
+                        if (suppressDragClickRef.current.delete(element.id))
+                          return;
                         playInteractionEvent(element, "click", "click");
                         fireInteractionClick(element);
                       }}
@@ -918,6 +932,10 @@ export function ViewerPreview({
                         setInteractionDrag(element, null);
                       }}
                       onPointerDown={(event) => {
+                        // A previous drag may not have produced a click (for
+                        // example, if the pointer was canceled). Keep the next
+                        // genuine press from being suppressed in that case.
+                        suppressDragClickRef.current.delete(element.id);
                         lastPointerRef.current = {
                           x: event.clientX,
                           y: event.clientY,
@@ -993,6 +1011,14 @@ export function ViewerPreview({
                         });
                       }}
                       onPointerUp={(event) => {
+                        const session = pointerSessionsRef.current.get(
+                          event.pointerId,
+                        );
+                        if (
+                          session?.elementId === element.id &&
+                          session.dragging
+                        )
+                          suppressDragClickRef.current.add(element.id);
                         if (
                           event.currentTarget.hasPointerCapture?.(
                             event.pointerId,

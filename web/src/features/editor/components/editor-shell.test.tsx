@@ -20,6 +20,7 @@ import type {
   InteractionSoundSettings,
 } from "../store/editor-store";
 import { calculateCanvasFitZoom } from "../lib/geometry";
+import { createDefaultInteraction } from "../lib/interaction-model";
 import {
   calculateInteractionSoundVolume,
   chooseInteractionSoundAsset,
@@ -1687,6 +1688,69 @@ describe("EditorShell", () => {
     render(<EditorShell />);
     fireEvent.click(screen.getByRole("button", { name: "Preview" }));
     await waitFor(() => expect(play).toHaveBeenCalledTimes(1));
+  });
+
+  it("does not run a click interaction after dragging a preview element", () => {
+    const shape = {
+      ...testSoundShape("preview-drag-click", 100),
+      interactions: [
+        createDefaultInteraction({
+          effect: "move",
+          id: "preview-click-move",
+          moveX: 260,
+          trigger: "click-tap",
+        }),
+        createDefaultInteraction({
+          effect: "move",
+          id: "preview-drag-move",
+          trigger: "drag",
+        }),
+      ],
+    };
+    useEditorStore.setState({
+      pages: [{ id: "page-1", name: "Intro", elements: [shape] }],
+    });
+
+    render(<EditorShell />);
+    fireEvent.click(screen.getByRole("button", { name: "Preview" }));
+    const previewElement = screen
+      .getByRole("dialog", { name: "Viewer preview" })
+      .querySelector<HTMLElement>(`[data-element-id="${shape.id}"]`)!;
+    expect(previewElement.classList.contains("is-draggable")).toBe(true);
+    const beforeDrag = previewElement.style.transform;
+
+    fireEvent.pointerDown(previewElement, {
+      clientX: 100,
+      clientY: 100,
+      pointerId: 1,
+    });
+    fireEvent.pointerMove(previewElement, {
+      clientX: 150,
+      clientY: 100,
+      pointerId: 1,
+    });
+    fireEvent.pointerUp(previewElement, {
+      clientX: 150,
+      clientY: 100,
+      pointerId: 1,
+    });
+    const afterDrag = previewElement.style.transform;
+    expect(afterDrag).not.toBe(beforeDrag);
+    fireEvent.click(previewElement);
+    expect(previewElement.style.transform).toBe(afterDrag);
+
+    fireEvent.pointerDown(previewElement, {
+      clientX: 150,
+      clientY: 100,
+      pointerId: 2,
+    });
+    fireEvent.pointerUp(previewElement, {
+      clientX: 150,
+      clientY: 100,
+      pointerId: 2,
+    });
+    fireEvent.click(previewElement);
+    expect(previewElement.style.transform).not.toBe(afterDrag);
   });
 
   it("keeps On Page Enter music sourced during development effect replay", async () => {

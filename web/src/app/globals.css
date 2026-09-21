@@ -1603,6 +1603,11 @@ input[type="number"] {
   transform-origin: center;
 }
 
+.viewer-preview-element.is-draggable {
+  /* Move the rendered SVG as one layer instead of repainting it on each drag. */
+  will-change: transform;
+}
+
 .viewer-preview-element.element-pen {
   pointer-events: none;
 }
