@@ -56,6 +56,18 @@ export type Physics3DReadout = {
   quaternion: [number, number, number, number];
 };
 
+/** A static collider standing in for a 2D element, in world px (y-up). */
+export type CollisionProxy3D = {
+  id: string;
+  x: number;
+  y: number;
+  z: number;
+  width: number;
+  height: number;
+  depth: number;
+  bounciness?: number;
+};
+
 export type Physics3DWorldOptions = {
   /** Artboard size in px. */
   width: number;
@@ -76,6 +88,7 @@ export class InteractionPhysics3DWorld {
   private readonly rapier: Rapier3DApi;
   private readonly world: RAPIER.World;
   private readonly bodies = new Map<string, RAPIER.RigidBody>();
+  private readonly proxyIds = new Set<string>();
 
   constructor(rapier: Rapier3DApi, options: Physics3DWorldOptions) {
     this.rapier = rapier;
@@ -158,6 +171,35 @@ export class InteractionPhysics3DWorld {
     this.bodies.delete(id);
   }
 
+  hasProxy(id: string): boolean {
+    return this.proxyIds.has(id);
+  }
+
+  /**
+   * Adds a static collider standing in for a 2D element (a "hybrid" proxy): the
+   * element's box extruded through z so 3D bodies collide with the flat 2D
+   * shape. Position/size are in world px (three.js coords, y-up).
+   */
+  addStaticProxy(input: CollisionProxy3D): void {
+    if (this.proxyIds.has(input.id)) return;
+    const body = this.world.createRigidBody(
+      this.rapier.RigidBodyDesc.fixed().setTranslation(
+        pxToMeters(input.x),
+        pxToMeters(input.y),
+        pxToMeters(input.z),
+      ),
+    );
+    this.world.createCollider(
+      this.rapier.ColliderDesc.cuboid(
+        pxToMeters(Math.max(1, input.width) / 2),
+        pxToMeters(Math.max(1, input.height) / 2),
+        pxToMeters(Math.max(1, input.depth) / 2),
+      ).setRestitution(Math.min(1, Math.max(0, input.bounciness ?? 0.2))),
+      body,
+    );
+    this.proxyIds.add(input.id);
+  }
+
   step(): void {
     this.world.step();
   }
@@ -176,5 +218,6 @@ export class InteractionPhysics3DWorld {
   dispose(): void {
     this.world.free();
     this.bodies.clear();
+    this.proxyIds.clear();
   }
 }

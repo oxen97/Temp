@@ -27,6 +27,7 @@ import {
 } from "react";
 
 import {
+  type CollisionProxy3D,
   InteractionPhysics3DWorld,
   loadRapier3D,
   type Physics3DReadout,
@@ -73,10 +74,12 @@ function Physics3DProvider({
   artboardHeight,
   artboardWidth,
   children,
+  proxies,
 }: {
   artboardHeight: number;
   artboardWidth: number;
   children: ReactNode;
+  proxies: CollisionProxy3D[];
 }) {
   const [readouts, setReadouts] = useState<Map<string, Physics3DReadout>>(
     () => new Map(),
@@ -100,6 +103,8 @@ function Physics3DProvider({
             height: artboardHeight,
             width: artboardWidth,
           });
+          // Register 2D-element proxies so 3D bodies collide with 2D shapes.
+          for (const proxy of proxies) worldRef.current.addStaticProxy(proxy);
         }
         worldRef.current.addBody({
           bounciness: (gravity?.bounciness ?? 50) / 100,
@@ -113,7 +118,7 @@ function Physics3DProvider({
         });
       });
     },
-    [artboardHeight, artboardWidth],
+    [artboardHeight, artboardWidth, proxies],
   );
 
   useFrame(() => {
@@ -149,6 +154,8 @@ type Artboard3DSceneProps = {
   artboardHeight: number;
   artboardWidth: number;
   className?: string;
+  /** 2D-element proxies (world px) that 3D bodies can collide with. */
+  collisionProxies?: CollisionProxy3D[];
   /** When true (viewer preview), objects play their authored interactions. */
   interactive?: boolean;
   objects: Object3DElement[];
@@ -552,6 +559,7 @@ export function Artboard3DScene({
   artboardHeight,
   artboardWidth,
   className,
+  collisionProxies = [],
   interactive = false,
   objects,
   onClearSelection,
@@ -619,6 +627,7 @@ export function Artboard3DScene({
           <Physics3DProvider
             artboardHeight={artboardHeight}
             artboardWidth={artboardWidth}
+            proxies={collisionProxies}
           >
             {visibleObjects.map((object) =>
               object.source.kind === "asset" ? (

@@ -302,7 +302,32 @@ export function EditorShell({
     torus.material.color = "#ff8c67";
     torus.transform.rotation = { x: 55, y: 12, z: 8 };
     addObject3D(torus);
-  }, [addObject3D, artboard.height, artboard.width, objects3d.length]);
+    // A 2D platform the falling 3D sphere lands on (hybrid 2D<->3D collision).
+    addElement({
+      cornerRadius: 6,
+      fill: "#2b2b2b",
+      height: 40,
+      id: "three-demo-platform",
+      locked: false,
+      name: "Hybrid Platform",
+      opacity: 100,
+      rotation: 0,
+      stroke: "transparent",
+      strokeStyle: "none",
+      strokeWidth: 0,
+      type: "rectangle",
+      visible: true,
+      width: 520,
+      x: centerX - 260,
+      y: centerY + 250,
+    });
+  }, [
+    addElement,
+    addObject3D,
+    artboard.height,
+    artboard.width,
+    objects3d.length,
+  ]);
 
   useEffect(() => {
     if (

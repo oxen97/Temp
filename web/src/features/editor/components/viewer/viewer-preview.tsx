@@ -6,6 +6,7 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -736,6 +737,23 @@ export function ViewerPreview({
   const pageType = artboard.pageType ?? "screen";
   const viewportMode = artboard.viewportMode ?? "fit";
   const layout = viewerPreviewLayout(artboard, viewport);
+  // Every visible 2D element is a static collision proxy in the 3D world
+  // (extruded through z), so 3D physics bodies collide with 2D shapes.
+  const collision3DProxies = useMemo(
+    () =>
+      elements
+        .filter((element) => element.visible)
+        .map((element) => ({
+          depth: 600,
+          height: element.height,
+          id: `proxy:${element.id}`,
+          width: element.width,
+          x: element.x + element.width / 2,
+          y: -(element.y + element.height / 2),
+          z: 0,
+        })),
+    [elements],
+  );
   const usesPointerMove = elements.some((element) =>
     (element.interactions ?? []).some(
       (interaction) =>
@@ -854,6 +872,7 @@ export function ViewerPreview({
               <Artboard3DScene
                 artboardHeight={artboard.height}
                 artboardWidth={artboard.width}
+                collisionProxies={collision3DProxies}
                 interactive
                 objects={objects3d}
                 projectId={projectId}
