@@ -15,8 +15,22 @@ import {
 } from "./artboard-3d-scene";
 
 vi.mock("@react-three/fiber", () => ({
-  Canvas: ({ children }: { children: ReactNode }) => (
-    <div data-testid="three-canvas">{children}</div>
+  Canvas: ({
+    camera,
+    children,
+    dpr,
+  }: {
+    camera?: { manual?: boolean };
+    children: ReactNode;
+    dpr?: number | [number, number];
+  }) => (
+    <div
+      data-camera-manual={camera?.manual}
+      data-dpr={dpr}
+      data-testid="three-canvas"
+    >
+      {children}
+    </div>
   ),
   useFrame: vi.fn(),
   useThree: () => ({
@@ -31,7 +45,28 @@ vi.mock("@react-three/fiber", () => ({
 }));
 
 describe("Artboard3DScene selection", () => {
-  it("extends the editor render surface beyond the artboard but preserves preview bounds", () => {
+  it("keeps camera projection authored and uses the native display density", () => {
+    const object = createPrimitiveObject3D({
+      dimensions: { depth: 100, height: 100, width: 100 },
+      id: "zoom-cube",
+      name: "Zoom cube",
+      position: { x: 200, y: 200, z: 0 },
+      primitive: "box",
+    });
+    const { getByTestId } = render(
+      <Artboard3DScene
+        artboardHeight={1080}
+        artboardWidth={1920}
+        objects={[object]}
+        scene={{ enabled: true }}
+      />,
+    );
+    const canvas = getByTestId("three-canvas");
+    expect(canvas.dataset.cameraManual).toBe("true");
+    expect(canvas.dataset.dpr).toBe("1,2");
+  });
+
+  it("uses a continuous editor viewport and preserves preview bounds", () => {
     expect(sceneRenderViewport(1920, 1080)).toEqual({
       x: 0,
       y: 0,
@@ -44,10 +79,12 @@ describe("Artboard3DScene selection", () => {
       width: 2600,
       height: 1400,
     });
-    expect(editorViewport.x).toBeLessThan(-300);
-    expect(editorViewport.y).toBeLessThan(-100);
-    expect(editorViewport.x + editorViewport.width).toBeGreaterThan(2300);
-    expect(editorViewport.y + editorViewport.height).toBeGreaterThan(1300);
+    expect(editorViewport).toEqual({
+      x: -300,
+      y: -100,
+      width: 2600,
+      height: 1400,
+    });
   });
 
   it("keeps hover active when the pointer crosses meshes within one 3D object", () => {

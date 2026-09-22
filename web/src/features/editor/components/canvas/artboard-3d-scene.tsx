@@ -31,6 +31,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -412,7 +413,12 @@ type Artboard3DSceneProps = {
   viewport?: ProjectedBounds;
 };
 
-/** Expand only as far as the visible editor viewport, keeping GPU buffers bounded. */
+/**
+ * The editor renders only its continuously visible world viewport. Keeping
+ * this independent from the artboard edges avoids switching canvas sizes when
+ * the page starts fitting inside the workspace during zoom. The preview has
+ * no viewport and therefore renders the authored page exactly.
+ */
 export function sceneRenderViewport(
   artboardWidth: number,
   artboardHeight: number,
@@ -421,17 +427,12 @@ export function sceneRenderViewport(
   if (!visibleViewport) {
     return { x: 0, y: 0, width: artboardWidth, height: artboardHeight };
   }
-  const left = Math.min(0, Math.floor(visibleViewport.x) - 2);
-  const top = Math.min(0, Math.floor(visibleViewport.y) - 2);
-  const right = Math.max(
-    artboardWidth,
-    Math.ceil(visibleViewport.x + visibleViewport.width) + 2,
-  );
-  const bottom = Math.max(
-    artboardHeight,
-    Math.ceil(visibleViewport.y + visibleViewport.height) + 2,
-  );
-  return { x: left, y: top, width: right - left, height: bottom - top };
+  return {
+    height: Math.max(1, visibleViewport.height),
+    width: Math.max(1, visibleViewport.width),
+    x: visibleViewport.x,
+    y: visibleViewport.y,
+  };
 }
 
 function SceneCamera({
@@ -449,7 +450,7 @@ function SceneCamera({
 }) {
   const { camera, invalidate } = useThree();
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const centerX = artboardWidth / 2;
     const centerY = -artboardHeight / 2;
     const perspectiveDistance =
@@ -1169,6 +1170,7 @@ export function Artboard3DScene({
         camera={{
           far: 100000,
           fov: settings.perspective,
+          manual: true,
           near: 0.1,
           position: [artboardWidth / 2, -artboardHeight / 2, 1000],
           zoom: 1,
