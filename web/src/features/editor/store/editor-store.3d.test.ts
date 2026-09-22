@@ -144,4 +144,28 @@ describe("editor store 3D state", () => {
     expect(objects.map(({ id }) => id)).toEqual(["box-locked"]);
     expect(useEditorStore.getState().selectedObject3DIds).toEqual([]);
   });
+
+  it("locks selected 3D layers together, then prevents their selection", () => {
+    const first = object3d();
+    const second = { ...object3d(), id: "box-2", name: "Box 2" };
+    useEditorStore.setState((state) => ({
+      pages: state.pages.map((page) => ({
+        ...page,
+        objects3d: [first, second],
+      })),
+      selectedObject3DIds: [first.id, second.id],
+    }));
+
+    useEditorStore.getState().toggleElementLocked(first.id);
+    let objects = useEditorStore.getState().pages[0].objects3d!;
+    expect(objects.map((object) => object.locked)).toEqual([true, true]);
+    expect(useEditorStore.getState().selectedObject3DIds).toEqual([]);
+
+    useEditorStore.getState().setSelectedObject3DIds([first.id, second.id]);
+    expect(useEditorStore.getState().selectedObject3DIds).toEqual([]);
+
+    useEditorStore.getState().toggleElementVisible(second.id);
+    objects = useEditorStore.getState().pages[0].objects3d!;
+    expect(objects.map((object) => object.visible)).toEqual([true, false]);
+  });
 });

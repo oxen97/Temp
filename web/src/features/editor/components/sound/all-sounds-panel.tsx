@@ -1,4 +1,4 @@
-import { Check, Music2, Search } from "lucide-react";
+import { Box, Check, Music2, Search } from "lucide-react";
 import Image from "next/image";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -13,6 +13,7 @@ import {
   DesignRange,
 } from "@/features/editor/components/ui/design-fields";
 import { LayerSymbol } from "@/features/editor/components/ui/layer-symbol";
+import { ModelAssetThumbnail } from "@/features/editor/components/ui/model-asset-thumbnail";
 import { clamp } from "@/features/editor/lib/geometry";
 import {
   backgroundMusicStartOptions,
@@ -20,11 +21,11 @@ import {
   formatAudioTime,
   interactionSoundTriggerOptions,
   supportsInteractionSounds,
+  type SoundTarget,
 } from "@/features/editor/lib/sound-settings";
 import {
   type BackgroundMusicAsset,
   type BackgroundMusicSettings,
-  type CanvasElement,
   type InteractionSoundSettings,
   type InteractionSoundTrigger,
   type SoundAdvancedSettings,
@@ -55,14 +56,14 @@ export const allSoundsObjectFilterOptions: {
 export type AllSoundsEntry = {
   asset: BackgroundMusicAsset;
   assetIndex: number;
-  element: CanvasElement;
+  element: SoundTarget;
   id: string;
   setting: InteractionSoundSettings;
   settingIndex: number;
 };
 
 export type AllSoundsGroup = {
-  element: CanvasElement;
+  element: SoundTarget;
   entries: AllSoundsEntry[];
   id: string;
 };
@@ -79,10 +80,11 @@ export function AllSoundsPanel({
   onUpdateAdvanced,
   onUpdateMixer,
   onCheckpoint,
+  projectId,
 }: {
   advancedSettings: SoundAdvancedSettings;
   backgroundMusic: BackgroundMusicSettings;
-  elements: CanvasElement[];
+  elements: SoundTarget[];
   mixer: SoundMixerSettings;
   onDeleteBackgroundMusic: () => void;
   onDeleteInteractionAsset: (
@@ -98,6 +100,7 @@ export function AllSoundsPanel({
   onUpdateAdvanced: (updates: Partial<SoundAdvancedSettings>) => void;
   onUpdateMixer: (updates: Partial<SoundMixerSettings>) => void;
   onCheckpoint: () => void;
+  projectId: string;
 }) {
   const [searchTerm, setSearchTerm] = useState("");
   const [triggerFilter, setTriggerFilter] =
@@ -626,9 +629,20 @@ export function AllSoundsPanel({
                     <span className="sound-all-object-cell">
                       <span
                         aria-hidden="true"
-                        className={`sound-all-object-thumbnail layer-symbol ${group.element.pathfinder ? "symbol-pathfinder" : `symbol-${group.element.type}`}`}
+                        className={`sound-all-object-thumbnail layer-symbol ${group.element.type !== "object3d" && group.element.pathfinder ? "symbol-pathfinder" : `symbol-${group.element.type}`}`}
                       >
-                        <LayerSymbol element={group.element} />
+                        {group.element.type === "object3d" ? (
+                          group.element.source.kind === "asset" ? (
+                            <ModelAssetThumbnail
+                              assetId={group.element.source.assetId}
+                              projectId={projectId}
+                            />
+                          ) : (
+                            <Box aria-hidden="true" size={15} strokeWidth={1} />
+                          )
+                        ) : (
+                          <LayerSymbol element={group.element} />
+                        )}
                         {group.element.type === "image" && group.element.src ? (
                           <span
                             className="layer-image-preview"

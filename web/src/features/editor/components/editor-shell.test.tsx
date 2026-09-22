@@ -323,6 +323,51 @@ describe("EditorShell", () => {
     );
   });
 
+  it("keeps uploaded images and videos in their respective asset tabs", () => {
+    vi.mocked(URL.createObjectURL).mockImplementation(
+      (blob) => `blob:${blob instanceof File ? blob.name : "asset"}`,
+    );
+    const { container } = render(<EditorShell />);
+    const uploadInput = container.querySelector<HTMLInputElement>(
+      ".asset-upload input",
+    );
+    expect(uploadInput).not.toBeNull();
+
+    fireEvent.change(uploadInput!, {
+      target: {
+        files: [new File(["image"], "photo.png", { type: "image/png" })],
+      },
+    });
+    expect(
+      screen.getByRole("button", { name: "Add uploaded asset 1" }),
+    ).toHaveStyle("background-image: url(blob:photo.png)");
+
+    fireEvent.click(screen.getByRole("tab", { name: "Video" }));
+    expect(
+      screen.queryByRole("button", { name: "Add uploaded asset 1" }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.change(uploadInput!, {
+      target: {
+        files: [new File(["video"], "clip.mp4", { type: "video/mp4" })],
+      },
+    });
+    expect(
+      screen.getByRole("img", { name: "Uploaded video clip.mp4" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Add uploaded asset 1" }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Image" }));
+    expect(
+      screen.getByRole("button", { name: "Add uploaded asset 1" }),
+    ).toHaveStyle("background-image: url(blob:photo.png)");
+    expect(
+      screen.queryByRole("img", { name: "Uploaded video clip.mp4" }),
+    ).not.toBeInTheDocument();
+  });
+
   it("scales the editor chrome without changing the canvas zoom", async () => {
     render(<EditorShell />);
 

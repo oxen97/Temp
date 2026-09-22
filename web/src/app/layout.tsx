@@ -12,9 +12,11 @@ export const metadata: Metadata = {
 };
 
 const shapePickerAsset = assetPath("/figma/shape-picker.svg");
+const shapePickerDarkAsset = assetPath("/figma/shape-picker-dark.svg");
 const assetStyles = {
   "--figma-pen": `url("${assetPath("/figma/pen.svg")}")`,
   "--figma-shape-picker": `url("${shapePickerAsset}")`,
+  "--figma-shape-picker-dark": `url("${shapePickerDarkAsset}")`,
 } as CSSProperties;
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

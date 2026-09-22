@@ -48,6 +48,46 @@ export function screenPointToNdc(
   };
 }
 
+/** Screen-space movement of an authored point at its actual 3D depth. */
+export function projectEditorMoveToScreen(
+  from: Vector3Value,
+  to: Vector3Value,
+  camera: Camera,
+  viewportWidth: number,
+  viewportHeight: number,
+) {
+  camera.updateWorldMatrix(true, false);
+  const start = editorPointToWorld(from).project(camera);
+  const end = editorPointToWorld(to).project(camera);
+  return {
+    x: ((end.x - start.x) * viewportWidth) / 2,
+    y: ((start.y - end.y) * viewportHeight) / 2,
+  };
+}
+
+/** Convert a pixel snap correction into an editor XY translation at fixed Z. */
+export function screenOffsetToEditorMove(
+  anchor: Vector3Value,
+  offset: { x: number; y: number },
+  camera: Camera,
+  viewportWidth: number,
+  viewportHeight: number,
+) {
+  camera.updateWorldMatrix(true, false);
+  const projected = editorPointToWorld(anchor).project(camera);
+  const x = projected.x + (2 * offset.x) / Math.max(1, viewportWidth);
+  const y = projected.y - (2 * offset.y) / Math.max(1, viewportHeight);
+  const near = new Vector3(x, y, -1).unproject(camera);
+  const far = new Vector3(x, y, 1).unproject(camera);
+  const direction = far.sub(near);
+  if (Math.abs(direction.z) < 1e-8) return null;
+  const world = near.addScaledVector(
+    direction,
+    (anchor.z - near.z) / direction.z,
+  );
+  return { x: world.x - anchor.x, y: -world.y - anchor.y };
+}
+
 export function projectWorldBoxToScreen(
   box: Box3,
   camera: Camera,
@@ -55,6 +95,11 @@ export function projectWorldBoxToScreen(
   viewportHeight: number,
 ): ProjectedBounds | null {
   if (box.isEmpty()) return null;
+  // BoundsReporter runs in useFrame before Three renders the scene. When the
+  // scene camera has just moved, its inverse world matrix may still describe
+  // the previous frame; projecting with it offsets the DOM selection box from
+  // the mesh that the renderer draws a moment later.
+  camera.updateWorldMatrix(true, false);
   const points = [
     [box.min.x, box.min.y, box.min.z],
     [box.min.x, box.min.y, box.max.z],

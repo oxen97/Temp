@@ -48,6 +48,7 @@ function fitUnlockedScaleToProjectedBounds(
   initialBounds: ElementRect,
   nextBounds: ElementRect,
   initialScale: SpatialTransform3D["scale"],
+  depthRatio: number,
 ) {
   const initialHalf = projectedHalfExtents(object, initialScale);
   const target = {
@@ -58,6 +59,7 @@ function fitUnlockedScaleToProjectedBounds(
     ...initialScale,
     x: initialScale.x * (nextBounds.width / Math.max(1, initialBounds.width)),
     y: initialScale.y * (nextBounds.height / Math.max(1, initialBounds.height)),
+    z: initialScale.z * depthRatio,
   };
   const signX = Math.sign(initialScale.x) || 1;
   const signY = Math.sign(initialScale.y) || 1;
@@ -93,7 +95,7 @@ function fitUnlockedScaleToProjectedBounds(
   return next;
 }
 
-/** Resize the projected 2D frame while leaving the object's depth unchanged. */
+/** Resize a 3D object by its projected 2D frame. */
 export function resizeObject3DFromScreen({
   artboardHeight,
   deltaX,
@@ -122,12 +124,15 @@ export function resizeObject3DFromScreen({
   );
   const scaleX = bounds.width / Math.max(1, initialBounds.width);
   const scaleY = bounds.height / Math.max(1, initialBounds.height);
+  // A rotated model exposes part of its depth on screen. Keeping Z fixed
+  // leaves an irreducible projected width/height, so the mesh appears to stop
+  // shrinking while the pointer and selection box keep moving. Shrink depth
+  // with the smaller screen ratio (and scale it uniformly with locked ratio).
+  const depthRatio = preserveRatio ? scaleX : Math.min(scaleX, scaleY);
   const scale = {
     x: initial.transform.scale.x * scaleX,
     y: initial.transform.scale.y * scaleY,
-    z: preserveRatio
-      ? initial.transform.scale.z * scaleX
-      : initial.transform.scale.z,
+    z: initial.transform.scale.z * depthRatio,
   };
   const frontOrthographic =
     scene.projection === "orthographic" &&
@@ -141,6 +146,7 @@ export function resizeObject3DFromScreen({
         initialBounds,
         bounds,
         initial.transform.scale,
+        depthRatio,
       ),
     );
   }
@@ -187,6 +193,23 @@ export function resizeObject3DFromScreen({
 }
 
 /** Apply a shared 2D selection resize to one member of a 2D/3D selection. */
+export function resizeProjectedBoundsWithinSelection(
+  objectBounds: ElementRect,
+  selectionBounds: ElementRect,
+  resizedSelectionBounds: ElementRect,
+): ElementRect {
+  const scaleX =
+    resizedSelectionBounds.width / Math.max(1, selectionBounds.width);
+  const scaleY =
+    resizedSelectionBounds.height / Math.max(1, selectionBounds.height);
+  return {
+    x: resizedSelectionBounds.x + (objectBounds.x - selectionBounds.x) * scaleX,
+    y: resizedSelectionBounds.y + (objectBounds.y - selectionBounds.y) * scaleY,
+    width: objectBounds.width * scaleX,
+    height: objectBounds.height * scaleY,
+  };
+}
+
 export function resizeObject3DWithinSelection({
   artboardHeight,
   initial,
@@ -208,10 +231,13 @@ export function resizeObject3DWithinSelection({
     resizedSelectionBounds.height / Math.max(1, selectionBounds.height);
   const oldCenterX = objectBounds.x + objectBounds.width / 2;
   const oldCenterY = objectBounds.y + objectBounds.height / 2;
-  const newCenterX =
-    resizedSelectionBounds.x + (oldCenterX - selectionBounds.x) * scaleX;
-  const newCenterY =
-    resizedSelectionBounds.y + (oldCenterY - selectionBounds.y) * scaleY;
+  const resizedObjectBounds = resizeProjectedBoundsWithinSelection(
+    objectBounds,
+    selectionBounds,
+    resizedSelectionBounds,
+  );
+  const newCenterX = resizedObjectBounds.x + resizedObjectBounds.width / 2;
+  const newCenterY = resizedObjectBounds.y + resizedObjectBounds.height / 2;
   const perspectiveDistance =
     artboardHeight /
     (2 * Math.tan((Math.max(1, scene.perspective) * Math.PI) / 360));
@@ -238,6 +264,7 @@ export function resizeObject3DWithinSelection({
       ...initial.transform.scale,
       x: initial.transform.scale.x * scaleX,
       y: initial.transform.scale.y * scaleY,
+      z: initial.transform.scale.z * Math.min(scaleX, scaleY),
     },
   };
 }

@@ -35,6 +35,7 @@ import {
   isSoundOutputQuality,
   isSoundPreloadMode,
   normalizedInteractionSound,
+  type SoundTarget,
   soundOutputQualityOptions,
   soundPreloadOptions,
   supportsInteractionSounds,
@@ -42,7 +43,6 @@ import {
 import {
   type BackgroundMusicAsset,
   type BackgroundMusicSettings,
-  type CanvasElement,
   type InteractionSoundSettings,
   type SoundAdvancedSettings,
   type SoundMixerSettings,
@@ -161,11 +161,12 @@ export function SoundPanel({
   onUpdateInteractionSound,
   onUpdateMixer,
   pageId,
+  projectId,
   selectedElements,
   settings,
 }: {
   advancedSettings: SoundAdvancedSettings;
-  elements: CanvasElement[];
+  elements: SoundTarget[];
   mixer: SoundMixerSettings;
   onAttachArtwork: (pageId: string, assetSrc: string, artwork: Blob) => void;
   onAppendInteractionSoundAssets: (
@@ -201,7 +202,8 @@ export function SoundPanel({
   ) => void;
   onUpdateMixer: (updates: Partial<SoundMixerSettings>) => void;
   pageId: string;
-  selectedElements: CanvasElement[];
+  projectId: string;
+  selectedElements: SoundTarget[];
   settings: BackgroundMusicSettings;
 }) {
   const [soundScope, setSoundScope] = useState<"selected" | "all">("selected");
@@ -912,6 +914,7 @@ export function SoundPanel({
           onReplaceInteractionSounds={onReplaceInteractionSounds}
           onUpdateAdvanced={onUpdateAdvanced}
           onUpdateMixer={onUpdateMixer}
+          projectId={projectId}
         />
       )}
     </section>

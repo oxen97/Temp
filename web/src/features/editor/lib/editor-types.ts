@@ -7,6 +7,7 @@ import {
   type ShapeType,
 } from "@/features/editor/store/editor-store";
 import type { Object3DElement } from "@/features/editor/three/types";
+import type { SpatialTransform3D } from "@/features/editor/three/types";
 
 export type ToolDefinition = {
   id: EditorTool;
@@ -190,6 +191,7 @@ export type Gesture =
       fixedRects: ElementRect[];
       initialElements: CanvasElement[];
       initialObjects3D: Object3DElement[];
+      initialObjectBounds: Record<string, ElementRect>;
       previewTargets: MovePreviewTargets;
       selectionBounds: ElementRect | null;
       selectionIds: string[];
@@ -225,6 +227,10 @@ export type Gesture =
       initialElements: CanvasElement[];
       initialObjects3D: Object3DElement[];
       initialObjectBounds: Record<string, ElementRect>;
+      appliedObjects3D: Record<
+        string,
+        { bounds: ElementRect; transform: SpatialTransform3D }
+      >;
       lastSample?: DragPointerSample;
       previewTargets: MultiResizePreviewTargets;
       scale: number;

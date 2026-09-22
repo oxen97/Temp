@@ -1,12 +1,21 @@
-import { Box3, BoxGeometry, Mesh, OrthographicCamera, Vector3 } from "three";
+import {
+  Box3,
+  BoxGeometry,
+  Mesh,
+  OrthographicCamera,
+  PerspectiveCamera,
+  Vector3,
+} from "three";
 import { describe, expect, it } from "vitest";
 
 import {
   editorPointToWorld,
   projectObjectToScreen,
+  projectEditorMoveToScreen,
   projectWorldBoxToScreen,
   rotationDegreesToRadians,
   screenPointToNdc,
+  screenOffsetToEditorMove,
   spatialTransformToWorld,
   worldPointToEditor,
 } from "@/features/editor/three/coordinate-system";
@@ -56,6 +65,42 @@ describe("3D editor coordinate conversion", () => {
     expect(screenPointToNdc(210, 120, bounds)).toEqual({ x: 1, y: -1 });
   });
 
+  it("round-trips screen snap offsets into editor XY movement at 3D depth", () => {
+    for (const camera of [
+      createCamera(),
+      new PerspectiveCamera(50, 2, 0.1, 2000),
+    ]) {
+      if (camera instanceof PerspectiveCamera) {
+        camera.position.set(30, -10, 300);
+        camera.lookAt(0, 0, 0);
+        camera.updateProjectionMatrix();
+      }
+      const anchor = { x: 18, y: 26, z: 12 };
+      const pixelDelta = { x: 15, y: -9 };
+      const editorDelta = screenOffsetToEditorMove(
+        anchor,
+        pixelDelta,
+        camera,
+        800,
+        400,
+      );
+      expect(editorDelta).not.toBeNull();
+      const projected = projectEditorMoveToScreen(
+        anchor,
+        {
+          x: anchor.x + editorDelta!.x,
+          y: anchor.y + editorDelta!.y,
+          z: anchor.z,
+        },
+        camera,
+        800,
+        400,
+      );
+      expect(projected.x).toBeCloseTo(pixelDelta.x, 5);
+      expect(projected.y).toBeCloseTo(pixelDelta.y, 5);
+    }
+  });
+
   it("projects world boxes and objects into artboard pixel bounds", () => {
     const camera = createCamera();
     const box = new Box3(new Vector3(-50, -25, 0), new Vector3(50, 25, 0));
@@ -76,6 +121,21 @@ describe("3D editor coordinate conversion", () => {
     expect(projected?.width).toBeCloseTo(80, 5);
     expect(projected?.height).toBeCloseTo(40, 5);
     object.geometry.dispose();
+  });
+
+  it("projects through the camera's current pose before the next render", () => {
+    const camera = createCamera();
+    camera.position.set(40, -20, 100);
+    camera.lookAt(40, -20, 0);
+    // No explicit updateMatrixWorld: the editor's bounds reporter executes
+    // before Three's renderer refreshes the camera on this frame.
+    const box = new Box3(new Vector3(30, -25, 0), new Vector3(50, -15, 0));
+
+    const projected = projectWorldBoxToScreen(box, camera, 800, 400);
+    expect(projected?.x).toBeCloseTo(360, 5);
+    expect(projected?.y).toBeCloseTo(180, 5);
+    expect(projected?.width).toBeCloseTo(80, 5);
+    expect(projected?.height).toBeCloseTo(40, 5);
   });
 
   it("does not project an empty world box", () => {

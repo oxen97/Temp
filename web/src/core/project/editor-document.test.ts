@@ -111,6 +111,26 @@ describe("editor document serialization", () => {
       position: { x: 500, y: 320, z: 25 },
       primitive: "box",
     });
+    cube.interactionSoundExpanded = true;
+    cube.interactionSounds = [{
+      assets: [{
+        durationSeconds: 1.25,
+        mimeType: "audio/wav",
+        name: "cube.wav",
+        sizeBytes: 1200,
+        src: "blob:cube-sound",
+      }],
+      avoidRepeating: true,
+      enabled: true,
+      event: "click",
+      fadeInSeconds: 0,
+      fadeOutSeconds: 0.2,
+      id: "cube-sound",
+      playbackMode: "shuffle",
+      soundSource: "single",
+      trigger: "click",
+      volume: 75,
+    }];
     const document = serializeEditorDocument({
       artboard,
       assets: [

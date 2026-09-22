@@ -77,6 +77,19 @@ test("starts with one page, no layers, and nine square assets", async ({
   );
 });
 
+test("clears the Preview focus ring when Escape closes the viewer", async ({
+  page,
+}) => {
+  await waitForEditor(page);
+  const previewButton = page.getByRole("button", { name: "Preview", exact: true });
+  await previewButton.click();
+  await expect(page.getByRole("dialog", { name: "Viewer preview" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog", { name: "Viewer preview" })).toHaveCount(0);
+  await expect(previewButton).not.toBeFocused();
+  await expect(previewButton).toHaveCSS("outline-style", "none");
+});
+
 test("offers equally spaced Image, Video, and 3D asset tabs and imports glTF files", async ({
   page,
 }) => {
@@ -438,6 +451,202 @@ test("shows live selection dimensions below a drawn shape", async ({
     `W ${Math.round(rectangleBox.width / scale)} x H ${Math.round(rectangleBox.height / scale)}`,
   );
   await expect(dimensions).toHaveCSS("background-color", "rgb(43, 43, 43)");
+});
+
+test("hiding a selected shape removes its canvas selection and caption", async ({
+  page,
+}) => {
+  test.skip(
+    (page.viewportSize()?.width ?? 0) <= 960,
+    "Layer selection is desktop-only",
+  );
+  await waitForEditor(page);
+
+  const board = await page.getByLabel("Artboard").boundingBox();
+  if (!board) throw new Error("Artboard bounds are unavailable");
+  await page.getByRole("button", { name: "Rectangle", exact: true }).click();
+  await page.mouse.move(board.x + 120, board.y + 100);
+  await page.mouse.down();
+  await page.mouse.move(board.x + 240, board.y + 180);
+  await page.mouse.up();
+
+  await expect(page.getByLabel("Selection dimensions")).toBeVisible();
+  await expect(page.locator(".canvas-element.is-selected")).toHaveCount(1);
+  await page.getByRole("button", { name: "Hide Rectangle 1" }).click();
+  await expect(page.getByLabel("Selection dimensions")).toHaveCount(0);
+  await expect(page.locator(".canvas-element.is-selected")).toHaveCount(0);
+
+  await page.getByRole("button", { name: "Show Rectangle 1" }).click();
+  await expect(page.getByLabel("Selection dimensions")).toBeVisible();
+  await expect(page.locator(".canvas-element.is-selected")).toHaveCount(1);
+
+  await page.getByRole("button", { name: "Rectangle", exact: true }).click();
+  await page.mouse.move(board.x + 300, board.y + 120);
+  await page.mouse.down();
+  await page.mouse.move(board.x + 420, board.y + 200);
+  await page.mouse.up();
+  await page.getByRole("button", { name: "Selection", exact: true }).click();
+  const first = page.getByLabel("Rectangle 1", { exact: true });
+  const second = page.getByLabel("Rectangle 2", { exact: true });
+  await first.click({ position: { x: 20, y: 20 } });
+  await page.keyboard.down("Shift");
+  await second.click({ position: { x: 20, y: 20 } });
+  await page.keyboard.up("Shift");
+  await expect(page.getByLabel("Multiple selection")).toBeVisible();
+  await page.getByRole("button", { name: "Hide Rectangle 1" }).click();
+  await expect(page.getByLabel("Multiple selection")).toHaveCount(0);
+  await expect(page.getByLabel("Selection dimensions")).toHaveCount(0);
+  await expect(page.locator(".canvas-element.is-selected")).toHaveCount(0);
+});
+
+test("hiding a selected image removes its dimensions caption", async ({
+  page,
+}) => {
+  test.skip(
+    (page.viewportSize()?.width ?? 0) <= 960,
+    "Layer selection is desktop-only",
+  );
+  await waitForEditor(page);
+  await page
+    .locator(".asset-upload input")
+    .setInputFiles("public/figma/shape-picker.svg");
+  await page.getByRole("button", { name: "Add uploaded asset 1" }).click({
+    force: true,
+  });
+  await expect(page.getByLabel("Selection dimensions")).toBeVisible();
+  await page.getByRole("button", { name: "Hide Image 1" }).click();
+  await expect(page.getByLabel("Selection dimensions")).toHaveCount(0);
+  await expect(page.locator(".canvas-element.is-selected")).toHaveCount(0);
+});
+
+test("Shift-selecting layer rows shows only the selection border", async ({
+  page,
+}) => {
+  test.skip(
+    (page.viewportSize()?.width ?? 0) <= 960,
+    "Layer selection is desktop-only",
+  );
+  await page.emulateMedia({ colorScheme: "light" });
+  await waitForEditor(page);
+
+  const board = await page.getByLabel("Artboard").boundingBox();
+  if (!board) throw new Error("Artboard bounds are unavailable");
+  for (const [x, y] of [[120, 100], [300, 180]]) {
+    await page.getByRole("button", { name: "Rectangle", exact: true }).click();
+    await page.mouse.move(board.x + x, board.y + y);
+    await page.mouse.down();
+    await page.mouse.move(board.x + x + 100, board.y + y + 70);
+    await page.mouse.up();
+  }
+
+  const layers = page.getByLabel("Layers");
+  const first = layers.getByRole("option", { name: "Rectangle 1" });
+  const second = layers.getByRole("option", { name: "Rectangle 2" });
+  await first.click();
+  await second.click({ modifiers: ["Shift"] });
+  await expect(first).toHaveAttribute("aria-selected", "true");
+  await expect(second).toHaveAttribute("aria-selected", "true");
+  await expect(second).toHaveCSS("outline-style", "none");
+
+  await page.getByRole("button", { name: "Switch to dark mode" }).click();
+  await first.click({ modifiers: ["Shift"] });
+  await first.click({ modifiers: ["Shift"] });
+  await expect(first).toHaveAttribute("aria-selected", "true");
+  await expect(first).toHaveCSS("outline-style", "none");
+});
+
+test("the top layer keeps its selected border inside the scroll viewport", async ({
+  page,
+}) => {
+  test.skip(
+    (page.viewportSize()?.width ?? 0) <= 960,
+    "Layer selection is desktop-only",
+  );
+  await waitForEditor(page);
+
+  const board = await page.getByLabel("Artboard").boundingBox();
+  if (!board) throw new Error("Artboard bounds are unavailable");
+  await page.getByRole("button", { name: "Rectangle", exact: true }).click();
+  await page.mouse.move(board.x + 120, board.y + 100);
+  await page.mouse.down();
+  await page.mouse.move(board.x + 220, board.y + 170);
+  await page.mouse.up();
+
+  const first = page.getByLabel("Layers").getByRole("option", {
+    name: "Rectangle 1",
+  });
+  await first.click();
+  await expect(first).toHaveAttribute("aria-selected", "true");
+  const clearance = await first.evaluate((row) => {
+    const viewport = row.closest(".layer-list");
+    if (!viewport) throw new Error("Layer viewport is unavailable");
+    return row.getBoundingClientRect().top - viewport.getBoundingClientRect().top;
+  });
+  expect(clearance).toBeGreaterThan(0);
+});
+
+test("locked 2D layers stay out of click, marquee, and Select All", async ({
+  page,
+}) => {
+  test.skip(
+    (page.viewportSize()?.width ?? 0) <= 960,
+    "Layer selection is desktop-only",
+  );
+  await waitForEditor(page);
+
+  const board = await page.getByLabel("Artboard").boundingBox();
+  if (!board) throw new Error("Artboard bounds are unavailable");
+  const drawRectangle = async (left: number) => {
+    await page.getByRole("button", { name: "Rectangle", exact: true }).click();
+    await page.mouse.move(board.x + left, board.y + 120);
+    await page.mouse.down();
+    await page.mouse.move(board.x + left + 80, board.y + 180, { steps: 3 });
+    await page.mouse.up();
+  };
+  await drawRectangle(120);
+  await drawRectangle(300);
+
+  const layers = page.getByLabel("Layers");
+  const lockedRow = layers.getByRole("option").filter({ hasText: "Rectangle 1" });
+  const unlockedRow = layers.getByRole("option").filter({ hasText: "Rectangle 2" });
+  await page.getByRole("button", { name: "Lock Rectangle 1" }).click();
+  await page.getByRole("button", { name: "Selection", exact: true }).click();
+
+  await page.mouse.click(board.x + 150, board.y + 150);
+  await expect(lockedRow).toHaveAttribute("aria-selected", "false");
+
+  await page.mouse.move(board.x + 90, board.y + 90);
+  await page.mouse.down();
+  await page.mouse.move(board.x + 410, board.y + 220, { steps: 4 });
+  await page.mouse.up();
+  await expect(lockedRow).toHaveAttribute("aria-selected", "false");
+  await expect(unlockedRow).toHaveAttribute("aria-selected", "true");
+
+  await page.keyboard.press("Control+a");
+  await expect(lockedRow).toHaveAttribute("aria-selected", "false");
+  await expect(unlockedRow).toHaveAttribute("aria-selected", "true");
+
+  await page.getByRole("button", { name: "Unlock Rectangle 1" }).click();
+  await page.mouse.click(board.x + 150, board.y + 150);
+  await expect(lockedRow).toHaveAttribute("aria-selected", "true");
+
+  await page
+    .locator(".asset-upload input")
+    .setInputFiles("public/figma/shape-picker.svg");
+  await page.getByRole("button", { name: "Add uploaded asset 1" }).click({
+    force: true,
+  });
+  const image = page.getByLabel("Image 1", { exact: true });
+  const imageBox = await image.boundingBox();
+  if (!imageBox) throw new Error("Image bounds are unavailable");
+  await page.getByRole("button", { name: "Lock Image 1" }).click();
+  await page.getByRole("button", { name: "Selection", exact: true }).click();
+  await page.mouse.click(
+    imageBox.x + imageBox.width / 2,
+    imageBox.y + imageBox.height / 2,
+  );
+  const imageRow = layers.getByRole("option").filter({ hasText: "Image 1" });
+  await expect(imageRow).toHaveAttribute("aria-selected", "false");
 });
 
 test("updates the dimensions caption when selecting another shape after resize", async ({

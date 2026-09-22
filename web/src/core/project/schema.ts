@@ -71,6 +71,43 @@ const object3DSourceSchema = z.discriminatedUnion("kind", [
   }),
 ]);
 
+const interactionSoundAssetSchema = z.object({
+  artworkSrc: z.string().optional(),
+  durationSeconds: z.number().nonnegative(),
+  mimeType: z.string(),
+  name: z.string(),
+  sizeBytes: z.number().nonnegative(),
+  src: z.string(),
+});
+
+const interactionSoundSchema = z.object({
+  assets: z.array(interactionSoundAssetSchema),
+  avoidRepeating: z.boolean(),
+  enabled: z.boolean(),
+  event: z.enum([
+    "enter",
+    "while-hovering",
+    "leave",
+    "click",
+    "double-click",
+    "press-start",
+    "while-pressing",
+    "release",
+    "drag-start",
+    "while-dragging",
+    "drop",
+    "while-scrolling",
+    "reach-point",
+  ]),
+  fadeInSeconds: z.number().nonnegative(),
+  fadeOutSeconds: z.number().nonnegative(),
+  id: z.string(),
+  playbackMode: z.enum(["shuffle", "sequential"]),
+  soundSource: z.enum(["single", "multiple"]),
+  trigger: z.enum(["hover", "click", "press", "drag", "scroll"]),
+  volume: z.number().min(0).max(100),
+});
+
 export const object3DElementSchema = z.object({
   castShadow: z.boolean(),
   compositeLayer: z.enum(["behind-2d", "front-of-2d"]),
@@ -83,6 +120,8 @@ export const object3DElementSchema = z.object({
   // Malformed legacy interaction lists must not invalidate an otherwise
   // loadable scene. Entries are normalized at the editor hydration boundary.
   interactions: z.array(z.unknown()).optional().catch([]),
+  interactionSounds: z.array(interactionSoundSchema).optional().catch([]),
+  interactionSoundExpanded: z.boolean().optional(),
   locked: z.boolean(),
   material: z.object({
     color: z.string().min(1),

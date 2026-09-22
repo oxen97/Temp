@@ -69,6 +69,7 @@ import {
 import {
   soundOutputBitrate,
   soundPreloadAttribute,
+  type SoundTarget,
 } from "@/features/editor/lib/sound-settings";
 import {
   type ArtboardSettings,
@@ -658,7 +659,7 @@ export function ViewerPreview({
   }, []);
 
   const configureInteractionAudio = useCallback(
-    (audio: HTMLAudioElement, element: CanvasElement) => {
+    (audio: HTMLAudioElement, element: SoundTarget) => {
       const currentSettings = advancedSoundRef.current;
       if (!currentSettings.spatialSound && !currentSettings.autoNormalize) {
         return;
@@ -699,7 +700,9 @@ export function ViewerPreview({
         }
 
         const now = context.currentTime;
-        const centerX = element.x + element.width / 2;
+        const centerX = element.type === "object3d"
+          ? element.transform.position.x
+          : element.x + element.width / 2;
         const pan = currentSettings.spatialSound
           ? clamp((centerX / Math.max(1, artboard.width)) * 2 - 1, -1, 1)
           : 0;
@@ -810,7 +813,7 @@ export function ViewerPreview({
 
   const playInteractionEvent = useCallback(
     (
-      element: CanvasElement,
+      element: SoundTarget,
       trigger: InteractionSoundTrigger,
       interactionEvent: InteractionSoundEvent,
       continuous = false,
@@ -1547,7 +1550,7 @@ export function ViewerPreview({
       {advancedSound.preloadSounds !== "on-demand"
         ? Array.from(
             new Map(
-              elements.flatMap((element) =>
+              [...elements, ...objects3d].flatMap((element) =>
                 (element.interactionSounds ?? []).flatMap((setting) =>
                   setting.assets.map((asset) => [asset.src, asset] as const),
                 ),
@@ -1630,6 +1633,13 @@ export function ViewerPreview({
                 collisionProxies={collision3DProxies}
                 interactive
                 objects={objects3d}
+                onSoundEvent={(objectId, trigger, event, continuous) => {
+                  const object = objects3d.find((item) => item.id === objectId);
+                  if (object) playInteractionEvent(object, trigger, event, continuous);
+                }}
+                onSoundStop={(objectId, trigger) =>
+                  stopContinuousInteraction(objectId, trigger)
+                }
                 projectId={projectId}
                 scene={scene3d}
               />

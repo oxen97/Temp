@@ -1,14 +1,17 @@
 import { fireEvent, render } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { Plane, Ray, Vector3 } from "three";
+import { Group, Plane, Ray, Vector3 } from "three";
 import { describe, expect, it, vi } from "vitest";
 
 import { createDefaultInteraction } from "@/features/editor/lib/interaction-model";
+import { defaultInteractionSoundSettings } from "@/features/editor/store/editor-store";
 import { createPrimitiveObject3D } from "@/features/editor/three/types";
 
 import {
   Artboard3DScene,
+  pointerRemainsOver3DObject,
   positionOnObjectDragPlane,
+  sceneRenderViewport,
 } from "./artboard-3d-scene";
 
 vi.mock("@react-three/fiber", () => ({
@@ -28,6 +31,84 @@ vi.mock("@react-three/fiber", () => ({
 }));
 
 describe("Artboard3DScene selection", () => {
+  it("extends the editor render surface beyond the artboard but preserves preview bounds", () => {
+    expect(sceneRenderViewport(1920, 1080)).toEqual({
+      x: 0,
+      y: 0,
+      width: 1920,
+      height: 1080,
+    });
+    const editorViewport = sceneRenderViewport(1920, 1080, {
+      x: -300,
+      y: -100,
+      width: 2600,
+      height: 1400,
+    });
+    expect(editorViewport.x).toBeLessThan(-300);
+    expect(editorViewport.y).toBeLessThan(-100);
+    expect(editorViewport.x + editorViewport.width).toBeGreaterThan(2300);
+    expect(editorViewport.y + editorViewport.height).toBeGreaterThan(1300);
+  });
+
+  it("keeps hover active when the pointer crosses meshes within one 3D object", () => {
+    const object = new Group();
+    const otherObject = new Group();
+
+    expect(pointerRemainsOver3DObject(object, [{ eventObject: object }])).toBe(
+      true,
+    );
+    expect(
+      pointerRemainsOver3DObject(object, [{ eventObject: otherObject }]),
+    ).toBe(false);
+    expect(pointerRemainsOver3DObject(object, [])).toBe(false);
+  });
+
+  it("emits 3D sound events only in the interactive preview", () => {
+    const object = createPrimitiveObject3D({
+      dimensions: { depth: 100, height: 100, width: 100 },
+      id: "sound-cube",
+      name: "Sound cube",
+      position: { x: 200, y: 200, z: 0 },
+      primitive: "box",
+    });
+    object.interactionSounds = [
+      {
+        ...defaultInteractionSoundSettings,
+        assets: [
+          {
+            durationSeconds: 1,
+            mimeType: "audio/wav",
+            name: "cube.wav",
+            sizeBytes: 128,
+            src: "blob:cube",
+          },
+        ],
+      },
+    ];
+    const onSoundEvent = vi.fn();
+    const onSoundStop = vi.fn();
+    const props = {
+      artboardHeight: 679,
+      artboardWidth: 1208,
+      objects: [object],
+      onSoundEvent,
+      onSoundStop,
+      scene: { enabled: true },
+    };
+    const { container, rerender } = render(<Artboard3DScene {...props} />);
+    const group = container.querySelector('group[name="Sound cube"]')!;
+    fireEvent.click(group);
+    expect(onSoundEvent).not.toHaveBeenCalled();
+
+    rerender(<Artboard3DScene {...props} interactive />);
+    fireEvent.click(group);
+    expect(onSoundEvent).toHaveBeenCalledWith("sound-cube", "click", "click");
+    fireEvent.pointerOver(group);
+    expect(onSoundEvent).toHaveBeenCalledWith("sound-cube", "hover", "enter");
+    fireEvent.pointerOut(group);
+    expect(onSoundStop).toHaveBeenCalledWith("sound-cube", "hover");
+  });
+
   it("maps a captured pointer ray to editor coordinates without changing depth", () => {
     const plane = new Plane().setFromNormalAndCoplanarPoint(
       new Vector3(0, 0, 1),
@@ -77,7 +158,7 @@ describe("Artboard3DScene selection", () => {
     expect(onArtboardPointerDown).not.toHaveBeenCalled();
   });
 
-  it("does not select a locked object", () => {
+  it("does not select a locked object on click", () => {
     const object = createPrimitiveObject3D({
       dimensions: { depth: 100, height: 100, width: 100 },
       id: "locked-object",

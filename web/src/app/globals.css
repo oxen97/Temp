@@ -3,11 +3,14 @@
 :root {
   --app-bg: #fefefe;
   --surface: #fefefe;
+  --surface-muted: #fbfbfb;
+  --field-surface: #ffffff;
   --canvas-bg: #fefefe;
   --canvas-fill: #d9d9d9;
   --border: #d9d9d9;
   --border-strong: #d4d4d4;
   --text: #000000;
+  --text-primary: #000000;
   --text-secondary: #8f8f8f;
   --disabled: #d9d9d9;
   --accent: #ab51f0;
@@ -111,6 +114,34 @@ input[type="number"] {
   background: var(--app-bg);
   user-select: none;
   -webkit-user-select: none;
+  color: var(--text);
+}
+
+.editor-shell[data-theme="dark"] {
+  --surface: #171924;
+  --surface-muted: #20232f;
+  --field-surface: #222532;
+  --border: #383b49;
+  --border-strong: #474b5b;
+  --text: #f2f2f7;
+  --text-primary: #f2f2f7;
+  --text-secondary: #a8acbd;
+  --disabled: #696d7d;
+  --accent-border: #995ac9;
+  color-scheme: dark;
+}
+
+/* An editor theme must never recolor authored pages or their artwork. */
+.editor-shell[data-theme="dark"] .editor-canvas {
+  --surface: #fefefe;
+  --border: #d9d9d9;
+  --border-strong: #d4d4d4;
+  --text: #000000;
+  --text-primary: #000000;
+  --text-secondary: #8f8f8f;
+  --disabled: #d9d9d9;
+  color: #000000;
+  color-scheme: light;
 }
 
 .editor-shell[data-interface-ready="false"] {
@@ -171,7 +202,41 @@ input[type="number"] {
   justify-content: flex-end;
   gap: 14px;
   min-width: 0;
-  padding-right: 0;
+  padding-right: calc(25 * var(--interface-zoom-pixel, 1px));
+}
+
+/* Only the center of the top bar stays light; the panel headers stay dark. */
+.editor-shell[data-theme="dark"] .view-controls {
+  --surface: #fefefe;
+  --surface-muted: #fbfbfb;
+  --field-surface: #ffffff;
+  --border: #d9d9d9;
+  --border-strong: #d4d4d4;
+  --text: #000000;
+  --text-primary: #000000;
+  --text-secondary: #8f8f8f;
+  --disabled: #d9d9d9;
+  background: #fefefe;
+  color: #000000;
+  color-scheme: light;
+}
+
+.theme-control {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.theme-control:hover {
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 
 .preview-control,
@@ -915,7 +980,7 @@ input[type="number"] {
 .layer-list {
   position: relative;
   top: -2px;
-  padding: 0 13px 0 11px;
+  padding: 1px 13px 0 11px;
 }
 
 .layer-list-content {
@@ -935,15 +1000,18 @@ input[type="number"] {
   cursor: pointer;
 }
 
-.layer-row[aria-selected="true"] {
-  height: 27px;
-  margin-bottom: -2px;
-  border: 1px solid var(--accent-border);
-  background: var(--accent-soft);
+.layer-row:focus {
+  outline: none;
 }
 
-.layer-row[aria-selected="true"] .layer-symbol {
-  transform: translateY(-1px);
+.layer-row:focus-visible:not([aria-selected="true"]) {
+  outline: 1px solid var(--accent-border);
+  outline-offset: 1px;
+}
+
+.layer-row[aria-selected="true"] {
+  background: var(--accent-soft);
+  box-shadow: 0 0 0 1px var(--accent-border);
 }
 
 .layer-row[aria-disabled="true"] {
@@ -1034,6 +1102,28 @@ input[type="number"] {
   background: #8f8f8f;
   -webkit-mask: var(--figma-pen) center / contain no-repeat;
   mask: var(--figma-pen) center / contain no-repeat;
+}
+
+.editor-shell[data-theme="dark"] .shape-picker {
+  background-image: var(--figma-shape-picker-dark);
+  background-color: var(--surface);
+}
+
+.editor-shell[data-theme="dark"] .shape-picker-pen {
+  background-color: var(--text-secondary);
+}
+
+.editor-shell[data-theme="dark"] .pen-icon {
+  background: #ffffff;
+}
+
+.editor-shell[data-theme="dark"] .layer-symbol.symbol-line line {
+  stroke: #ffffff;
+}
+
+.editor-shell[data-theme="dark"] .layer-symbol.symbol-star polygon,
+.editor-shell[data-theme="dark"] .layer-symbol.symbol-triangle polygon {
+  fill: #ffffff;
 }
 
 .layer-symbol.symbol-image {
@@ -1238,6 +1328,22 @@ input[type="number"] {
 .asset-grid .uploaded-asset {
   background-position: center;
   background-size: cover;
+}
+
+.asset-grid .uploaded-asset--video {
+  display: block;
+  overflow: hidden;
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: 2px;
+  background: var(--canvas-fill);
+}
+
+.asset-grid .uploaded-asset--video video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .asset-grid .uploaded-asset--model {
@@ -1670,6 +1776,11 @@ input[type="number"] {
 
 .canvas-element.is-locked {
   cursor: default;
+}
+
+.canvas-element.is-locked,
+.canvas-element.is-locked * {
+  pointer-events: none !important;
 }
 
 .canvas-element.is-pathfinder {
@@ -2351,7 +2462,7 @@ input[type="number"] {
 .scene-solid-title,
 .scene-gradient-title,
 .scene-image-title {
-  color: #000000;
+  color: var(--text);
   font-family: inherit;
   font-size: 10px;
   font-style: normal;
@@ -2432,7 +2543,7 @@ input[type="number"] {
   right: 10px;
   width: 0;
   height: 0;
-  border-top: 5px solid #000000;
+  border-top: 5px solid var(--text);
   border-right: 3px solid transparent;
   border-left: 3px solid transparent;
   content: "";
@@ -3031,7 +3142,7 @@ input[type="number"] {
   min-height: 0;
   overflow-x: hidden;
   overflow-y: auto;
-  color: #000000;
+  color: var(--text);
   font-family: inherit;
 }
 
@@ -3065,7 +3176,7 @@ input[type="number"] {
   border: 1px solid var(--border);
   border-radius: 2px;
   background: transparent;
-  color: #000000;
+  color: var(--text);
   font-size: 10px;
   font-weight: 500;
   line-height: 12px;
@@ -3248,7 +3359,7 @@ input[type="number"] {
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: 2px;
-  background: #ffffff;
+  background: var(--field-surface);
   box-shadow: 0 3px 10px rgb(0 0 0 / 10%);
 }
 
@@ -3257,7 +3368,7 @@ input[type="number"] {
   height: 22px;
   padding: 0 6px;
   border: 0;
-  background: #ffffff;
+  background: var(--field-surface);
   color: var(--text);
   font-size: 8px;
   font-weight: 500;
@@ -3274,7 +3385,7 @@ input[type="number"] {
 }
 
 .sound-file-menu button:disabled {
-  background: #ffffff;
+  background: var(--field-surface);
   color: var(--text-secondary);
   cursor: default;
   opacity: 0.55;
@@ -3398,7 +3509,7 @@ input[type="number"] {
   border: 0;
   outline: 0;
   background: transparent;
-  color: #000000;
+  color: var(--text);
   font-size: 8px;
   font-weight: 600;
   line-height: 10px;
@@ -3458,6 +3569,10 @@ input[type="number"] {
 
 .sound-stepper-buttons button img {
   pointer-events: none;
+}
+
+.editor-shell[data-theme="dark"] .sound-stepper-buttons button img {
+  filter: brightness(0) invert(1);
 }
 
 .sound-stepper-buttons button:first-of-type {
@@ -3954,7 +4069,7 @@ input[type="number"] {
   border: 1px solid var(--border);
   border-radius: 1px;
   color: transparent;
-  background: #ffffff;
+  background: var(--field-surface);
 }
 
 .sound-all-checkbox input:checked + span {
@@ -4138,7 +4253,7 @@ input[type="number"] {
   align-items: center;
   grid-template-columns: minmax(0, 1fr) 47px;
   gap: 3px;
-  background: #ffffff;
+  background: var(--field-surface);
 }
 
 .sound-all-bulk-volume .sound-percent-field {
@@ -4281,7 +4396,7 @@ input[type="number"] {
   height: 22px;
   padding-left: 25px;
   align-items: center;
-  color: #000000;
+  color: var(--text);
   font-size: 10px;
   font-weight: 500;
   line-height: 12px;
@@ -4509,7 +4624,7 @@ input[type="number"] {
   gap: 6px;
   border: 0;
   background: transparent;
-  color: #000000;
+  color: var(--text);
   font-size: 8px;
   font-weight: 500;
   line-height: 10px;
@@ -4998,7 +5113,7 @@ input[type="number"] {
   align-items: center;
   border: 1px solid var(--border);
   border-radius: 2px;
-  background: #ffffff;
+  background: var(--field-surface);
   color: var(--text);
   font-size: 8px;
   font-weight: 500;
@@ -5165,7 +5280,7 @@ input[type="number"] {
   align-items: center;
   border: 1px solid var(--border);
   border-radius: 2px;
-  background: #ffffff;
+  background: var(--field-surface);
   color: var(--text);
   font-size: 8px;
   font-weight: 500;
@@ -5204,7 +5319,7 @@ input[type="number"] {
   align-items: center;
   border: 1px solid var(--border);
   border-radius: 2px;
-  background: #ffffff;
+  background: var(--field-surface);
   color: var(--text);
 }
 
@@ -5292,7 +5407,7 @@ input[type="number"] {
   overflow-y: auto;
   border: 1px solid var(--border);
   border-radius: 0 0 2px 2px;
-  background: #ffffff;
+  background: var(--field-surface);
   color: var(--text);
   pointer-events: auto;
 }
@@ -5320,7 +5435,7 @@ input[type="number"] {
   align-items: center;
   padding: 0 5px;
   border: 0;
-  background: #ffffff;
+  background: var(--field-surface);
   color: inherit;
   font-size: 8px;
   font-weight: 500;
@@ -5447,7 +5562,7 @@ input[type="number"] {
   height: 22px;
   padding: 0;
   border: 1px solid var(--border);
-  background: #ffffff;
+  background: var(--field-surface);
 }
 
 .flip-controls .icon-control img {
@@ -5859,7 +5974,7 @@ input[type="number"] {
   height: 22px;
   border: 1px solid var(--border);
   border-radius: 2px;
-  background: #ffffff;
+  background: var(--field-surface);
 }
 
 .color-field input[type="color"] {
@@ -6456,7 +6571,7 @@ input[type="number"] {
   padding-bottom: 24px;
   overflow-x: hidden;
   overflow-y: auto;
-  color: #000000;
+  color: var(--text);
   font-family: inherit;
 }
 
@@ -6513,7 +6628,7 @@ input[type="number"] {
   padding: 0 9px;
   align-items: center;
   justify-content: space-between;
-  background: #fbfbfb;
+  background: var(--surface-muted);
   font-size: 9.5px;
   font-weight: 600;
 }
@@ -6544,7 +6659,7 @@ input[type="number"] {
 }
 
 .interaction-row.is-disabled {
-  background: #fbfbfb;
+  background: var(--surface-muted);
 }
 
 .interaction-row.is-disabled .interaction-row-name,
@@ -6834,7 +6949,7 @@ input[type="number"] {
   border: 1px solid var(--border);
   border-radius: 2px;
   outline: none;
-  background: #ffffff;
+  background: var(--field-surface);
   color: var(--text-primary);
   font: inherit;
   font-size: 10px;
@@ -6851,7 +6966,7 @@ input[type="number"] {
   padding: 3px 6px;
   border: 1px solid var(--border);
   border-radius: 2px;
-  background: #ffffff;
+  background: var(--field-surface);
   cursor: pointer;
 }
 
@@ -6908,7 +7023,7 @@ input[type="number"] {
   gap: 8px;
   border: 1px solid var(--border);
   border-radius: 2px;
-  background: #ffffff;
+  background: var(--field-surface);
   font-size: 9.5px;
 }
 
@@ -6964,7 +7079,7 @@ input[type="number"] {
   padding: 0 8px;
   border: 1px solid var(--border);
   border-radius: 2px;
-  background: #ffffff;
+  background: var(--field-surface);
   font-size: 9px;
   font-weight: 500;
   cursor: pointer;
@@ -6976,7 +7091,7 @@ input[type="number"] {
   padding: 0 7px;
   border: 1px solid var(--border);
   border-radius: 2px;
-  background: #ffffff;
+  background: var(--field-surface);
   color: var(--text-primary);
   font-size: 9px;
   font-weight: 500;

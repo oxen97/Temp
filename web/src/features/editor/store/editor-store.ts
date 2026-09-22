@@ -516,6 +516,85 @@ function updateActivePageObjects3D(
   );
 }
 
+function toggleLayerProperty(
+  state: EditorState,
+  targetId: string,
+  property: "locked" | "visible",
+) {
+  const page = state.pages.find((item) => item.id === state.activePageId);
+  const target =
+    page?.elements.find((element) => element.id === targetId) ??
+    page?.objects3d?.find((object) => object.id === targetId);
+  if (!target) return state;
+
+  const selectedIds = [
+    ...state.selectedElementIds,
+    ...state.selectedObject3DIds,
+  ];
+  const affectedIds = new Set(
+    selectedIds.length > 1 && selectedIds.includes(targetId)
+      ? selectedIds
+      : [targetId],
+  );
+  const nextValue = !target[property];
+
+  return {
+    pages: state.pages.map((item) =>
+      item.id === state.activePageId
+        ? {
+            ...item,
+            elements: item.elements.map((element) =>
+              affectedIds.has(element.id)
+                ? { ...element, [property]: nextValue }
+                : element,
+            ),
+            ...(item.objects3d
+              ? {
+                  objects3d: item.objects3d.map((object) =>
+                    affectedIds.has(object.id)
+                      ? { ...object, [property]: nextValue }
+                      : object,
+                  ),
+                }
+              : {}),
+          }
+        : item,
+    ),
+    ...(property === "locked" && nextValue
+      ? {
+          selectedElementIds: state.selectedElementIds.filter(
+            (id) => !affectedIds.has(id),
+          ),
+          selectedObject3DIds: state.selectedObject3DIds.filter(
+            (id) => !affectedIds.has(id),
+          ),
+        }
+      : {}),
+    past: pushHistory(state),
+    future: [],
+  };
+}
+
+function unlockedSelection(
+  state: EditorState,
+  elementIds: string[],
+  object3DIds: string[],
+) {
+  const page = state.pages.find((item) => item.id === state.activePageId);
+  const unlockedElements = new Set(
+    page?.elements.filter((element) => !element.locked).map((element) => element.id),
+  );
+  const unlockedObjects3D = new Set(
+    page?.objects3d
+      ?.filter((object) => !object.locked)
+      .map((object) => object.id),
+  );
+  return {
+    selectedElementIds: elementIds.filter((id) => unlockedElements.has(id)),
+    selectedObject3DIds: object3DIds.filter((id) => unlockedObjects3D.has(id)),
+  };
+}
+
 function applyObject3DUpdates(
   object: Object3DElement,
   updates: Partial<Object3DElement>,
@@ -552,11 +631,13 @@ export const useEditorStore = create<EditorState>((set) => ({
   setActivePageId: (activePageId) =>
     set({ activePageId, selectedElementIds: [], selectedObject3DIds: [] }),
   setSelectedElementIds: (selectedElementIds) =>
-    set({ selectedElementIds, selectedObject3DIds: [] }),
+    set((state) => unlockedSelection(state, selectedElementIds, [])),
   setSelectedObject3DIds: (selectedObject3DIds) =>
-    set({ selectedElementIds: [], selectedObject3DIds }),
+    set((state) => unlockedSelection(state, [], selectedObject3DIds)),
   setSelectedItems: (selectedElementIds, selectedObject3DIds) =>
-    set({ selectedElementIds, selectedObject3DIds }),
+    set((state) =>
+      unlockedSelection(state, selectedElementIds, selectedObject3DIds),
+    ),
   setZoom: (zoom) => set({ zoom: Math.min(500, Math.max(5, zoom)) }),
   updateArtboard: (updates) =>
     set((state) => {
@@ -927,53 +1008,9 @@ export const useEditorStore = create<EditorState>((set) => ({
       };
     }),
   toggleElementLocked: (elementId) =>
-    set((state) => {
-      const page = state.pages.find((item) => item.id === state.activePageId);
-      const target = page?.elements.find((element) => element.id === elementId);
-      if (!target) return state;
-
-      const elementIds =
-        state.selectedElementIds.length > 1 &&
-        state.selectedElementIds.includes(elementId)
-          ? state.selectedElementIds
-          : [elementId];
-
-      return {
-        pages: updateActivePage(state, (elements) =>
-          elements.map((element) =>
-            elementIds.includes(element.id)
-              ? { ...element, locked: !target.locked }
-              : element,
-          ),
-        ),
-        past: pushHistory(state),
-        future: [],
-      };
-    }),
+    set((state) => toggleLayerProperty(state, elementId, "locked")),
   toggleElementVisible: (elementId) =>
-    set((state) => {
-      const page = state.pages.find((item) => item.id === state.activePageId);
-      const target = page?.elements.find((element) => element.id === elementId);
-      if (!target) return state;
-
-      const elementIds =
-        state.selectedElementIds.length > 1 &&
-        state.selectedElementIds.includes(elementId)
-          ? state.selectedElementIds
-          : [elementId];
-
-      return {
-        pages: updateActivePage(state, (elements) =>
-          elements.map((element) =>
-            elementIds.includes(element.id)
-              ? { ...element, visible: !target.visible }
-              : element,
-          ),
-        ),
-        past: pushHistory(state),
-        future: [],
-      };
-    }),
+    set((state) => toggleLayerProperty(state, elementId, "visible")),
   copySelected: () =>
     set((state) => {
       const page = state.pages.find((item) => item.id === state.activePageId);

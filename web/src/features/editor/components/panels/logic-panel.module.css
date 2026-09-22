@@ -371,6 +371,55 @@
   line-height: 1.5;
 }
 
+:global(.editor-shell[data-theme="dark"]) .scopeCard {
+  border-color: color-mix(in srgb, var(--accent) 25%, var(--surface));
+  background: color-mix(in srgb, var(--accent) 5%, var(--surface));
+}
+
+:global(.editor-shell[data-theme="dark"]) .iconButton:hover:not(:disabled) {
+  background: var(--accent-soft);
+}
+
+:global(.editor-shell[data-theme="dark"]) .optional,
+:global(.editor-shell[data-theme="dark"]) .connector,
+:global(.editor-shell[data-theme="dark"]) .field select:disabled,
+:global(.editor-shell[data-theme="dark"]) .field input:disabled {
+  background: var(--surface-muted);
+}
+
+:global(.editor-shell[data-theme="dark"]) .field > span {
+  color: var(--text);
+}
+
+:global(.editor-shell[data-theme="dark"]) .field input::placeholder,
+:global(.editor-shell[data-theme="dark"]) .subsectionHeading small,
+:global(.editor-shell[data-theme="dark"]) .boundaryNote span,
+:global(.editor-shell[data-theme="dark"]) .addButton,
+:global(.editor-shell[data-theme="dark"]) .addRuleButton {
+  color: var(--text-secondary);
+}
+
+:global(.editor-shell[data-theme="dark"]) .conditionCard,
+:global(.editor-shell[data-theme="dark"]) .variableAction {
+  border-color: var(--border);
+  background: var(--surface-muted);
+}
+
+:global(.editor-shell[data-theme="dark"]) .addButton:hover,
+:global(.editor-shell[data-theme="dark"]) .addRuleButton:hover,
+:global(.editor-shell[data-theme="dark"]) .boundaryNote {
+  background: color-mix(in srgb, var(--accent) 4%, var(--surface));
+}
+
+:global(.editor-shell[data-theme="dark"]) .addButton:hover,
+:global(.editor-shell[data-theme="dark"]) .addRuleButton:hover {
+  color: var(--accent);
+}
+
+:global(.editor-shell[data-theme="dark"]) .subsectionHeading {
+  border-color: var(--border);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .panel * {
     scroll-behavior: auto;

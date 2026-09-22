@@ -113,6 +113,22 @@ test.describe("150% interface scale and 100% canvas zoom at 4K Windows 125%", ()
     );
   });
 
+  test("aligns Redo with the inner edge of the canvas panel clearance", async ({
+    page,
+  }) => {
+    const rightInset = async () => {
+      const canvas = await page.getByLabel("Exhibition canvas").boundingBox();
+      const redo = await page.getByRole("button", { name: "Redo" }).boundingBox();
+      if (!canvas || !redo) throw new Error("Top bar geometry is unavailable");
+      return canvas.x + canvas.width - redo.x - redo.width;
+    };
+
+    expect(await rightInset()).toBeCloseTo(25, 1);
+    await page.locator(".zoom-menu").click();
+    await page.getByRole("menuitemradio", { name: "100%" }).click();
+    expect(await rightInset()).toBeCloseTo(25, 1);
+  });
+
   test("uses the same self-hosted Inter weights across every editor surface and property tab", async ({
     page,
   }) => {

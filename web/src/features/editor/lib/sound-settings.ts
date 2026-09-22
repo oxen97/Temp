@@ -9,6 +9,9 @@ import {
   type SoundOutputQuality,
   type SoundPreloadMode,
 } from "@/features/editor/store/editor-store";
+import type { Object3DElement } from "@/features/editor/three/types";
+
+export type SoundTarget = CanvasElement | Object3DElement;
 
 export const backgroundMusicStartOptions = [
   { label: "On Page Enter", value: "on-page-enter" },
@@ -132,7 +135,7 @@ export function normalizedInteractionSound(
   };
 }
 
-export function supportsInteractionSounds(element: CanvasElement) {
+export function supportsInteractionSounds(element: SoundTarget) {
   return [
     "rectangle",
     "circle",
@@ -141,5 +144,6 @@ export function supportsInteractionSounds(element: CanvasElement) {
     "line",
     "pen",
     "image",
+    "object3d",
   ].includes(element.type);
 }

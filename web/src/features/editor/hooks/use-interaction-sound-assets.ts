@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useRef } from "react";
 
-import { normalizedInteractionSound } from "@/features/editor/lib/sound-settings";
+import {
+  normalizedInteractionSound,
+  type SoundTarget,
+} from "@/features/editor/lib/sound-settings";
 import {
   type BackgroundMusicAsset,
   defaultInteractionSoundSettings,
@@ -16,9 +19,34 @@ export function useInteractionSoundAssets() {
     past,
     setBackgroundMusicArtwork,
     updateElement,
+    updateObject3D,
   } = useEditorStore();
   const backgroundMusicObjectUrlsRef = useRef(new Set<string>());
   const editorMountedRef = useRef(true);
+
+  const findSoundTarget = useCallback((id: string): SoundTarget | undefined => {
+    for (const page of useEditorStore.getState().pages) {
+      const target =
+        page.elements.find((element) => element.id === id) ??
+        page.objects3d?.find((object) => object.id === id);
+      if (target) return target;
+    }
+  }, []);
+
+  const updateSoundTarget = useCallback(
+    (
+      id: string,
+      updates: Pick<
+        SoundTarget,
+        "interactionSounds" | "interactionSoundExpanded"
+      >,
+    ) => {
+      const target = findSoundTarget(id);
+      if (target?.type === "object3d") updateObject3D(id, updates);
+      else if (target) updateElement(id, updates);
+    },
+    [findSoundTarget, updateElement, updateObject3D],
+  );
 
   const createBackgroundMusicObjectUrl = useCallback((file: Blob) => {
     const source = URL.createObjectURL(file);
@@ -28,14 +56,9 @@ export function useInteractionSoundAssets() {
 
   const updateInteractionSoundForElements = useCallback(
     (elementIds: string[], settings: InteractionSoundSettings) => {
-      const currentElements = useEditorStore
-        .getState()
-        .pages.flatMap((page) => page.elements);
       elementIds.forEach((elementId) => {
-        const existingSettings = currentElements.find(
-          (element) => element.id === elementId,
-        )?.interactionSounds;
-        updateElement(elementId, {
+        const existingSettings = findSoundTarget(elementId)?.interactionSounds;
+        updateSoundTarget(elementId, {
           interactionSounds: [
             {
               ...settings,
@@ -49,21 +72,18 @@ export function useInteractionSoundAssets() {
         });
       });
     },
-    [updateElement],
+    [findSoundTarget, updateSoundTarget],
   );
 
   const appendInteractionSoundAssetsForElements = useCallback(
     (elementIds: string[], assets: BackgroundMusicAsset[]) => {
       elementIds.forEach((elementId) => {
-        const currentElement = useEditorStore
-          .getState()
-          .pages.flatMap((page) => page.elements)
-          .find((element) => element.id === elementId);
+        const currentElement = findSoundTarget(elementId);
         const existingSettings = currentElement?.interactionSounds;
         const primarySettings = normalizedInteractionSound(
           existingSettings?.[0],
         );
-        updateElement(elementId, {
+        updateSoundTarget(elementId, {
           interactionSounds: [
             {
               ...primarySettings,
@@ -81,21 +101,18 @@ export function useInteractionSoundAssets() {
         });
       });
     },
-    [updateElement],
+    [findSoundTarget, updateSoundTarget],
   );
 
   const applyCommonInteractionSoundAssetForElements = useCallback(
     (elementIds: string[], asset: BackgroundMusicAsset) => {
       elementIds.forEach((elementId) => {
-        const currentElement = useEditorStore
-          .getState()
-          .pages.flatMap((page) => page.elements)
-          .find((element) => element.id === elementId);
+        const currentElement = findSoundTarget(elementId);
         const existingSettings = currentElement?.interactionSounds;
         const primarySettings = normalizedInteractionSound(
           existingSettings?.[0],
         );
-        updateElement(elementId, {
+        updateSoundTarget(elementId, {
           interactionSounds: [
             {
               ...primarySettings,
@@ -119,18 +136,15 @@ export function useInteractionSoundAssets() {
         });
       });
     },
-    [updateElement],
+    [findSoundTarget, updateSoundTarget],
   );
 
   const clearInteractionSoundAssetsForElements = useCallback(
     (elementIds: string[]) => {
       elementIds.forEach((elementId) => {
-        const currentElement = useEditorStore
-          .getState()
-          .pages.flatMap((page) => page.elements)
-          .find((element) => element.id === elementId);
+        const currentElement = findSoundTarget(elementId);
         const existingSettings = currentElement?.interactionSounds;
-        updateElement(elementId, {
+        updateSoundTarget(elementId, {
           interactionSounds: (existingSettings?.length
             ? existingSettings
             : [defaultInteractionSoundSettings]
@@ -141,17 +155,14 @@ export function useInteractionSoundAssets() {
         });
       });
     },
-    [updateElement],
+    [findSoundTarget, updateSoundTarget],
   );
 
   const deleteInteractionSoundAsset = useCallback(
     (elementId: string, settingIndex: number, assetIndex: number) => {
-      const currentElement = useEditorStore
-        .getState()
-        .pages.flatMap((page) => page.elements)
-        .find((element) => element.id === elementId);
+      const currentElement = findSoundTarget(elementId);
       if (!currentElement?.interactionSounds?.[settingIndex]) return;
-      updateElement(elementId, {
+      updateSoundTarget(elementId, {
         interactionSounds: currentElement.interactionSounds.map(
           (sound, currentSettingIndex) => ({
             ...sound,
@@ -166,28 +177,28 @@ export function useInteractionSoundAssets() {
         ),
       });
     },
-    [updateElement],
+    [findSoundTarget, updateSoundTarget],
   );
 
   const replaceInteractionSoundsForElement = useCallback(
     (elementId: string, interactionSounds: InteractionSoundSettings[]) => {
-      updateElement(elementId, {
+      updateSoundTarget(elementId, {
         interactionSounds: interactionSounds.map((sound) => ({
           ...sound,
           assets: sound.assets.map((asset) => ({ ...asset })),
         })),
       });
     },
-    [updateElement],
+    [updateSoundTarget],
   );
 
   const updateInteractionExpandedForElements = useCallback(
     (elementIds: string[], interactionSoundExpanded: boolean) => {
       elementIds.forEach((elementId) =>
-        updateElement(elementId, { interactionSoundExpanded }),
+        updateSoundTarget(elementId, { interactionSoundExpanded }),
       );
     },
-    [updateElement],
+    [updateSoundTarget],
   );
 
   const attachBackgroundMusicArtwork = useCallback(
@@ -227,6 +238,13 @@ export function useInteractionSoundAssets() {
         }
         page.elements.forEach((element) => {
           element.interactionSounds?.forEach((sound) => {
+            sound.assets.forEach((soundAsset) =>
+              referencedSources.add(soundAsset.src),
+            );
+          });
+        });
+        page.objects3d?.forEach((object) => {
+          object.interactionSounds?.forEach((sound) => {
             sound.assets.forEach((soundAsset) =>
               referencedSources.add(soundAsset.src),
             );

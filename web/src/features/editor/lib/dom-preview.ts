@@ -51,7 +51,7 @@ export function collectMovePreviewTargets(
     ].filter((node) => selectedIds.has(node.dataset.elementId ?? "")),
     overlays: [
       ...artboardNode.querySelectorAll<HTMLElement>(
-        ".group-selection-outline, .selection-dimensions",
+        ".group-selection-outline, .object-3d-selection, .selection-dimensions",
       ),
     ],
   };
@@ -73,7 +73,7 @@ export function previewElementMove(targets: MovePreviewTargets, delta: Point) {
     targets.overlays = artboardNode
       ? [
           ...artboardNode.querySelectorAll<HTMLElement>(
-            ".group-selection-outline, .selection-dimensions",
+            ".group-selection-outline, .object-3d-selection, .selection-dimensions",
           ),
         ]
       : [];

@@ -1,4 +1,5 @@
 import type { InteractionDefinition } from "@/features/editor/lib/interaction-model";
+import type { InteractionSoundSettings } from "@/features/editor/store/editor-store";
 import type { VectorPath } from "@/features/editor/lib/vector-types";
 
 export type Vector3Value = {
@@ -102,6 +103,8 @@ export type Object3DElement = {
   dimensions: Object3DDimensions;
   id: string;
   interactions?: InteractionDefinition[];
+  interactionSounds?: InteractionSoundSettings[];
+  interactionSoundExpanded?: boolean;
   locked: boolean;
   material: Material3DSettings;
   name: string;
