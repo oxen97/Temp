@@ -37,7 +37,10 @@ import {
 } from "react";
 
 import { ArtboardBackground } from "@/features/editor/components/canvas/artboard-background";
-import { Artboard3DScene } from "@/features/editor/components/canvas/artboard-3d-scene";
+import {
+  Artboard3DScene,
+  type Object3DGestureApi,
+} from "@/features/editor/components/canvas/artboard-3d-scene";
 import { DrawDraftPreview } from "@/features/editor/components/canvas/draw-draft";
 import { PenEditControls } from "@/features/editor/components/canvas/pen-edit-controls";
 import { SelectionOutlineSvg } from "@/features/editor/components/canvas/selection-outline-svg";
@@ -181,7 +184,10 @@ import {
   LOCAL_PROJECT_ID,
 } from "@/features/editor/three/model-assets";
 import { createAssetObject3D } from "@/features/editor/three/object-factory";
-import type { ProjectedBounds } from "@/features/editor/three/coordinate-system";
+import {
+  spatialTransformToWorld,
+  type ProjectedBounds,
+} from "@/features/editor/three/coordinate-system";
 import {
   resizeObject3DFromScreen,
   resizeObject3DWithinSelection,
@@ -191,6 +197,7 @@ import {
   resolveScene3DSettings,
   type Model3DAssetMetadata,
   type Object3DElement,
+  type SpatialTransform3D,
 } from "@/features/editor/three/types";
 import { assetPath } from "@/lib/asset-path";
 
@@ -792,6 +799,21 @@ export function EditorShell({
   const [projected3DBounds, setProjected3DBounds] = useState<
     Record<string, ProjectedBounds>
   >({});
+  // A live single-object 3D drag/resize updates the mesh (object3DBridgeRef)
+  // and the selection overlay (selection3DRef) imperatively — no per-move
+  // setState, so the editor doesn't re-render on every pointer sample (which
+  // is what made the mesh trail the cursor). manipulatingObject3DRef silences
+  // BoundsReporter meanwhile; the final transform is committed to the store
+  // once, on gesture end.
+  const manipulatingObject3DRef = useRef(false);
+  const object3DBridgeRef = useRef<Object3DGestureApi | null>(null);
+  const selection3DRef = useRef<HTMLDivElement | null>(null);
+  const selectionCaptionRef = useRef<HTMLOutputElement | null>(null);
+  const gesture3DLiveRef = useRef<{
+    id: string;
+    transform: SpatialTransform3D;
+    bounds: ProjectedBounds;
+  } | null>(null);
   const [guideClipboard, setGuideClipboard] = useState<EditorGuide[]>([]);
   const [artboardSelected, setArtboardSelected] = useState(false);
   const [editingTextId, setEditingTextId] = useState<string | null>(null);
@@ -808,8 +830,12 @@ export function EditorShell({
     activeObjectId: string;
     activeStart: { x: number; y: number };
     elementIds: string[];
+    // Single 3D object, no co-selected 2D elements: take the imperative fast
+    // path (no per-move store write). Otherwise fall back to the store path.
+    fastPath: boolean;
     lastDelta: { x: number; y: number };
     objects: Object3DElement[];
+    startBounds: ProjectedBounds | null;
   } | null>(null);
   const rawDragActiveRef = useRef(false);
   const pending3DResizeRef = useRef<{
@@ -955,10 +981,57 @@ export function EditorShell({
   );
   const selected3DObject =
     selectedObjects3D.length === 1 ? selectedObjects3D[0] : null;
-  const selected3DBounds =
-    selected3DObject?.visible
-      ? projected3DBounds[selected3DObject.id] ?? null
-      : null;
+  const selected3DBounds = selected3DObject?.visible
+    ? (projected3DBounds[selected3DObject.id] ?? null)
+    : null;
+  // Imperative gesture helpers: move/resize the mesh + overlay each pointer
+  // sample without a React re-render, then commit once when the gesture ends.
+  const applyObject3DGesture = useCallback(
+    (
+      id: string,
+      transform: SpatialTransform3D,
+      bounds: ProjectedBounds,
+      dimensions: Object3DElement["dimensions"],
+    ) => {
+      gesture3DLiveRef.current = { bounds, id, transform };
+      object3DBridgeRef.current?.apply(id, spatialTransformToWorld(transform));
+      const node = selection3DRef.current;
+      if (node) {
+        node.style.left = `${bounds.x}px`;
+        node.style.top = `${bounds.y}px`;
+        node.style.width = `${bounds.width}px`;
+        node.style.height = `${bounds.height}px`;
+      }
+      // The dimensions caption is part of the (now not re-rendering) editor
+      // tree, so track it imperatively too: x/y/z extent + follow the box.
+      const caption = selectionCaptionRef.current;
+      if (caption) {
+        caption.textContent = `W ${Math.round(dimensions.width * transform.scale.x)} x H ${Math.round(dimensions.height * transform.scale.y)} x D ${Math.round(dimensions.depth * transform.scale.z)}`;
+        const below =
+          bounds.y +
+            bounds.height +
+            selectionCaptionGap +
+            selectionCaptionHeight <=
+          artboard.height;
+        caption.classList.toggle("is-above", !below);
+        caption.style.left = `${bounds.x + bounds.width / 2}px`;
+        caption.style.top = below
+          ? `${bounds.y + bounds.height + selectionCaptionGap}px`
+          : `${bounds.y - selectionCaptionGap}px`;
+      }
+    },
+    [artboard.height, selectionCaptionGap, selectionCaptionHeight],
+  );
+  const commitObject3DGesture = useCallback(() => {
+    manipulatingObject3DRef.current = false;
+    const live = gesture3DLiveRef.current;
+    gesture3DLiveRef.current = null;
+    if (!live) return;
+    // Seed the reported bounds so the overlay doesn't snap to a stale value in
+    // the frame before BoundsReporter (now un-silenced) recomputes them.
+    setProjected3DBounds((current) => ({ ...current, [live.id]: live.bounds }));
+    updateObject3D(live.id, { transform: live.transform });
+  }, [updateObject3D]);
   const handle3DProjectedBoundsChange = useCallback(
     (objectId: string, bounds: ProjectedBounds | null) => {
       setProjected3DBounds((current) => {
@@ -2640,6 +2713,8 @@ export function EditorShell({
       scale: totalScale,
       startClient: { x: event.clientX, y: event.clientY },
     };
+    manipulatingObject3DRef.current = true;
+    gesture3DLiveRef.current = null;
     canvasRef.current?.setPointerCapture(event.pointerId);
   };
 
@@ -3044,18 +3119,35 @@ export function EditorShell({
       ) {
         return;
       }
+      const deltaX = (sample.x - gesture.startClient.x) / gesture.scale;
+      const deltaY = (sample.y - gesture.startClient.y) / gesture.scale;
+      const preserveRatio = lockRatio || sample.ctrlKey || sample.shiftKey;
       const transform = resizeObject3DFromScreen({
         artboardHeight: artboard.height,
-        deltaX: (sample.x - gesture.startClient.x) / gesture.scale,
-        deltaY: (sample.y - gesture.startClient.y) / gesture.scale,
+        deltaX,
+        deltaY,
         handle: gesture.handle,
         initial: gesture.initial,
         initialBounds: gesture.initialBounds,
-        preserveRatio: lockRatio || sample.ctrlKey || sample.shiftKey,
+        preserveRatio,
         scene: resolveScene3DSettings(activePage?.scene3d),
       });
       gestureRef.current = { ...gesture, lastSample: sample };
-      updateObject3D(gesture.initial.id, { transform });
+      // Move the mesh + overlay imperatively (no store write / re-render). The
+      // overlay tracks the corner being dragged — the same rectangle the
+      // resize solves toward — so it hugs the cursor.
+      applyObject3DGesture(
+        gesture.initial.id,
+        transform,
+        resizedBoundsFromCorner(
+          gesture.initialBounds,
+          gesture.handle,
+          deltaX,
+          deltaY,
+          preserveRatio,
+        ),
+        gesture.initial.dimensions,
+      );
       return;
     }
 
@@ -3464,8 +3556,7 @@ export function EditorShell({
       const sample = dragPointerSample(rawEvent);
       if (
         gesture.kind === "resize-3d" ||
-        (gesture.kind === "multi-resize" &&
-          gesture.initialObjects3D.length > 0)
+        (gesture.kind === "multi-resize" && gesture.initialObjects3D.length > 0)
       ) {
         pending3DResize.sample = sample;
         if (pending3DResize.frame === null) {
@@ -3598,6 +3689,9 @@ export function EditorShell({
     setStableDistanceMeasurements([]);
     gestureRef.current = null;
     rawDragActiveRef.current = false;
+    // End of a 3D resize gesture: commit the imperatively-applied transform to
+    // the store (no-op when no 3D gesture was active).
+    commitObject3DGesture();
     document
       .getElementById("editor-artboard")
       ?.classList.remove("is-pan-preview");
@@ -3880,18 +3974,42 @@ export function EditorShell({
           top: selectionDimensionsBounds.y - selectionCaptionGap,
         }
     : null;
-  const selectionDimensionsValue = selectionDimensionsBounds
-    ? selectedElements.length === 1 &&
-      selectedObjects3D.length === 0 &&
-      selectedElements[0].type === "line"
+  const selectionDimensionsValue = !selectionDimensionsBounds
+    ? null
+    : selectedElements.length === 0 && selectedObjects3D.length === 1
       ? {
-          height: Math.max(1, Math.round(selectedElements[0].strokeWidth)),
-          width: Math.round(selectionDimensionsBounds.width),
+          // A single 3D object reports its own x/y/z extent (dimensions ×
+          // scale, matching the Design panel), not the projected 2D box.
+          depth: Math.round(
+            selectedObjects3D[0].dimensions.depth *
+              selectedObjects3D[0].transform.scale.z,
+          ),
+          height: Math.round(
+            selectedObjects3D[0].dimensions.height *
+              selectedObjects3D[0].transform.scale.y,
+          ),
+          width: Math.round(
+            selectedObjects3D[0].dimensions.width *
+              selectedObjects3D[0].transform.scale.x,
+          ),
         }
-      : {
-          height: Math.round(selectionDimensionsBounds.height),
-          width: Math.round(selectionDimensionsBounds.width),
-        }
+      : selectedElements.length === 1 &&
+          selectedObjects3D.length === 0 &&
+          selectedElements[0].type === "line"
+        ? {
+            depth: undefined as number | undefined,
+            height: Math.max(1, Math.round(selectedElements[0].strokeWidth)),
+            width: Math.round(selectionDimensionsBounds.width),
+          }
+        : {
+            depth: undefined as number | undefined,
+            height: Math.round(selectionDimensionsBounds.height),
+            width: Math.round(selectionDimensionsBounds.width),
+          };
+  const selectionDimensionsCaption = selectionDimensionsValue
+    ? selectionDimensionsValue.depth != null
+      ? `W ${selectionDimensionsValue.width} x H ${selectionDimensionsValue.height} x D ${selectionDimensionsValue.depth}`
+      : `W ${selectionDimensionsValue.width} x H ${selectionDimensionsValue.height}`
     : null;
   const marqueeBounds = marquee
     ? boundsFromPoints(marquee.start, marquee.current)
@@ -4414,7 +4532,11 @@ export function EditorShell({
                         }}
                         type="button"
                       >
-                        {object.locked ? <Lock size={11} /> : <Unlock size={11} />}
+                        {object.locked ? (
+                          <Lock size={11} />
+                        ) : (
+                          <Unlock size={11} />
+                        )}
                       </button>
                       <button
                         aria-label={`${object.visible ? "Hide" : "Show"} ${object.name}`}
@@ -4428,7 +4550,11 @@ export function EditorShell({
                         }}
                         type="button"
                       >
-                        {object.visible ? <Eye size={12} /> : <EyeOff size={12} />}
+                        {object.visible ? (
+                          <Eye size={12} />
+                        ) : (
+                          <EyeOff size={12} />
+                        )}
                       </button>
                     </span>
                   </div>
@@ -4764,6 +4890,8 @@ export function EditorShell({
             artboardHeight={artboard.height}
             artboardWidth={artboard.width}
             editable={selectionToolActive && !spacePressed}
+            gestureBridgeRef={object3DBridgeRef}
+            manipulatingRef={manipulatingObject3DRef}
             objects={objects3d}
             onClearSelection={() => setSelectedObject3DIds([])}
             onObjectDragStart={(objectId) => {
@@ -4776,24 +4904,33 @@ export function EditorShell({
                 (candidate) => candidate.id === objectId,
               );
               if (!active) return;
+              const elementIds = state.selectedElementIds.filter((id) =>
+                page?.elements.some(
+                  (element) => element.id === id && !element.locked,
+                ),
+              );
+              const objects = (page?.objects3d ?? []).filter(
+                (object) =>
+                  state.selectedObject3DIds.includes(object.id) &&
+                  !object.locked,
+              );
+              // Single 3D object, no co-selected 2D elements → imperative fast
+              // path (no per-move store write / re-render).
+              const fastPath = objects.length === 1 && elementIds.length === 0;
               objectDragGroupRef.current = {
                 activeObjectId: objectId,
                 activeStart: {
                   x: active.transform.position.x,
                   y: active.transform.position.y,
                 },
-                elementIds: state.selectedElementIds.filter((id) =>
-                  page?.elements.some(
-                    (element) => element.id === id && !element.locked,
-                  ),
-                ),
+                elementIds,
+                fastPath,
                 lastDelta: { x: 0, y: 0 },
-                objects: (page?.objects3d ?? []).filter(
-                  (object) =>
-                    state.selectedObject3DIds.includes(object.id) &&
-                    !object.locked,
-                ),
+                objects,
+                startBounds: projected3DBounds[objectId] ?? null,
               };
+              manipulatingObject3DRef.current = fastPath;
+              gesture3DLiveRef.current = null;
             }}
             onObjectDrag={(objectId, position) => {
               const drag = objectDragGroupRef.current;
@@ -4802,6 +4939,29 @@ export function EditorShell({
                 x: position.x - drag.activeStart.x,
                 y: position.y - drag.activeStart.y,
               };
+              if (drag.fastPath && drag.startBounds) {
+                const object = drag.objects[0];
+                applyObject3DGesture(
+                  object.id,
+                  {
+                    ...object.transform,
+                    position: {
+                      ...object.transform.position,
+                      x: object.transform.position.x + delta.x,
+                      y: object.transform.position.y + delta.y,
+                    },
+                  },
+                  {
+                    ...drag.startBounds,
+                    x: drag.startBounds.x + delta.x,
+                    y: drag.startBounds.y + delta.y,
+                  },
+                  object.dimensions,
+                );
+                drag.lastDelta = delta;
+                return;
+              }
+              // Store path (multiple objects and/or co-selected 2D elements).
               drag.objects.forEach((object) => {
                 updateObject3D(object.id, {
                   transform: {
@@ -4822,6 +4982,10 @@ export function EditorShell({
                 );
               }
               drag.lastDelta = delta;
+            }}
+            onObjectDragEnd={() => {
+              objectDragGroupRef.current = null;
+              commitObject3DGesture();
             }}
             onProjectedBoundsChange={handle3DProjectedBoundsChange}
             onSelectObject={(objectId, additive) => {
@@ -4853,6 +5017,7 @@ export function EditorShell({
             <div
               aria-label={`3D selection ${selected3DObject.name}`}
               className="object-3d-selection"
+              ref={selection3DRef}
               style={
                 {
                   height: selected3DBounds.height,
@@ -4874,24 +5039,22 @@ export function EditorShell({
                 width={selected3DBounds.width}
               />
               {!selected3DObject.locked && selectedElements.length === 0
-                ? (["nw", "ne", "se", "sw"] as ResizeHandle[]).map(
-                    (handle) => (
-                      <button
-                        aria-label={`Resize 3D ${selected3DObject.name} ${handle}`}
-                        className={`resize-handle handle-${handle}`}
-                        key={handle}
-                        onPointerDown={(event) =>
-                          handle3DResizePointerDown(
-                            event,
-                            selected3DObject,
-                            selected3DBounds,
-                            handle,
-                          )
-                        }
-                        type="button"
-                      />
-                    ),
-                  )
+                ? (["nw", "ne", "se", "sw"] as ResizeHandle[]).map((handle) => (
+                    <button
+                      aria-label={`Resize 3D ${selected3DObject.name} ${handle}`}
+                      className={`resize-handle handle-${handle}`}
+                      key={handle}
+                      onPointerDown={(event) =>
+                        handle3DResizePointerDown(
+                          event,
+                          selected3DObject,
+                          selected3DBounds,
+                          handle,
+                        )
+                      }
+                      type="button"
+                    />
+                  ))
                 : null}
             </div>
           ) : null}
@@ -5164,11 +5327,12 @@ export function EditorShell({
 
           {selectionDimensionsBounds &&
           selectionDimensionsPlacement &&
-          selectionDimensionsValue ? (
+          selectionDimensionsCaption ? (
             <output
               aria-label="Selection dimensions"
               className={`selection-dimensions ${selectionDimensionsPlacement.className}`}
               key={`selection-dimensions-${selectedElementIds.join("-")}`}
+              ref={selectionCaptionRef}
               style={{
                 left:
                   selectionDimensionsBounds.x +
@@ -5176,8 +5340,7 @@ export function EditorShell({
                 top: selectionDimensionsPlacement.top,
               }}
             >
-              W {selectionDimensionsValue.width} x H{" "}
-              {selectionDimensionsValue.height}
+              {selectionDimensionsCaption}
             </output>
           ) : null}
 
@@ -5614,7 +5777,10 @@ export function EditorShell({
           <InteractionPanel
             elements={interactionElements}
             interactionsByElement={Object.fromEntries(
-              elements.map((element) => [element.id, element.interactions ?? []]),
+              elements.map((element) => [
+                element.id,
+                element.interactions ?? [],
+              ]),
             )}
             onAddInteraction={addInteraction}
             onRemoveInteraction={removeInteraction}

@@ -33,6 +33,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type MutableRefObject,
   type ReactNode,
 } from "react";
 
@@ -69,6 +70,72 @@ import {
  * inside the Canvas so it crosses the R3F reconciler boundary to ObjectGroup.
  */
 const Interactive3DContext = createContext(false);
+
+/** Imperative controller used to move/resize a 3D object's mesh during a drag
+ *  or resize gesture without a React re-render. */
+export type Object3DGestureApi = {
+  apply: (
+    objectId: string,
+    world: {
+      position: readonly [number, number, number];
+      rotation: readonly [number, number, number];
+      scale: readonly [number, number, number];
+    },
+  ) => void;
+};
+
+/**
+ * A ref flag (not state, so toggling it never re-renders) that suppresses
+ * BoundsReporter while a gesture drives the mesh imperatively — otherwise its
+ * per-frame setState would re-render the editor and fight the imperative path.
+ */
+const NEVER_MANIPULATING: { current: boolean } = { current: false };
+const Manipulating3DContext = createContext<{ current: boolean }>(
+  NEVER_MANIPULATING,
+);
+
+/**
+ * Lives inside the Canvas and publishes an imperative handle so the editor's
+ * pointer handlers can update a mesh's transform (and request a single frame)
+ * directly, bypassing the store/React round-trip during a gesture.
+ */
+function Object3DGestureBridge({
+  bridgeRef,
+}: {
+  bridgeRef: MutableRefObject<Object3DGestureApi | null>;
+}) {
+  const { scene, invalidate } = useThree();
+  useEffect(() => {
+    const api: Object3DGestureApi = {
+      apply(objectId, world) {
+        let target: Object3D | null = null;
+        scene.traverse((child) => {
+          if (child.userData?.amousObjectId === objectId) target = child;
+        });
+        if (!target) return;
+        const group = target as Object3D;
+        group.position.set(
+          world.position[0],
+          world.position[1],
+          world.position[2],
+        );
+        group.rotation.set(
+          world.rotation[0],
+          world.rotation[1],
+          world.rotation[2],
+        );
+        group.scale.set(world.scale[0], world.scale[1], world.scale[2]);
+        group.updateMatrixWorld();
+        invalidate();
+      },
+    };
+    bridgeRef.current = api;
+    return () => {
+      if (bridgeRef.current === api) bridgeRef.current = null;
+    };
+  }, [scene, invalidate, bridgeRef]);
+  return null;
+}
 
 /**
  * R3F's default pointer `compute` maps clicks with `event.offsetX / size.width`.
@@ -196,10 +263,16 @@ type Artboard3DSceneProps = {
   editable?: boolean;
   /** When true (viewer preview), objects play their authored interactions. */
   interactive?: boolean;
+  /** Populated with an imperative controller for gesture-time mesh updates. */
+  gestureBridgeRef?: MutableRefObject<Object3DGestureApi | null>;
+  /** Ref flag; while true, BoundsReporter stays quiet (gesture drives the
+   *  mesh + overlay imperatively). */
+  manipulatingRef?: MutableRefObject<boolean>;
   objects: Object3DElement[];
   onClearSelection?: () => void;
   onLoadError?: (objectId: string, error: Error) => void;
   onObjectDrag?: (objectId: string, position: Vector3Value) => void;
+  onObjectDragEnd?: (objectId: string) => void;
   onObjectDragStart?: (objectId: string) => void;
   onProjectedBoundsChange?: (
     objectId: string,
@@ -265,22 +338,16 @@ function BoundsReporter({
 }) {
   const { camera, size } = useThree();
   const previousRef = useRef("");
-  const pendingRef = useRef<{
-    bounds: ProjectedBounds | null;
-    frame: number | null;
-  }>({ bounds: null, frame: null });
+  const manipulating = useContext(Manipulating3DContext);
 
-  useEffect(
-    () => () => {
-      if (pendingRef.current.frame !== null) {
-        cancelAnimationFrame(pendingRef.current.frame);
-      }
-    },
-    [],
-  );
-
+  // Report synchronously on the frame the projection changes. An earlier
+  // version deferred this through requestAnimationFrame, which made the DOM
+  // selection overlay trail the mesh by an extra frame — visible sloshing
+  // during fast drag/resize. The parent dedupes and batches these updates.
+  // While a gesture drives the mesh imperatively the overlay is updated
+  // straight from the pointer, so stay quiet to avoid re-render churn.
   useFrame(() => {
-    if (!onChange) return;
+    if (!onChange || manipulating.current) return;
     const bounds = projectObjectToScreen(
       object,
       camera,
@@ -292,13 +359,7 @@ function BoundsReporter({
       : "none";
     if (key !== previousRef.current) {
       previousRef.current = key;
-      pendingRef.current.bounds = bounds;
-      if (pendingRef.current.frame === null) {
-        pendingRef.current.frame = requestAnimationFrame(() => {
-          pendingRef.current.frame = null;
-          onChange(objectId, pendingRef.current.bounds);
-        });
-      }
+      onChange(objectId, bounds);
     }
   });
   return null;
@@ -328,6 +389,7 @@ function ObjectGroup({
   editable,
   object,
   onObjectDrag,
+  onObjectDragEnd,
   onObjectDragStart,
   onProjectedBoundsChange,
   onSelectObject,
@@ -336,6 +398,7 @@ function ObjectGroup({
   editable: boolean;
   object: Object3DElement;
   onObjectDrag: Artboard3DSceneProps["onObjectDrag"];
+  onObjectDragEnd: Artboard3DSceneProps["onObjectDragEnd"];
   onObjectDragStart: Artboard3DSceneProps["onObjectDragStart"];
   onProjectedBoundsChange: Artboard3DSceneProps["onProjectedBoundsChange"];
   onSelectObject: Artboard3DSceneProps["onSelectObject"];
@@ -415,11 +478,13 @@ function ObjectGroup({
     if (!drag || drag.pointerId !== event.pointerId) return;
     event.stopPropagation();
     event.nativeEvent.stopPropagation();
+    const wasDragging = drag.started;
     dragRef.current = null;
     const target = event.target as unknown as ThreePointerCaptureTarget;
     if (target.hasPointerCapture(event.pointerId)) {
       target.releasePointerCapture(event.pointerId);
     }
+    if (wasDragging) onObjectDragEnd?.(object.id);
   };
 
   const interactions =
@@ -522,6 +587,7 @@ function GeneratedObject({
   object,
   onLoadError,
   onObjectDrag,
+  onObjectDragEnd,
   onObjectDragStart,
   onProjectedBoundsChange,
   onSelectObject,
@@ -530,6 +596,7 @@ function GeneratedObject({
   object: Object3DElement;
   onLoadError: Artboard3DSceneProps["onLoadError"];
   onObjectDrag: Artboard3DSceneProps["onObjectDrag"];
+  onObjectDragEnd: Artboard3DSceneProps["onObjectDragEnd"];
   onObjectDragStart: Artboard3DSceneProps["onObjectDragStart"];
   onProjectedBoundsChange: Artboard3DSceneProps["onProjectedBoundsChange"];
   onSelectObject: Artboard3DSceneProps["onSelectObject"];
@@ -558,6 +625,7 @@ function GeneratedObject({
       editable={editable}
       object={object}
       onObjectDrag={onObjectDrag}
+      onObjectDragEnd={onObjectDragEnd}
       onObjectDragStart={onObjectDragStart}
       onProjectedBoundsChange={onProjectedBoundsChange}
       onSelectObject={onSelectObject}
@@ -612,6 +680,7 @@ function AssetObject({
   object,
   onLoadError,
   onObjectDrag,
+  onObjectDragEnd,
   onObjectDragStart,
   onProjectedBoundsChange,
   onSelectObject,
@@ -621,6 +690,7 @@ function AssetObject({
   object: Object3DElement & { source: { assetId: string; kind: "asset" } };
   onLoadError: Artboard3DSceneProps["onLoadError"];
   onObjectDrag: Artboard3DSceneProps["onObjectDrag"];
+  onObjectDragEnd: Artboard3DSceneProps["onObjectDragEnd"];
   onObjectDragStart: Artboard3DSceneProps["onObjectDragStart"];
   onProjectedBoundsChange: Artboard3DSceneProps["onProjectedBoundsChange"];
   onSelectObject: Artboard3DSceneProps["onSelectObject"];
@@ -702,6 +772,7 @@ function AssetObject({
       editable={editable}
       object={object}
       onObjectDrag={onObjectDrag}
+      onObjectDragEnd={onObjectDragEnd}
       onObjectDragStart={onObjectDragStart}
       onProjectedBoundsChange={onProjectedBoundsChange}
       onSelectObject={onSelectObject}
@@ -721,11 +792,14 @@ export function Artboard3DScene({
   className,
   collisionProxies = [],
   editable = false,
+  gestureBridgeRef,
   interactive = false,
+  manipulatingRef,
   objects,
   onClearSelection,
   onLoadError,
   onObjectDrag,
+  onObjectDragEnd,
   onObjectDragStart,
   onProjectedBoundsChange,
   onSelectObject,
@@ -786,44 +860,53 @@ export function Artboard3DScene({
           shadow-mapSize-height={2048}
           shadow-mapSize-width={2048}
         />
-        <Interactive3DContext.Provider value={interactive}>
-          <Physics3DProvider
-            artboardHeight={artboardHeight}
-            artboardWidth={artboardWidth}
-            proxies={collisionProxies}
-          >
-            {visibleObjects.map((object) =>
-              object.source.kind === "asset" ? (
-                <AssetObject
-                  editable={editable}
-                  key={`${object.id}:${object.source.assetId}:${object.material.useSourceMaterial}`}
-                  object={
-                    object as Object3DElement & {
-                      source: { assetId: string; kind: "asset" };
+        {gestureBridgeRef ? (
+          <Object3DGestureBridge bridgeRef={gestureBridgeRef} />
+        ) : null}
+        <Manipulating3DContext.Provider
+          value={manipulatingRef ?? NEVER_MANIPULATING}
+        >
+          <Interactive3DContext.Provider value={interactive}>
+            <Physics3DProvider
+              artboardHeight={artboardHeight}
+              artboardWidth={artboardWidth}
+              proxies={collisionProxies}
+            >
+              {visibleObjects.map((object) =>
+                object.source.kind === "asset" ? (
+                  <AssetObject
+                    editable={editable}
+                    key={`${object.id}:${object.source.assetId}:${object.material.useSourceMaterial}`}
+                    object={
+                      object as Object3DElement & {
+                        source: { assetId: string; kind: "asset" };
+                      }
                     }
-                  }
-                  onLoadError={onLoadError}
-                  onObjectDrag={onObjectDrag}
-                  onObjectDragStart={onObjectDragStart}
-                  onProjectedBoundsChange={onProjectedBoundsChange}
-                  onSelectObject={onSelectObject}
-                  projectId={projectId}
-                />
-              ) : (
-                <GeneratedObject
-                  editable={editable}
-                  key={object.id}
-                  object={object}
-                  onLoadError={onLoadError}
-                  onObjectDrag={onObjectDrag}
-                  onObjectDragStart={onObjectDragStart}
-                  onProjectedBoundsChange={onProjectedBoundsChange}
-                  onSelectObject={onSelectObject}
-                />
-              ),
-            )}
-          </Physics3DProvider>
-        </Interactive3DContext.Provider>
+                    onLoadError={onLoadError}
+                    onObjectDrag={onObjectDrag}
+                    onObjectDragEnd={onObjectDragEnd}
+                    onObjectDragStart={onObjectDragStart}
+                    onProjectedBoundsChange={onProjectedBoundsChange}
+                    onSelectObject={onSelectObject}
+                    projectId={projectId}
+                  />
+                ) : (
+                  <GeneratedObject
+                    editable={editable}
+                    key={object.id}
+                    object={object}
+                    onLoadError={onLoadError}
+                    onObjectDrag={onObjectDrag}
+                    onObjectDragEnd={onObjectDragEnd}
+                    onObjectDragStart={onObjectDragStart}
+                    onProjectedBoundsChange={onProjectedBoundsChange}
+                    onSelectObject={onSelectObject}
+                  />
+                ),
+              )}
+            </Physics3DProvider>
+          </Interactive3DContext.Provider>
+        </Manipulating3DContext.Provider>
       </Canvas>
     </div>
   );
