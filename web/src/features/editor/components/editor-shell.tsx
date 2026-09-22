@@ -135,6 +135,7 @@ import {
   fittedImageSize,
   imageCropForElement,
 } from "@/features/editor/lib/image-crop";
+import { createMediaPoster } from "@/features/editor/lib/media-poster";
 import {
   INTERFACE_SCALE_OPTIONS,
   interfaceScaleFactor,
@@ -205,6 +206,13 @@ import {
   type SpatialTransform3D,
 } from "@/features/editor/three/types";
 import { assetPath } from "@/lib/asset-path";
+
+type UploadedMediaAsset = {
+  kind: "image" | "video";
+  name: string;
+  previewSrc?: string;
+  src: string;
+};
 
 export function EditorShell({
   projectId = LOCAL_PROJECT_ID,
@@ -687,14 +695,21 @@ export function EditorShell({
         ? "video/*"
         : "image/*";
   const [propertyTab, setPropertyTab] = useState<PropertyTab>("design");
-  const [uploadedAssets, setUploadedAssets] = useState<
-    { kind: "image" | "video"; name: string; src: string }[]
-  >([]);
+  const [uploadedAssets, setUploadedAssets] = useState<UploadedMediaAsset[]>(
+    [],
+  );
   const [uploadedModelAssets, setUploadedModelAssets] = useState<
     Model3DAssetMetadata[]
   >([]);
   const visibleMediaAssets = uploadedAssets.filter(
     (asset) => asset.kind === assetTab,
+  );
+  const mediaPreviewSources = useMemo(
+    () =>
+      Object.fromEntries(
+        uploadedAssets.map((asset) => [asset.src, asset.previewSrc]),
+      ),
+    [uploadedAssets],
   );
   const [assetUploadError, setAssetUploadError] = useState<string | null>(null);
   const [lockRatio, setLockRatio] = useState(true);
@@ -3975,28 +3990,62 @@ export function EditorShell({
     const modelFiles = files.filter(isModelAssetFile);
     const mediaFiles = files.filter((file) => !isModelAssetFile(file));
     if (mediaFiles.length) {
-      const importedMedia = mediaFiles.map((file) => ({
-        kind: (file.type.startsWith("video/") ||
-        /\.(mp4|webm|mov|m4v|ogv)$/i.test(file.name)
-          ? "video"
-          : "image") as "image" | "video",
-        name: file.name,
-        src: URL.createObjectURL(file),
-      }));
-      setUploadedAssets((current) => [...importedMedia, ...current]);
-      setAssetTab(importedMedia[0].kind);
+      const importedMedia = mediaFiles.map((file) => {
+        const kind = (
+          file.type.startsWith("video/") ||
+          /\.(mp4|webm|mov|m4v|ogv)$/i.test(file.name)
+            ? "video"
+            : "image"
+        ) as "image" | "video";
+        const src = URL.createObjectURL(file);
+        return {
+          asset: {
+            kind,
+            name: file.name,
+            previewSrc:
+              kind === "image" &&
+              file.type.toLowerCase() !== "image/gif" &&
+              !/\.gif$/i.test(file.name)
+                ? src
+                : undefined,
+            src,
+          } satisfies UploadedMediaAsset,
+          file,
+        };
+      });
+      setUploadedAssets((current) => [
+        ...importedMedia.map(({ asset }) => asset),
+        ...current,
+      ]);
+      setAssetTab(importedMedia[0].asset.kind);
+      for (const { asset, file } of importedMedia) {
+        void createMediaPoster(file, asset.src, { kind: asset.kind }).then(
+          (previewSrc) => {
+            if (!previewSrc) return;
+            setUploadedAssets((current) =>
+              current.map((currentAsset) =>
+                currentAsset.src === asset.src
+                  ? { ...currentAsset, previewSrc }
+                  : currentAsset,
+              ),
+            );
+          },
+        );
+      }
     }
     if (modelFiles.length) void importModelAssetFiles(modelFiles);
   };
 
-  const addAssetToPage = (src: string) => {
+  const addAssetToPage = (asset: UploadedMediaAsset) => {
+    const { kind, src } = asset;
     const count =
-      elements.filter((element) => element.type === "image").length + 1;
-    const addImage = (width: number, height: number) => {
+      elements.filter((element) => element.type === kind).length + 1;
+    const id = createElementId(kind);
+    const addMedia = (width: number, height: number) => {
       addElement({
-        id: createElementId("image"),
-        name: `Image ${count}`,
-        type: "image",
+        id,
+        name: `${kind === "video" ? "Video" : "Image"} ${count}`,
+        type: kind,
         x: artboard.width / 2 - width / 2,
         y: artboard.height / 2 - height / 2,
         width,
@@ -4016,12 +4065,39 @@ export function EditorShell({
       setActiveTool("selection");
     };
 
+    if (kind === "video") {
+      const fallbackSize = fittedImageSize(1280, 720);
+      addMedia(fallbackSize.width, fallbackSize.height);
+      const video = document.createElement("video");
+      video.muted = true;
+      video.preload = "metadata";
+      video.onloadedmetadata = () => {
+        const size = fittedImageSize(video.videoWidth, video.videoHeight);
+        updateElement(id, {
+          height: size.height,
+          width: size.width,
+          x: artboard.width / 2 - size.width / 2,
+          y: artboard.height / 2 - size.height / 2,
+        });
+        video.onloadedmetadata = null;
+        video.onerror = null;
+        video.removeAttribute("src");
+      };
+      video.onerror = () => {
+        video.onloadedmetadata = null;
+        video.onerror = null;
+        video.removeAttribute("src");
+      };
+      video.src = src;
+      return;
+    }
+
     const image = new window.Image();
     image.onload = () => {
       const size = fittedImageSize(image.naturalWidth, image.naturalHeight);
-      addImage(size.width, size.height);
+      addMedia(size.width, size.height);
     };
-    image.onerror = () => addImage(280, 200);
+    image.onerror = () => addMedia(280, 200);
     image.src = src;
   };
 
@@ -4591,7 +4667,14 @@ export function EditorShell({
                   tabIndex={0}
                 >
                   <span className="scene-node" />
-                  <ScenePreview artboard={artboard} elements={page.elements} />
+                  <ScenePreview
+                    artboard={artboard}
+                    elements={page.elements}
+                    mediaPreviewSources={mediaPreviewSources}
+                    objects3d={page.objects3d}
+                    projectId={projectId}
+                    scene3d={page.scene3d}
+                  />
                   <span className="scene-copy">
                     <strong>{String(index + 1).padStart(2, "0")}</strong>
                     {editingPageId === page.id ? (
@@ -4861,11 +4944,20 @@ export function EditorShell({
                       }
                     >
                       <LayerSymbol element={element} />
-                      {element.type === "image" && element.src ? (
+                      {(element.type === "image" || element.type === "video") &&
+                      element.src ? (
                         <span
                           aria-hidden="true"
-                          className="layer-image-preview"
-                          style={{ backgroundImage: `url(${element.src})` }}
+                          className={`layer-image-preview ${element.type === "video" ? "layer-video-preview" : ""}`}
+                          style={{
+                            backgroundImage: mediaPreviewSources[element.src]
+                              ? `url(${mediaPreviewSources[element.src]})`
+                              : element.src in mediaPreviewSources
+                                ? "none"
+                                : element.type === "image"
+                                  ? `url(${element.src})`
+                                  : "none",
+                          }}
                         />
                       ) : null}
                     </span>
@@ -5062,33 +5154,25 @@ export function EditorShell({
               </>
             ) : (
               <>
-                {visibleMediaAssets.map((asset, index) =>
-                  asset.kind === "video" ? (
-                    <span
-                      aria-label={`Uploaded video ${asset.name}`}
-                      className="uploaded-asset uploaded-asset--video"
-                      key={asset.src}
-                      role="img"
-                    >
-                      <video
-                        aria-hidden="true"
-                        muted
-                        playsInline
-                        preload="metadata"
-                        src={asset.src}
-                      />
-                    </span>
-                  ) : (
-                    <button
-                      aria-label={`Add uploaded asset ${index + 1}`}
-                      className="uploaded-asset"
-                      key={asset.src}
-                      onClick={() => addAssetToPage(asset.src)}
-                      style={{ backgroundImage: `url(${asset.src})` }}
-                      type="button"
-                    />
-                  ),
-                )}
+                {visibleMediaAssets.map((asset, index) => (
+                  <button
+                    aria-label={
+                      asset.kind === "video"
+                        ? `Add uploaded video ${asset.name}`
+                        : `Add uploaded asset ${index + 1}`
+                    }
+                    className={`uploaded-asset ${asset.kind === "video" ? "uploaded-asset--video" : ""}`}
+                    key={asset.src}
+                    onClick={() => addAssetToPage(asset)}
+                    style={{
+                      backgroundImage: asset.previewSrc
+                        ? `url(${asset.previewSrc})`
+                        : "none",
+                    }}
+                    title={asset.name}
+                    type="button"
+                  />
+                ))}
                 {Array.from({
                   length: Math.max(9 - visibleMediaAssets.length, 0),
                 }).map((_, index) => (
@@ -5456,6 +5540,7 @@ export function EditorShell({
             const selectionLineWidth = selectionOutlineWidth;
             const vectorStrokeOutset =
               element.type !== "image" &&
+              element.type !== "video" &&
               element.type !== "text" &&
               element.type !== "line" &&
               element.strokeStyle !== "none" &&
@@ -5465,7 +5550,7 @@ export function EditorShell({
                 ? (element.strokeWidth * selectionControlScale) / 2
                 : 0;
             const selectionHandleOutset =
-              element.type === "image"
+              element.type === "image" || element.type === "video"
                 ? 0
                 : vectorStrokeOutset + selectionLineWidth / 2;
             const elementStyle = {
@@ -5596,7 +5681,9 @@ export function EditorShell({
                       !element.locked
                     }
                     strokePlacement={
-                      element.type === "image" ? "inside" : "center"
+                      element.type === "image" || element.type === "video"
+                        ? "inside"
+                        : "center"
                     }
                     width={element.width}
                   />
@@ -6071,6 +6158,12 @@ export function EditorShell({
                         <ShapeGraphic
                           element={element}
                           imageScale={navigatorScale}
+                          mediaSrc={
+                            element.src && element.src in mediaPreviewSources
+                              ? (mediaPreviewSources[element.src] ?? "")
+                              : undefined
+                          }
+                          playMedia={false}
                         />
                       )}
                     </div>

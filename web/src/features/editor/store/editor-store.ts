@@ -17,7 +17,7 @@ export type EditorTool =
   "selection" | "hand" | "rectangle" | "text" | "zoom" | "settings";
 export type ShapeType =
   "rectangle" | "circle" | "triangle" | "star" | "line" | "pen";
-export type CanvasElementType = ShapeType | "text" | "image";
+export type CanvasElementType = ShapeType | "text" | "image" | "video";
 export type ImageCrop = {
   baseHeight: number;
   baseWidth: number;
@@ -251,6 +251,8 @@ export type ArtboardSettings = {
   }[];
   backgroundImage?: string;
   backgroundVideo?: string;
+  backgroundMediaPreview?: string;
+  backgroundMediaPreviewSource?: string;
   backgroundImageFit?: "cover" | "contain" | "original" | "stretch" | "fill";
   backgroundImageOpacity?: number;
   backgroundAutoPlay?: boolean;
@@ -276,7 +278,7 @@ type EditorState = {
   selectedObject3DIds: string[];
   zoom: number;
   artboard: ArtboardSettings;
-  clipboard: CanvasElement[];
+  clipboard: (CanvasElement | Object3DElement)[];
   past: EditorSnapshot[];
   future: EditorSnapshot[];
   setSaveStatus: (status: SaveStatus) => void;
@@ -1015,39 +1017,90 @@ export const useEditorStore = create<EditorState>((set) => ({
     set((state) => {
       const page = state.pages.find((item) => item.id === state.activePageId);
       return {
-        clipboard:
-          page?.elements
-            .filter((element) => state.selectedElementIds.includes(element.id))
-            .map((element) => ({ ...element })) ?? [],
+        clipboard: page
+          ? [
+              ...page.elements
+                .filter((element) =>
+                  state.selectedElementIds.includes(element.id),
+                )
+                .map((element) => structuredClone(element)),
+              ...(page.objects3d ?? [])
+                .filter((object) =>
+                  state.selectedObject3DIds.includes(object.id),
+                )
+                .map(cloneObject3D),
+            ]
+          : [],
       };
     }),
   pasteClipboard: () =>
     set((state) => {
       if (!state.clipboard.length) return state;
       const pastedGroupIds = new Map<string, string>();
-      const pasted = state.clipboard.map((element) => {
-        let groupId: string | undefined;
-        if (element.groupId) {
-          groupId = pastedGroupIds.get(element.groupId);
-          if (!groupId) {
-            groupId = createId("group");
-            pastedGroupIds.set(element.groupId, groupId);
+      const pastedElements = state.clipboard
+        .filter((item): item is CanvasElement => item.type !== "object3d")
+        .map((source) => {
+          const element = structuredClone(source);
+          let groupId: string | undefined;
+          if (element.groupId) {
+            groupId = pastedGroupIds.get(element.groupId);
+            if (!groupId) {
+              groupId = createId("group");
+              pastedGroupIds.set(element.groupId, groupId);
+            }
           }
-        }
-        return {
-          ...element,
-          groupId,
-          id: createId(element.type),
-          name: `${element.name} copy`,
-          x: element.x + 16,
-          y: element.y + 16,
-          locked: false,
-        };
-      });
+          return {
+            ...element,
+            groupId,
+            id: createId(element.type),
+            name: `${element.name} copy`,
+            x: element.x + 16,
+            y: element.y + 16,
+            locked: false,
+          };
+        });
+      const pastedObjects3D = state.clipboard
+        .filter((item): item is Object3DElement => item.type === "object3d")
+        .map((source) => {
+          const object = cloneObject3D(source);
+          return {
+            ...object,
+            id: createId(object.type),
+            name: `${object.name} copy`,
+            locked: false,
+            transform: {
+              ...object.transform,
+              position: {
+                ...object.transform.position,
+                x: object.transform.position.x + 16,
+                y: object.transform.position.y + 16,
+              },
+            },
+          };
+        });
       return {
-        pages: updateActivePage(state, (elements) => [...elements, ...pasted]),
-        selectedElementIds: pasted.map((element) => element.id),
-        selectedObject3DIds: [],
+        pages: state.pages.map((page) =>
+          page.id === state.activePageId
+            ? {
+                ...page,
+                elements: [...page.elements, ...pastedElements],
+                ...(pastedObjects3D.length
+                  ? {
+                      objects3d: [
+                        ...(page.objects3d ?? []),
+                        ...pastedObjects3D,
+                      ],
+                      scene3d: resolveScene3DSettings({
+                        ...page.scene3d,
+                        enabled: true,
+                      }),
+                    }
+                  : {}),
+              }
+            : page,
+        ),
+        selectedElementIds: pastedElements.map((element) => element.id),
+        selectedObject3DIds: pastedObjects3D.map((object) => object.id),
         past: pushHistory(state),
         future: [],
       };

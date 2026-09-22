@@ -20,6 +20,14 @@ export function ArtboardBackground({
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const mediaType = backgroundMediaType(artboard);
+  const mediaSource =
+    mediaType === "video"
+      ? artboard.backgroundVideo
+      : artboard.backgroundImage;
+  const staticMediaPreview =
+    artboard.backgroundMediaPreviewSource === mediaSource
+      ? artboard.backgroundMediaPreview
+      : undefined;
   const autoPlay = artboard.backgroundAutoPlay ?? true;
 
   useEffect(() => {
@@ -55,11 +63,16 @@ export function ArtboardBackground({
           style={{ backgroundImage: gradientCssForArtboard(artboard) }}
         />
       ) : null}
-      {mediaType === "image" && artboard.backgroundImage ? (
+      {mediaType === "image" &&
+      artboard.backgroundImage &&
+      (playVideo || staticMediaPreview !== "") ? (
         <span
           className="artboard-background-layer"
           data-background-layer="image"
-          style={backgroundMediaStyle(artboard)}
+          style={{
+            ...backgroundMediaStyle(artboard),
+            backgroundImage: `url(${playVideo ? artboard.backgroundImage : (staticMediaPreview ?? artboard.backgroundImage)})`,
+          }}
         />
       ) : null}
       {mediaType === "video" && artboard.backgroundVideo && playVideo ? (
@@ -77,6 +90,19 @@ export function ArtboardBackground({
             style={{ objectFit: mediaObjectFit(artboard) }}
           />
         </span>
+      ) : null}
+      {mediaType === "video" &&
+      artboard.backgroundVideo &&
+      !playVideo &&
+      staticMediaPreview ? (
+        <span
+          className="artboard-background-layer"
+          data-background-layer="video-poster"
+          style={{
+            ...backgroundMediaStyle(artboard),
+            backgroundImage: `url(${staticMediaPreview})`,
+          }}
+        />
       ) : null}
     </div>
   );

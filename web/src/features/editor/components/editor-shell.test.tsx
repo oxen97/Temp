@@ -33,6 +33,7 @@ import { EditorShell } from "./editor-shell";
 
 beforeEach(() => {
   vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
+  vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => {});
   vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
   vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
   Object.defineProperty(URL, "createObjectURL", {
@@ -352,19 +353,34 @@ describe("EditorShell", () => {
         files: [new File(["video"], "clip.mp4", { type: "video/mp4" })],
       },
     });
+    const addVideo = screen.getByRole("button", {
+      name: "Add uploaded video clip.mp4",
+    });
+    expect(addVideo).toBeInTheDocument();
+    expect(addVideo.querySelector("video")).toBeNull();
+
+    fireEvent.click(addVideo);
+    expect(useEditorStore.getState().pages[0].elements).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "Video 1",
+          src: "blob:clip.mp4",
+          type: "video",
+        }),
+      ]),
+    );
     expect(
-      screen.getByRole("img", { name: "Uploaded video clip.mp4" }),
-    ).toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", { name: "Add uploaded asset 1" }),
-    ).not.toBeInTheDocument();
+      document.querySelector(".canvas-element.element-video video"),
+    ).toHaveAttribute("src", "blob:clip.mp4");
 
     fireEvent.click(screen.getByRole("tab", { name: "Image" }));
     expect(
       screen.getByRole("button", { name: "Add uploaded asset 1" }),
     ).toHaveStyle("background-image: url(blob:photo.png)");
     expect(
-      screen.queryByRole("img", { name: "Uploaded video clip.mp4" }),
+      screen.queryByRole("button", {
+        name: "Add uploaded video clip.mp4",
+      }),
     ).not.toBeInTheDocument();
   });
 

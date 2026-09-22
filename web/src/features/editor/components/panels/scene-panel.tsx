@@ -21,6 +21,7 @@ import {
 } from "@/features/editor/lib/artboard-style";
 import { colorWithOpacity } from "@/features/editor/lib/element-style";
 import { clamp } from "@/features/editor/lib/geometry";
+import { createMediaPoster } from "@/features/editor/lib/media-poster";
 import { type ArtboardSettings } from "@/features/editor/store/editor-store";
 import { assetPath } from "@/lib/asset-path";
 
@@ -494,11 +495,34 @@ export function ScenePanel({
               const file = event.target.files?.[0];
               if (!file) return;
               const source = URL.createObjectURL(file);
+              const kind = isVideoBackground ? "video" : "image";
+              const requiresPoster =
+                kind === "video" ||
+                file.type.toLowerCase() === "image/gif" ||
+                /\.gif$/i.test(file.name);
               onUpdateArtboard(
                 isVideoBackground
-                  ? { backgroundVideo: source }
-                  : { backgroundImage: source },
+                  ? {
+                      backgroundMediaPreview: requiresPoster ? "" : source,
+                      backgroundMediaPreviewSource: source,
+                      backgroundVideo: source,
+                    }
+                  : {
+                      backgroundImage: source,
+                      backgroundMediaPreview: requiresPoster ? "" : source,
+                      backgroundMediaPreviewSource: source,
+                    },
               );
+              if (requiresPoster) {
+                void createMediaPoster(file, source, { kind }).then(
+                  (preview) => {
+                    onUpdateArtboard({
+                      backgroundMediaPreview: preview ?? "",
+                      backgroundMediaPreviewSource: source,
+                    });
+                  },
+                );
+              }
               event.target.value = "";
             }}
             ref={backgroundUploadRef}

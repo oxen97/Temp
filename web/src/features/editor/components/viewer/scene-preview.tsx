@@ -1,17 +1,30 @@
 import { ArtboardBackground } from "@/features/editor/components/canvas/artboard-background";
 import { ShapeGraphic } from "@/features/editor/components/canvas/shape-graphic";
+import { Scene3DPreview } from "@/features/editor/components/viewer/scene-3d-preview";
 import { textStyleForElement } from "@/features/editor/lib/element-style";
 import {
   type ArtboardSettings,
   type CanvasElement,
 } from "@/features/editor/store/editor-store";
+import type {
+  Object3DElement,
+  Scene3DSettings,
+} from "@/features/editor/three/types";
 
 export function ScenePreview({
   artboard,
   elements,
+  mediaPreviewSources = {},
+  objects3d = [],
+  projectId,
+  scene3d,
 }: {
   artboard: ArtboardSettings;
   elements: CanvasElement[];
+  mediaPreviewSources?: Record<string, string | undefined>;
+  objects3d?: Object3DElement[];
+  projectId: string;
+  scene3d?: Partial<Scene3DSettings>;
 }) {
   const previewSize = 49;
   const scale = Math.max(
@@ -35,6 +48,14 @@ export function ScenePreview({
         }}
       >
         <ArtboardBackground artboard={artboard} playVideo={false} />
+        <Scene3DPreview
+          artboardHeight={artboard.height}
+          artboardWidth={artboard.width}
+          layer="behind-2d"
+          objects={objects3d}
+          projectId={projectId}
+          scene={scene3d}
+        />
         {elements
           .filter((element) => element.visible)
           .map((element) => (
@@ -59,10 +80,26 @@ export function ScenePreview({
                   {element.text}
                 </span>
               ) : (
-                <ShapeGraphic element={element} />
+                <ShapeGraphic
+                  element={element}
+                  mediaSrc={
+                    element.src && element.src in mediaPreviewSources
+                      ? (mediaPreviewSources[element.src] ?? "")
+                      : undefined
+                  }
+                  playMedia={false}
+                />
               )}
             </span>
           ))}
+        <Scene3DPreview
+          artboardHeight={artboard.height}
+          artboardWidth={artboard.width}
+          layer="front-of-2d"
+          objects={objects3d}
+          projectId={projectId}
+          scene={scene3d}
+        />
       </span>
     </span>
   );

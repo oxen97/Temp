@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { useEditorStore } from "@/features/editor/store/editor-store";
+import {
+  type CanvasElement,
+  useEditorStore,
+} from "@/features/editor/store/editor-store";
 import {
   createDefaultScene3DSettings,
   createPrimitiveObject3D,
@@ -15,10 +18,30 @@ const object3d = () =>
     primitive: "box",
   });
 
+const rectangle = (): CanvasElement => ({
+  cornerRadii: [1, 2, 3, 4],
+  cornerRadius: 0,
+  fill: "#ffffff",
+  height: 60,
+  id: "rectangle-1",
+  locked: false,
+  name: "Rectangle 1",
+  opacity: 100,
+  rotation: 0,
+  stroke: "#000000",
+  strokeWidth: 0,
+  type: "rectangle",
+  visible: true,
+  width: 80,
+  x: 100,
+  y: 120,
+});
+
 beforeEach(() => {
   useEditorStore.setState({
     activePageId: "page-1",
     activeTool: "selection",
+    clipboard: [],
     future: [],
     pages: [
       {
@@ -74,6 +97,107 @@ describe("editor store 3D state", () => {
     });
     expect(state.pages[0].scene3d?.enabled).toBe(true);
     expect(state.selectedObject3DIds).toEqual(["box-1"]);
+  });
+
+  it("deep-copies a selected 3D object and restores the paste with undo and redo", () => {
+    const source = object3d();
+    useEditorStore.setState((state) => ({
+      pages: state.pages.map((page) => ({
+        ...page,
+        objects3d: [source],
+        scene3d: createDefaultScene3DSettings(),
+      })),
+      selectedObject3DIds: [source.id],
+    }));
+
+    useEditorStore.getState().copySelected();
+    const copied = useEditorStore.getState().clipboard[0];
+    expect(copied.type).toBe("object3d");
+    if (copied.type !== "object3d") throw new Error("Expected a 3D object");
+    expect(copied).not.toBe(source);
+    expect(copied.transform).not.toBe(source.transform);
+    expect(copied.source).not.toBe(source.source);
+
+    useEditorStore.getState().pasteClipboard();
+    let state = useEditorStore.getState();
+    const pasted = state.pages[0].objects3d?.[1];
+    expect(pasted).toMatchObject({
+      locked: false,
+      name: "Box 1 copy",
+      transform: {
+        position: { x: 216, y: 166, z: 20 },
+      },
+    });
+    expect(pasted?.id).not.toBe(source.id);
+    expect(pasted?.transform).not.toBe(copied.transform);
+    expect(pasted?.source).not.toBe(copied.source);
+    expect(state.pages[0].scene3d?.enabled).toBe(true);
+    expect(state.selectedElementIds).toEqual([]);
+    expect(state.selectedObject3DIds).toEqual([pasted?.id]);
+    expect(state.past).toHaveLength(1);
+
+    const pastedId = pasted?.id;
+    state.undo();
+    state = useEditorStore.getState();
+    expect(state.pages[0].objects3d?.map((object) => object.id)).toEqual([
+      source.id,
+    ]);
+    expect(state.pages[0].scene3d?.enabled).toBe(false);
+    expect(state.selectedObject3DIds).toEqual([source.id]);
+
+    state.redo();
+    state = useEditorStore.getState();
+    expect(state.pages[0].objects3d?.map((object) => object.id)).toEqual([
+      source.id,
+      pastedId,
+    ]);
+    expect(state.pages[0].scene3d?.enabled).toBe(true);
+    expect(state.selectedObject3DIds).toEqual([pastedId]);
+  });
+
+  it("copies and pastes a mixed 2D and 3D selection together", () => {
+    const element = rectangle();
+    const object = object3d();
+    useEditorStore.setState((state) => ({
+      pages: state.pages.map((page) => ({
+        ...page,
+        elements: [element],
+        objects3d: [object],
+      })),
+      selectedElementIds: [element.id],
+      selectedObject3DIds: [object.id],
+    }));
+
+    useEditorStore.getState().copySelected();
+    const clipboard = useEditorStore.getState().clipboard;
+    expect(clipboard.map((item) => item.type)).toEqual([
+      "rectangle",
+      "object3d",
+    ]);
+    expect(clipboard[0]).not.toBe(element);
+    if (clipboard[0].type === "object3d") {
+      throw new Error("Expected a 2D element");
+    }
+    expect(clipboard[0].cornerRadii).not.toBe(element.cornerRadii);
+
+    useEditorStore.getState().pasteClipboard();
+    const state = useEditorStore.getState();
+    const pastedElement = state.pages[0].elements[1];
+    const pastedObject = state.pages[0].objects3d?.[1];
+    expect(pastedElement).toMatchObject({
+      name: "Rectangle 1 copy",
+      x: 116,
+      y: 136,
+    });
+    expect(pastedElement.id).not.toBe(element.id);
+    expect(pastedElement.cornerRadii).not.toBe(clipboard[0].cornerRadii);
+    expect(pastedObject).toMatchObject({
+      name: "Box 1 copy",
+      transform: { position: { x: 216, y: 166, z: 20 } },
+    });
+    expect(pastedObject?.id).not.toBe(object.id);
+    expect(state.selectedElementIds).toEqual([pastedElement.id]);
+    expect(state.selectedObject3DIds).toEqual([pastedObject?.id]);
   });
 
   it("keeps object updates isolated and restores scene settings with undo", () => {

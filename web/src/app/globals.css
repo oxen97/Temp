@@ -944,8 +944,28 @@ input[type="number"] {
   pointer-events: none;
 }
 
+.scene-preview-3d {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: block;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: 100% 100%;
+  pointer-events: none;
+}
+
+.scene-preview-3d--behind-2d {
+  z-index: 1;
+}
+
+.scene-preview-3d--front-of-2d {
+  z-index: 3;
+}
+
 .scene-preview-element {
   position: absolute;
+  z-index: 2;
   display: block;
   min-width: 1px;
   min-height: 1px;
@@ -1126,7 +1146,8 @@ input[type="number"] {
   fill: #ffffff;
 }
 
-.layer-symbol.symbol-image {
+.layer-symbol.symbol-image,
+.layer-symbol.symbol-video {
   display: grid;
   border: 0;
   background: transparent;
@@ -1159,6 +1180,19 @@ input[type="number"] {
   background-position: center;
   background-repeat: no-repeat;
   background-size: cover;
+}
+
+.layer-video-preview {
+  position: relative;
+}
+
+.layer-video-preview::after {
+  position: absolute;
+  inset: 3px;
+  border-style: solid;
+  border-width: 4px 0 4px 6px;
+  border-color: transparent transparent transparent rgba(255, 255, 255, 0.9);
+  content: "";
 }
 
 .layer-name {
@@ -1331,6 +1365,7 @@ input[type="number"] {
 }
 
 .asset-grid .uploaded-asset--video {
+  position: relative;
   display: block;
   overflow: hidden;
   width: 100%;
@@ -1339,11 +1374,16 @@ input[type="number"] {
   background: var(--canvas-fill);
 }
 
-.asset-grid .uploaded-asset--video video {
-  display: block;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
+.asset-grid .uploaded-asset--video::after {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  border-style: solid;
+  border-width: 6px 0 6px 9px;
+  border-color: transparent transparent transparent rgba(255, 255, 255, 0.92);
+  content: "";
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.4));
+  transform: translate(-42%, -50%);
 }
 
 .asset-grid .uploaded-asset--model {
@@ -1842,6 +1882,7 @@ input[type="number"] {
 
 .basic-shape,
 .image-shape,
+.video-shape,
 .vector-shape,
 .text-shape {
   display: block;
@@ -1856,6 +1897,18 @@ input[type="number"] {
 .image-shape {
   position: relative;
   overflow: hidden;
+}
+
+.video-shape {
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: cover;
+  object-fit: fill;
+  pointer-events: none;
+}
+
+.video-shape-placeholder {
+  background: var(--canvas-fill);
 }
 
 .canvas-element.element-image.is-selected > .image-shape {

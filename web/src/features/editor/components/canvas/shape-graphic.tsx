@@ -27,12 +27,16 @@ import { type CanvasElement } from "@/features/editor/store/editor-store";
 export function ShapeGraphic({
   element,
   imageScale = 1,
+  mediaSrc,
+  playMedia = true,
   strandBend,
   strandPathData,
   strandRibbonPathData,
 }: {
   element: CanvasElement;
   imageScale?: number;
+  mediaSrc?: string;
+  playMedia?: boolean;
   strandBend?: StrandBendVisual;
   strandPathData?: string;
   strandRibbonPathData?: string;
@@ -514,7 +518,8 @@ export function ShapeGraphic({
           <span
             className="image-shape-source"
             style={{
-              backgroundImage: `url(${element.src})`,
+              backgroundImage:
+                mediaSrc === "" ? "none" : `url(${mediaSrc ?? element.src})`,
               height: crop.baseHeight * imageScale,
               transform: `scale(${crop.scaleX}, ${crop.scaleY})`,
               transformOrigin: "top left",
@@ -523,6 +528,29 @@ export function ShapeGraphic({
           />
         </span>
       </span>
+    );
+  }
+
+  if (element.type === "video") {
+    return !playMedia ? (
+      <span
+        aria-hidden="true"
+        className={`video-shape ${mediaSrc ? "video-shape-poster" : "video-shape-placeholder"}`}
+        style={{
+          backgroundImage: mediaSrc ? `url(${mediaSrc})` : "none",
+        }}
+      />
+    ) : (
+      <video
+        aria-hidden="true"
+        autoPlay={playMedia}
+        className="video-shape"
+        loop
+        muted
+        playsInline
+        preload="auto"
+        src={element.src}
+      />
     );
   }
 

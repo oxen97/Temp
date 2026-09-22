@@ -144,6 +144,7 @@ export function supportsInteractionSounds(element: SoundTarget) {
     "line",
     "pen",
     "image",
+    "video",
     "object3d",
   ].includes(element.type);
 }

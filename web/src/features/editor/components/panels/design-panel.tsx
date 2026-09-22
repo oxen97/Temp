@@ -68,7 +68,9 @@ export function DesignPanel({
   const pathfinderReady =
     selectedElements.length >= 2 &&
     isEditable &&
-    selectedElements.every((element) => element.type !== "text");
+    selectedElements.every(
+      (element) => element.type !== "text" && element.type !== "video",
+    );
   const origin = selected?.transformOrigin ?? 4;
   const selectedCornerRadii = selected?.cornerRadii ?? [
     selected?.cornerRadius ?? 0,
