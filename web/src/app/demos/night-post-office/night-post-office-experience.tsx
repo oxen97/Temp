@@ -815,6 +815,12 @@ export function NightPostOfficeExperience() {
           <p className={styles.keyboardHint}>
             키보드: 별을 선택한 뒤 빈 자리를 선택하세요.
           </p>
+          <Link
+            className={styles.editorLink}
+            href="/?interactionDemo=night-post-office"
+          >
+            AMOUS에서 인터랙션 설정 보기 <span aria-hidden="true">↗</span>
+          </Link>
         </aside>
       </section>
 

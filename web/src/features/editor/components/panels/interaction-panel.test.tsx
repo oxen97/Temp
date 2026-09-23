@@ -152,6 +152,144 @@ describe("InteractionPanel conditional UI", () => {
     choose("Effect", "Liquid Merge");
     expect(screen.getByRole("button", { name: "Collision target element" })).toHaveTextContent("Red strand 2");
   });
+
+  it("authors reusable target-drop acceptance, snapping, reset, and constraints", () => {
+    let saved = createDefaultInteraction({ id: "drop" });
+    function Harness() {
+      const [interaction, setInteraction] = useState(saved);
+      saved = interaction;
+      return (
+        <InteractionPanel
+          elements={[
+            { id: "star", name: "Star", type: "star" },
+            { id: "slot", name: "Constellation Slot", type: "circle" },
+            {
+              id: "cube",
+              name: "3D Cube",
+              sourceKind: "primitive",
+              type: "object3d",
+            },
+          ]}
+          interactionsByElement={{ star: [interaction] }}
+          onUpdateInteraction={(_, __, updates) =>
+            setInteraction((current) => ({ ...current, ...updates }))
+          }
+          selectedElementIds={["star"]}
+          selectedName="Star"
+          selectedTypes={["star"]}
+        />
+      );
+    }
+
+    render(<Harness />);
+    choose("Trigger", "Drop On Target");
+    expect(saved).toMatchObject({
+      collisionTarget: "slot",
+      trigger: "drop-on-target",
+    });
+    expect(
+      screen.getByText(/Target triggers include drag handling automatically/i),
+    ).toBeTruthy();
+    openDropdown("Collision target element");
+    expect(screen.queryByRole("option", { name: "3D Cube (object3d)" })).toBeNull();
+    openDropdown("Collision target element");
+    fireEvent.change(
+      screen.getByRole("spinbutton", { name: "Drop target tolerance" }),
+      { target: { value: "32" } },
+    );
+    fireEvent.change(
+      screen.getByRole("spinbutton", { name: "Target capacity" }),
+      { target: { value: "2" } },
+    );
+    choose("Target match mode", "Object type");
+    expect(
+      screen.getByRole("button", { name: "Target match value" }),
+    ).toHaveTextContent("Star");
+    choose("Occupied target behavior", "Allow together");
+    choose("Effect", "Snap to Target");
+    choose("Target snap anchor", "Custom offset");
+    fireEvent.change(
+      screen.getByRole("spinbutton", { name: "Target snap offset X" }),
+      { target: { value: "4" } },
+    );
+    choose("Reset behavior", "Stay at target");
+    fireEvent.click(screen.getByRole("button", { name: "Expand advanced" }));
+    choose("Drag movement bounds", "Inside artboard");
+
+    expect(saved).toMatchObject({
+      dragBounds: "artboard",
+      dropTolerance: 32,
+      effect: "snap-to-target",
+      occupiedBehavior: "allow",
+      resetMode: "stay-at-target",
+      snapAnchor: "custom",
+      snapOffsetX: 4,
+      targetCapacity: 2,
+      targetMatchMode: "object-type",
+      targetMatchValue: "star",
+    });
+
+    choose("Trigger", "Drag Enter Target");
+    expect(
+      screen.queryByRole("spinbutton", { name: "Target capacity" }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Occupied target behavior" }),
+    ).toBeNull();
+    expect(
+      screen.getByRole("spinbutton", { name: "Drop target tolerance" }),
+    ).toBeTruthy();
+  });
+
+  it("authors an accessible modal action against another layer", () => {
+    let saved = createDefaultInteraction({ id: "modal" });
+    function Harness() {
+      const [interaction, setInteraction] = useState(saved);
+      saved = interaction;
+      return (
+        <InteractionPanel
+          elements={[
+            { id: "button", name: "Open Letter", type: "rectangle" },
+            { id: "dialog", name: "Letter Dialog", type: "rectangle" },
+            {
+              id: "cube",
+              name: "3D Cube",
+              sourceKind: "primitive",
+              type: "object3d",
+            },
+          ]}
+          interactionsByElement={{ button: [interaction] }}
+          onUpdateInteraction={(_, __, updates) =>
+            setInteraction((current) => ({ ...current, ...updates }))
+          }
+          selectedElementIds={["button"]}
+          selectedName="Open Letter"
+          selectedTypes={["rectangle"]}
+        />
+      );
+    }
+
+    render(<Harness />);
+    choose("Effect", "Open Modal");
+    expect(saved).toMatchObject({ effect: "open-modal", modalTarget: "dialog" });
+    expect(screen.getByRole("button", { name: "Modal target" })).toHaveTextContent(
+      "Letter Dialog",
+    );
+    openDropdown("Modal target");
+    expect(screen.queryByRole("option", { name: "3D Cube (object3d)" })).toBeNull();
+    openDropdown("Modal target");
+    expect(screen.getByRole("button", { name: "Close on Escape" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Close on backdrop" }));
+    expect(saved.modalCloseOnBackdrop).toBe(false);
+    expect(screen.queryByText("4. HOW")).toBeNull();
+    expect(screen.queryByRole("spinbutton", { name: "Duration" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Easing" })).toBeNull();
+    expect(screen.getByRole("spinbutton", { name: "Delay" })).toBeTruthy();
+  });
+
   it("shows Long Press duration and hides area for page, time, and media triggers", () => {
     render(
       <InteractionPanel
@@ -429,7 +567,25 @@ describe("InteractionPanel conditional UI", () => {
     expect(
       screen.getByRole("option", { name: "Collision Enter" }),
     ).toBeTruthy();
+    expect(
+      screen.queryByRole("option", { name: "Drop On Target" }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("option", { name: "Drag Enter Target" }),
+    ).toBeNull();
     openDropdown("Trigger");
+
+    openDropdown("Effect");
+    expect(
+      screen.getByRole("option", { name: "Attach To Target" }),
+    ).toBeTruthy();
+    expect(
+      screen.queryByRole("option", { name: "Snap to Target" }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("option", { name: "Open Modal" }),
+    ).toBeNull();
+    openDropdown("Effect");
 
     expect(screen.getByRole("spinbutton", { name: "Move Z" })).toBeTruthy();
     expect(

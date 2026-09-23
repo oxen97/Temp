@@ -53,6 +53,9 @@ export const collisionInteractionTriggers = new Set([
   "while-overlapping",
   "overlap-end",
   "drop-on-target",
+  "drop-outside-target",
+  "drag-enter-target",
+  "drag-leave-target",
   "near-target",
   ...threeDCollisionTriggerOptions.map((option) => option.value),
 ]);
@@ -131,6 +134,14 @@ const commonEffects: InteractionOption[] = [
   { label: "Show / Hide", value: "show-hide" },
   { label: "Shake", value: "shake" },
   { label: "Order", value: "order" },
+];
+
+const twoDTargetEffects: InteractionOption[] = [
+  { label: "Snap to Target", value: "snap-to-target" },
+  { label: "Return to Origin", value: "return-to-origin" },
+  { label: "Attach to Target", value: "attach-to-target" },
+  { label: "Open Modal", value: "open-modal" },
+  { label: "Close Modal", value: "close-modal" },
 ];
 
 const imageEffects: InteractionOption[] = [
@@ -215,6 +226,8 @@ export const immediateEffects = new Set([
   "pause",
   "resume",
   "seek",
+  "open-modal",
+  "close-modal",
   "play-model-animation",
   "pause-model-animation",
   "resume-model-animation",
@@ -244,6 +257,9 @@ export function getEffectOptions(
   context: Interaction3DContext = {},
 ): InteractionOption[] {
   const is3D = is3DSelection(selectedTypes, context);
+  const isPure2D =
+    selectedTypes.length === 0 ||
+    selectedTypes.every((type) => type !== "object3d");
   const hybridCollisionEffects =
     selectedTypes.length === 1 && context.isHybridCollision
       ? [
@@ -261,6 +277,7 @@ export function getEffectOptions(
       ...cameraEffects,
       ...visualPipelineEffects,
       ...(is3D ? spatial3DEffects : []),
+      ...(isPure2D ? twoDTargetEffects : []),
       { label: "Group Animation", value: "group-animation" },
     ];
   }
@@ -270,6 +287,7 @@ export function getEffectOptions(
       ...commonEffects,
       ...cameraEffects,
       ...visualPipelineEffects,
+      ...twoDTargetEffects,
       ...imageEffects,
       ...(collisionBounceTriggers.has(trigger)
         ? [{ label: "Bounce Off Target", value: "collision-bounce" }]
@@ -282,6 +300,7 @@ export function getEffectOptions(
       ...commonEffects,
       ...cameraEffects,
       ...visualPipelineEffects,
+      ...twoDTargetEffects,
       ...textEffects,
       ...hybridCollisionEffects,
     ];
@@ -290,6 +309,7 @@ export function getEffectOptions(
       ...commonEffects,
       ...cameraEffects,
       ...visualPipelineEffects,
+      ...twoDTargetEffects,
       ...videoEffects,
       ...hybridCollisionEffects,
     ];
@@ -341,6 +361,7 @@ export function getEffectOptions(
     ...commonEffects,
     ...cameraEffects,
     ...visualPipelineEffects,
+    ...twoDTargetEffects,
     ...(type !== undefined &&
     (type === "line" || type === "pen") &&
     strandBendTriggers.has(trigger)
@@ -410,6 +431,8 @@ export function getMotionOptions(
     "look-at-target": ["direct", "spring"],
     "orbit-around-target": ["direct", "spring", "inertia"],
     "attach-to-target": ["direct", "spring"],
+    "snap-to-target": ["direct", "spring"],
+    "return-to-origin": ["direct", "spring"],
     "morph-target": ["direct", "spring"],
     "change-material": ["direct"],
     "material-parameter": ["direct"],
@@ -456,6 +479,46 @@ function getBaseResetPolicy(
   const leave = { label: "Return when pointer leaves", value: "leave" };
   const pageExit = { label: "Return on page exit", value: "page-exit" };
   const reverse = { label: "Follow reverse scroll", value: "reverse" };
+  const stayAtTarget = { label: "Stay at target", value: "stay-at-target" };
+  const returnToOrigin = {
+    label: "Return to origin",
+    value: "return-to-origin",
+  };
+  if (
+    effect === "snap-to-target" ||
+    effect === "attach-to-target" ||
+    effect === "return-to-origin"
+  ) {
+    return {
+      description:
+        effect === "return-to-origin"
+          ? "Default: return to the position captured when the interaction starts."
+          : "Default: stay attached to the accepted target until the page exits.",
+      options: [contextual, stayAtTarget, returnToOrigin, pageExit],
+    };
+  }
+  if (effect === "open-modal" || effect === "close-modal") {
+    return {
+      description:
+        "Default: keep the dialog state until another interaction changes it or the page exits.",
+      options: [contextual, keep, pageExit],
+    };
+  }
+  if (
+    trigger === "drop-on-target" ||
+    trigger === "drop-outside-target" ||
+    trigger === "drag-enter-target" ||
+    trigger === "drag-leave-target"
+  ) {
+    const returnsByDefault =
+      trigger === "drop-outside-target" || trigger === "drag-leave-target";
+    return {
+      description: returnsByDefault
+        ? "Default: return to the drag origin when the object leaves or misses the target."
+        : "Default: stay at the accepted target until another interaction moves the object.",
+      options: [contextual, stayAtTarget, returnToOrigin, pageExit],
+    };
+  }
   if (stacking) {
     return {
       description:

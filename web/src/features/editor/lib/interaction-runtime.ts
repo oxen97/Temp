@@ -19,6 +19,7 @@
  * later runtime phases; unsupported triggers/effects are simply inert here.
  */
 import type { InteractionDefinition } from "@/features/editor/lib/interaction-model";
+import { hasTargetDragGesture } from "@/features/editor/lib/interaction-drop-runtime";
 
 export type RuntimeVisual = {
   tx: number;
@@ -63,6 +64,8 @@ export type ElementRuntimeState = {
   scroll: number;
   /** Live physics readout (center px + degrees) once released into the sim. */
   physics: { x: number; y: number; rotation: number } | null;
+  /** Event-style interactions that fired and keep their authored end state. */
+  triggeredInteractionIds: readonly string[];
 };
 
 export const IDLE_RUNTIME_STATE: ElementRuntimeState = {
@@ -73,6 +76,7 @@ export const IDLE_RUNTIME_STATE: ElementRuntimeState = {
   timed: false,
   scroll: 0,
   physics: null,
+  triggeredInteractionIds: [],
 };
 
 /** Triggers this runtime slice can play. */
@@ -80,6 +84,10 @@ export const RUNTIME_TRIGGERS = [
   "click-tap",
   "hover",
   "drag",
+  "drop-on-target",
+  "drop-outside-target",
+  "drag-enter-target",
+  "drag-leave-target",
   "after-delay",
   "pointer-move",
   "scroll-swipe",
@@ -113,6 +121,11 @@ export function isRuntimeInteractionActive(
       return state.timed;
     case "scroll-swipe":
       return state.scroll > 0;
+    case "drop-on-target":
+    case "drop-outside-target":
+    case "drag-enter-target":
+    case "drag-leave-target":
+      return state.triggeredInteractionIds.includes(interaction.id);
     default:
       return false;
   }
@@ -214,6 +227,11 @@ export function interactionIntensity(
       return state.timed ? 1 : 0;
     case "scroll-swipe":
       return clamp01(state.scroll / Math.max(1, interaction.trackDistance));
+    case "drop-on-target":
+    case "drop-outside-target":
+    case "drag-enter-target":
+    case "drag-leave-target":
+      return state.triggeredInteractionIds.includes(interaction.id) ? 1 : 0;
     default:
       return 0;
   }
@@ -236,16 +254,31 @@ export function runtimeVisualForElement(
     };
   }
   let visual = IDENTITY_VISUAL;
+  let directDragApplied = false;
+  // Target-aware interactions are complete drag gestures in their own right.
+  // This keeps the dragged object under the pointer even when the author did
+  // not add a redundant `Drag → Move` interaction alongside Drop On Target.
+  if (hasTargetDragGesture(interactions)) {
+    visual = {
+      ...visual,
+      tx: visual.tx + state.dragOffset.x + (state.drag?.dx ?? 0),
+      ty: visual.ty + state.dragOffset.y + (state.drag?.dy ?? 0),
+    };
+    directDragApplied = true;
+  }
   for (const interaction of interactions ?? []) {
     if (interaction.enabled === false) continue;
     // Drag + move is direct repositioning: follow the pointer 1:1 and persist
     // the dropped displacement, rather than mapping progress to a target.
     if (interaction.trigger === "drag" && interaction.effect === "move") {
-      visual = {
-        ...visual,
-        tx: visual.tx + state.dragOffset.x + (state.drag?.dx ?? 0),
-        ty: visual.ty + state.dragOffset.y + (state.drag?.dy ?? 0),
-      };
+      if (!directDragApplied) {
+        visual = {
+          ...visual,
+          tx: visual.tx + state.dragOffset.x + (state.drag?.dx ?? 0),
+          ty: visual.ty + state.dragOffset.y + (state.drag?.dy ?? 0),
+        };
+        directDragApplied = true;
+      }
       continue;
     }
     // Pointer-move reacts to the cursor's position over the stage: move follows
@@ -298,14 +331,45 @@ export function activeTransition(
   state: ElementRuntimeState,
 ): string {
   if (state.drag) return "none";
-  const active = (interactions ?? []).find(
+  const activeInteractions = (interactions ?? []).filter(
     (interaction) =>
       interaction.trigger !== "drag" &&
       isRuntimeInteractionActive(interaction, state),
   );
-  const duration = active ? Math.max(0, active.duration) : 0.3;
-  const easing = active ? easingToCss(active.easing) : "ease-out";
-  return `transform ${duration}s ${easing}, opacity ${duration}s ${easing}, filter ${duration}s ${easing}`;
+  const activeById = new Map(
+    activeInteractions.map((interaction) => [interaction.id, interaction]),
+  );
+  const latestTriggered = [...state.triggeredInteractionIds]
+    .reverse()
+    .map((id) => activeById.get(id))
+    .find((interaction) => interaction !== undefined);
+  const active = latestTriggered ?? activeInteractions[0];
+  let duration = active ? Math.max(0, active.duration) : 0.3;
+  let easing = active ? easingToCss(active.easing) : "ease-out";
+  if (active?.motion === "spring") {
+    const springScale = clamp(
+      Math.sqrt(
+        (Math.max(0.01, active.springMass) * 100) /
+          Math.max(1, active.springStrength),
+      ),
+      0.5,
+      2.5,
+    );
+    duration *= springScale;
+    const overshoot = 1 + clamp((20 - active.springDamping) / 40, 0, 0.5);
+    easing = `cubic-bezier(0.2, ${overshoot}, 0.3, 1)`;
+  }
+  // Target commands are dispatched after their delay so geometry is captured
+  // at the firing moment; ordinary visual effects use a CSS delay.
+  const delay =
+    active &&
+    active.trigger !== "drop-on-target" &&
+    active.trigger !== "drop-outside-target" &&
+    active.trigger !== "drag-enter-target" &&
+    active.trigger !== "drag-leave-target"
+      ? Math.max(0, active.delay)
+      : 0;
+  return `transform ${duration}s ${easing} ${delay}s, opacity ${duration}s ${easing} ${delay}s, filter ${duration}s ${easing} ${delay}s`;
 }
 
 export function composeTransform(

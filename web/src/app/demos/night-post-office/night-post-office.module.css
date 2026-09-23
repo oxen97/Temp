@@ -604,6 +604,25 @@
   line-height: 1.6;
 }
 
+.editorLink {
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  gap: 7px;
+  margin-top: 10px;
+  border-bottom: 1px solid rgb(232 198 141 / 45%);
+  color: #e8c68d;
+  font-size: 12px;
+  line-height: 1.8;
+  text-decoration: none;
+}
+
+.editorLink:hover,
+.editorLink:focus-visible {
+  border-color: #f4d69a;
+  color: #fff0c7;
+}
+
 .footer {
   display: flex;
   width: min(1360px, calc(100% - 72px));

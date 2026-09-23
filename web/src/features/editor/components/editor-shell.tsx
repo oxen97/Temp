@@ -108,6 +108,10 @@ import {
 import { createElementId } from "@/features/editor/lib/element-id";
 import { createDefaultInteraction } from "@/features/editor/lib/interaction-model";
 import { createMonDemoElements } from "@/features/editor/lib/mon-demo-elements";
+import {
+  createNightPostOfficeDemoElements,
+  NIGHT_POST_OFFICE_FIRST_STAR_ID,
+} from "@/features/editor/lib/night-post-office-demo-elements";
 import { createPinocchioDemoElements } from "@/features/editor/lib/pinocchio-demo-elements";
 import { textStyleForElement } from "@/features/editor/lib/element-style";
 import {
@@ -270,6 +274,7 @@ export function EditorShell({
   const threeDemoSeededRef = useRef(false);
   const interactionDemoSeededRef = useRef(false);
   const monDemoSeededRef = useRef(false);
+  const nightPostOfficeDemoSeededRef = useRef(false);
   const pinocchioDemoSeededRef = useRef(false);
   const monDemoFitRef = useRef(false);
 
@@ -277,7 +282,7 @@ export function EditorShell({
     if (
       threeDemoSeededRef.current ||
       typeof window === "undefined" ||
-      ["1", "mon-native", "mon-art", "pinocchio-native"].includes(
+      ["1", "mon-native", "mon-art", "pinocchio-native", "night-post-office"].includes(
         new URLSearchParams(window.location.search).get("interactionDemo") ??
           "",
       ) ||
@@ -389,7 +394,7 @@ export function EditorShell({
     if (
       interactionDemoSeededRef.current ||
       typeof window === "undefined" ||
-      ["1", "mon-native", "mon-art", "pinocchio-native"].includes(
+      ["1", "mon-native", "mon-art", "pinocchio-native", "night-post-office"].includes(
         new URLSearchParams(window.location.search).get("interactionDemo") ??
           "",
       ) ||
@@ -726,6 +731,52 @@ export function EditorShell({
   const [viewMenuOpen, setViewMenuOpen] = useState(false);
   const [previewVisible, setPreviewVisible] = useState(false);
   const [monDemoMode, setMonDemoMode] = useState(false);
+  useEffect(() => {
+    if (nightPostOfficeDemoSeededRef.current || typeof window === "undefined")
+      return;
+    if (
+      new URLSearchParams(window.location.search).get("interactionDemo") !==
+      "night-post-office"
+    )
+      return;
+    nightPostOfficeDemoSeededRef.current = true;
+
+    const existingPage = pages.find((page) =>
+      page.elements.some(
+        (element) => element.id === NIGHT_POST_OFFICE_FIRST_STAR_ID,
+      ),
+    );
+    if (existingPage) {
+      setActivePageId(existingPage.id);
+    } else {
+      // A demo link must not replace the user's current artwork.
+      if (elements.length > 0 || objects3d.length > 0) addPage();
+      const demoPageId = useEditorStore.getState().activePageId;
+      renamePage(demoPageId, "별을 배달하는 우체국");
+      for (const element of createNightPostOfficeDemoElements(
+        artboard.width,
+        artboard.height,
+      ))
+        addElement(element);
+    }
+
+    queueMicrotask(() => {
+      setSelectedElementIds([NIGHT_POST_OFFICE_FIRST_STAR_ID]);
+      setPropertyTab("interaction");
+      setPreviewVisible(true);
+    });
+  }, [
+    addElement,
+    addPage,
+    artboard.height,
+    artboard.width,
+    elements.length,
+    objects3d.length,
+    pages,
+    renamePage,
+    setActivePageId,
+    setSelectedElementIds,
+  ]);
   useEffect(() => {
     if (monDemoSeededRef.current || typeof window === "undefined") return;
     const requestedDemo = new URLSearchParams(window.location.search).get(

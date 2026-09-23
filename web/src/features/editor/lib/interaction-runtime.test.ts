@@ -137,6 +137,40 @@ describe("interaction runtime", () => {
     expect(dragging.ty).toBe(40);
   });
 
+  it("uses target triggers as implicit drags without double-applying a Drag row", () => {
+    const drop = createDefaultInteraction({
+      id: "drop",
+      trigger: "drop-on-target",
+      effect: "snap-to-target",
+    });
+    const drag = createDefaultInteraction({ trigger: "drag", effect: "move" });
+    const visual = runtimeVisualForElement([drop, drag], {
+      ...IDLE_RUNTIME_STATE,
+      dragOffset: { x: 10, y: 20 },
+      drag: { dx: 30, dy: 40 },
+    });
+    expect(visual.tx).toBe(40);
+    expect(visual.ty).toBe(60);
+  });
+
+  it("plays ordinary effects after a target event fires", () => {
+    const drop = createDefaultInteraction({
+      id: "drop-opacity",
+      trigger: "drop-on-target",
+      effect: "opacity",
+      opacityTo: 25,
+    });
+    expect(
+      runtimeVisualForElement([drop], IDLE_RUNTIME_STATE).opacity,
+    ).toBeNull();
+    expect(
+      runtimeVisualForElement([drop], {
+        ...IDLE_RUNTIME_STATE,
+        triggeredInteractionIds: [drop.id],
+      }).opacity,
+    ).toBeCloseTo(0.25);
+  });
+
   it("scrubs a non-move drag effect proportionally to drag progress", () => {
     const scrub = createDefaultInteraction({
       trigger: "drag",
@@ -420,6 +454,51 @@ describe("interaction runtime", () => {
         drag: { dx: 1, dy: 1 },
       }),
     ).toBe("none");
+  });
+
+  it("maps authored spring strength and damping into the active transition", () => {
+    const spring = createDefaultInteraction({
+      id: "spring-drop",
+      trigger: "drop-on-target",
+      motion: "spring",
+      duration: 0.4,
+      springStrength: 100,
+      springMass: 1,
+      springDamping: 10,
+    });
+    const transition = activeTransition([spring], {
+      ...IDLE_RUNTIME_STATE,
+      triggeredInteractionIds: [spring.id],
+    });
+    expect(transition).toContain("transform 0.4s");
+    expect(transition).toContain("cubic-bezier(0.2, 1.25, 0.3, 1)");
+  });
+
+  it("uses the most recently fired target row for transition timing", () => {
+    const fast = createDefaultInteraction({
+      id: "fast",
+      trigger: "drop-on-target",
+      duration: 0.1,
+      motion: "direct",
+    });
+    const slow = createDefaultInteraction({
+      id: "slow",
+      trigger: "drop-on-target",
+      duration: 0.8,
+      motion: "direct",
+    });
+    expect(
+      activeTransition([fast, slow], {
+        ...IDLE_RUNTIME_STATE,
+        triggeredInteractionIds: [fast.id, slow.id],
+      }),
+    ).toContain("transform 0.8s");
+    expect(
+      activeTransition([fast, slow], {
+        ...IDLE_RUNTIME_STATE,
+        triggeredInteractionIds: [slow.id, fast.id],
+      }),
+    ).toContain("transform 0.1s");
   });
 
   it("detects whether an element has playable interactions", () => {

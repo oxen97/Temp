@@ -93,6 +93,9 @@ const baseTriggerGroups: TriggerOptionGroup[] = [
       { label: "While Overlapping", value: "while-overlapping" },
       { label: "Overlap End", value: "overlap-end" },
       { label: "Drop On Target", value: "drop-on-target" },
+      { label: "Drop Outside Target", value: "drop-outside-target" },
+      { label: "Drag Enter Target", value: "drag-enter-target" },
+      { label: "Drag Leave Target", value: "drag-leave-target" },
       { label: "Near Target", value: "near-target" },
     ],
   },
@@ -120,6 +123,13 @@ const baseTriggerGroups: TriggerOptionGroup[] = [
     ],
   },
 ];
+
+const targetDragTriggers = new Set([
+  "drop-on-target",
+  "drop-outside-target",
+  "drag-enter-target",
+  "drag-leave-target",
+]);
 
 const threeDTriggerGroups: TriggerOptionGroup[] = [
   {
@@ -831,7 +841,14 @@ export function InteractionPanel({
     sourceKind: sharedSourceKind,
   };
   const triggerGroups = [
-    ...baseTriggerGroups,
+    ...(is3DSelection
+      ? baseTriggerGroups.map((group) => ({
+          ...group,
+          options: group.options.filter(
+            (option) => !targetDragTriggers.has(option.value),
+          ),
+        }))
+      : baseTriggerGroups),
     ...(is3DSelection || isHybridCollisionAvailable ? threeDTriggerGroups : []),
     ...(is3DSelection && animationNames.length > 0 ? modelTriggerGroups : []),
   ];
@@ -875,6 +892,11 @@ export function InteractionPanel({
   const [longPressSeconds, setLongPressSeconds] = useInteractionField("longPressSeconds", 0.5, binding);
   const [collisionTarget, setCollisionTarget] = useInteractionField("collisionTarget", "", binding);
   const [detection, setDetection] = useInteractionField("detection", "bounding-box", binding);
+  const [dropTolerance, setDropTolerance] = useInteractionField("dropTolerance", 24, binding);
+  const [targetCapacity, setTargetCapacity] = useInteractionField("targetCapacity", 1, binding);
+  const [targetMatchMode, setTargetMatchMode] = useInteractionField("targetMatchMode", "any", binding);
+  const [targetMatchValue, setTargetMatchValue] = useInteractionField("targetMatchValue", "", binding);
+  const [occupiedBehavior, setOccupiedBehavior] = useInteractionField("occupiedBehavior", "reject", binding);
   const [joinDistance, setJoinDistance] = useInteractionField("joinDistance", 30, binding);
   const [releaseDistance, setReleaseDistance] = useInteractionField("releaseDistance", 45, binding);
   const [timeSeconds, setTimeSeconds] = useInteractionField("timeSeconds", 5, binding);
@@ -919,6 +941,16 @@ export function InteractionPanel({
   const [impactMass, setImpactMass] = useInteractionField("impactMass", 1, binding);
   const [targetMass, setTargetMass] = useInteractionField("targetMass", 1, binding);
   const [impactFriction, setImpactFriction] = useInteractionField("impactFriction", 20, binding);
+  const [snapAnchor, setSnapAnchor] = useInteractionField("snapAnchor", "center", binding);
+  const [snapOffsetX, setSnapOffsetX] = useInteractionField("snapOffsetX", 0, binding);
+  const [snapOffsetY, setSnapOffsetY] = useInteractionField("snapOffsetY", 0, binding);
+  const [attachPreserveOffset, setAttachPreserveOffset] = useInteractionField("attachPreserveOffset", false, binding);
+  const [modalTarget, setModalTarget] = useInteractionField("modalTarget", "", binding);
+  const [modalBackdrop, setModalBackdrop] = useInteractionField("modalBackdrop", true, binding);
+  const [modalCloseOnEscape, setModalCloseOnEscape] = useInteractionField("modalCloseOnEscape", true, binding);
+  const [modalCloseOnBackdrop, setModalCloseOnBackdrop] = useInteractionField("modalCloseOnBackdrop", true, binding);
+  const [modalTrapFocus, setModalTrapFocus] = useInteractionField("modalTrapFocus", true, binding);
+  const [modalRestoreFocus, setModalRestoreFocus] = useInteractionField("modalRestoreFocus", true, binding);
 
   const [motion, setMotion] = useInteractionField("motion", "spring", binding);
   const [springStrength, setSpringStrength] = useInteractionField("springStrength", 100, binding);
@@ -958,6 +990,7 @@ export function InteractionPanel({
   const [yoyo, setYoyo] = useInteractionField("yoyo", false, binding);
   const [hold, setHold] = useInteractionField("hold", 0, binding);
   const [cursor, setCursor] = useInteractionField("cursor", "pointer", binding);
+  const [dragBounds, setDragBounds] = useInteractionField("dragBounds", "none", binding);
   const [threeD, setThreeD] = useState(defaultThreeDInteractionState);
   const setThreeDValue = <Key extends keyof ThreeDInteractionState>(
     key: Key,
@@ -971,6 +1004,7 @@ export function InteractionPanel({
 
   const isContinuous = continuousInteractionTriggers.has(trigger);
   const isCollision = collisionInteractionTriggers.has(trigger);
+  const isDropTargetTrigger = targetDragTriggers.has(trigger);
   const isPhysicalCollision = threeDCollisionTriggerOptions.some(
     (option) => option.value === trigger,
   );
@@ -997,6 +1031,15 @@ export function InteractionPanel({
     selectedEffect === "group-animation" ? groupEffect : selectedEffect;
   const isLiquidMerge = activeEffect === "liquid-merge";
   const isCollisionBounce = activeEffect === "collision-bounce";
+  const isTargetPlacementEffect = [
+    "snap-to-target",
+    "attach-to-target",
+  ].includes(activeEffect);
+  const isTargetMotionEffect = [
+    ...["snap-to-target", "attach-to-target"],
+    "return-to-origin",
+  ].includes(activeEffect);
+  const isModalEffect = ["open-modal", "close-modal"].includes(activeEffect);
   const isModelAnimationEffect = [
     "play-model-animation",
     "pause-model-animation",
@@ -1067,6 +1110,12 @@ export function InteractionPanel({
   );
   const targetChoices = obstacleChoices
     .filter((element) => {
+      if (
+        is2DSelection &&
+        (isDropTargetTrigger || isTargetPlacementEffect) &&
+        element.type === "object3d"
+      )
+        return false;
       if (isPhysicalCollision && is2DSelection)
         return element.type === "object3d";
       if (isPhysicalCollision && is3DSelection) return true;
@@ -1081,7 +1130,38 @@ export function InteractionPanel({
     (option) => option.value === collisionTarget,
   )
     ? collisionTarget
-    : (targetChoices[0]?.value ?? "");
+    : authoredInteraction
+      ? ""
+      : (targetChoices[0]?.value ?? "");
+  const matchObjectChoices = (selectedEntries.length
+    ? selectedEntries
+    : elements
+  ).map((element) => ({ label: element.name, value: element.id }));
+  const matchTypeChoices = Array.from(
+    new Set(
+      selectedTypes.length
+        ? selectedTypes
+        : elements.map((element) => element.type),
+    ),
+  ).map((type) => ({ label: interactionLabel(type), value: type }));
+  const selectedTargetMatchMode = [
+    "any",
+    "object-id",
+    "object-type",
+  ].includes(targetMatchMode)
+    ? targetMatchMode
+    : "any";
+  const modalTargetChoices = obstacleChoices
+    .filter((element) => element.type !== "object3d")
+    .map((element) => ({
+      label: `${element.name} (${element.type})`,
+      value: element.id,
+    }));
+  const selectedModalTarget = modalTargetChoices.some(
+    (option) => option.value === modalTarget,
+  )
+    ? modalTarget
+    : "";
   const selectedAnimationClip = animationNames.includes(threeD.animationClip)
     ? threeD.animationClip
     : (animationNames[0] ?? "");
@@ -1474,6 +1554,13 @@ export function InteractionPanel({
             groups={triggerGroups}
             onChange={(nextTrigger) => {
               const nextMapping = getMappingOptions(nextTrigger, threeDContext)[0]?.value ?? "";
+              const nextUsesTarget = targetDragTriggers.has(nextTrigger);
+              const currentTargetIsValid = targetChoices.some(
+                (item) => item.value === collisionTarget,
+              );
+              const firstTarget = nextUsesTarget
+                ? targetChoices[0]?.value
+                : undefined;
               const effectIsSupported = getEffectOptions(
                 selectedTypes,
                 nextTrigger,
@@ -1485,6 +1572,10 @@ export function InteractionPanel({
                   mapping: nextMapping,
                   mappingMode: "follow",
                   resetMode: "contextual",
+                  ...(nextUsesTarget ? { detection: "bounding-box" } : {}),
+                  ...(firstTarget && !currentTargetIsValid
+                    ? { collisionTarget: firstTarget }
+                    : {}),
                   ...(!effectIsSupported ? { effect: "move", name: "Move" } : {}),
                 });
                 return;
@@ -1493,6 +1584,9 @@ export function InteractionPanel({
               setMapping(nextMapping);
               setMappingMode("follow");
               setResetMode("contextual");
+              if (nextUsesTarget) setDetection("bounding-box");
+              if (firstTarget && !currentTargetIsValid)
+                setCollisionTarget(firstTarget);
               if (!effectIsSupported) {
                 setEffect("move");
               }
@@ -1597,7 +1691,12 @@ export function InteractionPanel({
                   onChange={setCollisionTarget}
                   options={
                     targetChoices.length
-                      ? targetChoices
+                      ? [
+                          ...(!selectedCollisionTarget
+                            ? [{ label: "Select a target…", value: "" }]
+                            : []),
+                          ...targetChoices,
+                        ]
                       : [
                           {
                             label: isLiquidMerge
@@ -1616,14 +1715,27 @@ export function InteractionPanel({
                 <DesignDropdown
                   ariaLabel="Collision detection"
                   className="interaction-dropdown"
-                  disabled={isPairEffect}
+                  disabled={isPairEffect || isDropTargetTrigger}
                   noScroll
                   onChange={setDetection}
-                  options={[
-                    { label: "Bounding box", value: "bounding-box" },
-                    { label: "Precise outline", value: "precise-outline" },
-                  ]}
-                  value={isPairEffect ? "precise-outline" : detection}
+                  options={
+                    isDropTargetTrigger
+                      ? [{ label: "Bounding box", value: "bounding-box" }]
+                      : [
+                          { label: "Bounding box", value: "bounding-box" },
+                          {
+                            label: "Precise outline",
+                            value: "precise-outline",
+                          },
+                        ]
+                  }
+                  value={
+                    isDropTargetTrigger
+                      ? "bounding-box"
+                      : isPairEffect
+                        ? "precise-outline"
+                        : detection
+                  }
                 />
               </Row>
             ) : (
@@ -1715,6 +1827,102 @@ export function InteractionPanel({
                 </p>
               </>
             )}
+            {isDropTargetTrigger ? (
+              <>
+                <p className="interaction-note">
+                  Target triggers include drag handling automatically; a separate
+                  Drag interaction is not required.
+                </p>
+                <Row label="Drop tolerance">
+                  <DesignNumberField
+                    ariaLabel="Drop target tolerance"
+                    label=""
+                    min={0}
+                    onChange={(value) => setDropTolerance(Math.max(0, value))}
+                    unit="px"
+                    value={dropTolerance}
+                  />
+                </Row>
+                {trigger === "drop-on-target" ? (
+                  <>
+                    <Row label="Capacity for this drop rule">
+                      <DesignNumberField
+                        ariaLabel="Target capacity"
+                        label=""
+                        min={0}
+                        onChange={(value) =>
+                          setTargetCapacity(Math.max(0, Math.round(value)))
+                        }
+                        value={targetCapacity}
+                      />
+                    </Row>
+                    <p className="interaction-note">
+                      Capacity 0 accepts an unlimited number of objects.
+                    </p>
+                  </>
+                ) : null}
+                <Row label="Accept">
+                  <DesignDropdown
+                    ariaLabel="Target match mode"
+                    className="interaction-dropdown"
+                    noScroll
+                    onChange={(value) => {
+                      setTargetMatchMode(value);
+                      if (value === "object-id") {
+                        setTargetMatchValue(matchObjectChoices[0]?.value ?? "");
+                      } else if (value === "object-type") {
+                        setTargetMatchValue(matchTypeChoices[0]?.value ?? "");
+                      } else {
+                        setTargetMatchValue("");
+                      }
+                    }}
+                    options={[
+                      { label: "Any object", value: "any" },
+                      { label: "Object ID", value: "object-id" },
+                      { label: "Object type", value: "object-type" },
+                    ]}
+                    value={selectedTargetMatchMode}
+                  />
+                </Row>
+                {selectedTargetMatchMode !== "any" ? (
+                  <Row label="Match value">
+                    <DesignDropdown
+                      ariaLabel="Target match value"
+                      className="interaction-dropdown"
+                      disabled={
+                        selectedTargetMatchMode === "object-id"
+                          ? matchObjectChoices.length === 0
+                          : matchTypeChoices.length === 0
+                      }
+                      noScroll
+                      onChange={setTargetMatchValue}
+                      options={
+                        selectedTargetMatchMode === "object-id"
+                          ? matchObjectChoices
+                          : matchTypeChoices
+                      }
+                      value={targetMatchValue}
+                    />
+                  </Row>
+                ) : null}
+                {trigger === "drop-on-target" ? (
+                  <Row label="When occupied">
+                    <DesignDropdown
+                      ariaLabel="Occupied target behavior"
+                      className="interaction-dropdown"
+                      noScroll
+                      onChange={setOccupiedBehavior}
+                      options={[
+                        { label: "Reject new object", value: "reject" },
+                        { label: "Replace current object", value: "replace" },
+                        { label: "Allow together", value: "allow" },
+                      ]}
+                      value={occupiedBehavior}
+                    />
+                  </Row>
+                ) : null}
+              </>
+            ) : null}
             {trigger === "near-target" ? (
               <>
                 <Row label="Join distance">
@@ -1747,7 +1955,11 @@ export function InteractionPanel({
                 </p>
               </>
             ) : null}
-            {isLiquidMerge ? (
+            {isDropTargetTrigger ? (
+              <p className="interaction-note">
+                Target acceptance currently uses the object bounding boxes.
+              </p>
+            ) : isLiquidMerge ? (
               <p className="interaction-note">
                 Merge proximity updates as the strands bend.
               </p>
@@ -2061,9 +2273,28 @@ export function InteractionPanel({
               const firstMergeTarget = nextEffect === "liquid-merge"
                 ? obstacleChoices.find((item) => is3DSelection ? item.type === "object3d" : isLiquidMergeShape(item.type))?.id
                 : undefined;
+              const isNextPlacementEffect = [
+                "snap-to-target",
+                "attach-to-target",
+              ].includes(nextEffect);
+              const firstPlacementTarget = isNextPlacementEffect
+                ? targetChoices[0]?.value
+                : undefined;
+              const isNextModalEffect = ["open-modal", "close-modal"].includes(
+                nextEffect,
+              );
+              const firstModalTarget = isNextModalEffect
+                ? modalTargetChoices[0]?.value
+                : undefined;
               const currentMergeTargetIsValid = obstacleChoices.some((item) =>
                 item.id === collisionTarget &&
                 (is3DSelection ? item.type === "object3d" : isLiquidMergeShape(item.type)),
+              );
+              const currentPlacementTargetIsValid = targetChoices.some(
+                (item) => item.value === collisionTarget,
+              );
+              const currentModalTargetIsValid = modalTargetChoices.some(
+                (item) => item.value === modalTarget,
               );
               if (authoredInteraction && selectedElementId && onUpdateInteraction)
                 onUpdateInteraction(selectedElementId, authoredInteraction.id, {
@@ -2072,10 +2303,20 @@ export function InteractionPanel({
                   ...(firstMergeTarget && !currentMergeTargetIsValid
                     ? { collisionTarget: firstMergeTarget, detection: "precise-outline" }
                     : {}),
+                  ...(firstPlacementTarget && !currentPlacementTargetIsValid
+                    ? { collisionTarget: firstPlacementTarget }
+                    : {}),
+                  ...(firstModalTarget && !currentModalTargetIsValid
+                    ? { modalTarget: firstModalTarget }
+                    : {}),
                 });
               else {
                 setEffect(nextEffect);
                 if (firstMergeTarget && !currentMergeTargetIsValid) setCollisionTarget(firstMergeTarget);
+                if (firstPlacementTarget && !currentPlacementTargetIsValid)
+                  setCollisionTarget(firstPlacementTarget);
+                if (firstModalTarget && !currentModalTargetIsValid)
+                  setModalTarget(firstModalTarget);
               }
             }}
             options={effectChoices}
@@ -2425,39 +2666,136 @@ export function InteractionPanel({
             />
           </>
         ) : null}
-        {activeEffect === "attach-to-target" ? (
+        {isTargetPlacementEffect ? (
           <>
-            <Row label="Target">
+            {!isDropTargetTrigger ? (
+              <Row label="Target">
+                <DesignDropdown
+                  ariaLabel="Placement target"
+                  className="interaction-dropdown"
+                  disabled={targetChoices.length === 0}
+                  noScroll
+                  onChange={setCollisionTarget}
+                  options={
+                    targetChoices.length
+                      ? targetChoices
+                      : [{ label: "No other objects", value: "" }]
+                  }
+                  value={selectedCollisionTarget}
+                />
+              </Row>
+            ) : null}
+            <Row label="Snap anchor">
               <DesignDropdown
-                ariaLabel="Attach target"
+                ariaLabel="Target snap anchor"
                 className="interaction-dropdown"
-                disabled={targetChoices.length === 0}
                 noScroll
-                onChange={(value) => setThreeDValue("attachTarget", value)}
-                options={
-                  targetChoices.length
-                    ? targetChoices
-                    : [{ label: "No other objects", value: "" }]
-                }
-                value={
-                  targetChoices.some(
-                    (item) => item.value === threeD.attachTarget,
-                  )
-                    ? threeD.attachTarget
-                    : (targetChoices[0]?.value ?? "")
-                }
+                onChange={setSnapAnchor}
+                options={[
+                  { label: "Center", value: "center" },
+                  { label: "Top Left", value: "top-left" },
+                  { label: "Top Right", value: "top-right" },
+                  { label: "Bottom Left", value: "bottom-left" },
+                  { label: "Bottom Right", value: "bottom-right" },
+                  { label: "Custom offset", value: "custom" },
+                ]}
+                value={snapAnchor}
               />
             </Row>
-            <ToggleRow
-              checked={threeD.preserveWorldTransform}
-              label="Preserve world transform"
-              onChange={() =>
-                setThreeDValue(
-                  "preserveWorldTransform",
-                  !threeD.preserveWorldTransform,
-                )
-              }
-            />
+            {snapAnchor === "custom" ? (
+              <Row label="Offset">
+                <div className="interaction-field-pair">
+                  <DesignNumberField
+                    ariaLabel="Target snap offset X"
+                    label="X"
+                    onChange={setSnapOffsetX}
+                    value={snapOffsetX}
+                  />
+                  <DesignNumberField
+                    ariaLabel="Target snap offset Y"
+                    label="Y"
+                    onChange={setSnapOffsetY}
+                    value={snapOffsetY}
+                  />
+                </div>
+              </Row>
+            ) : null}
+            {activeEffect === "attach-to-target" ? (
+              <ToggleRow
+                checked={attachPreserveOffset}
+                label="Preserve current offset"
+                onChange={() => setAttachPreserveOffset(!attachPreserveOffset)}
+              />
+            ) : null}
+          </>
+        ) : null}
+        {activeEffect === "return-to-origin" ? (
+          <p className="interaction-note">
+            Returns to the position captured when the interaction starts.
+          </p>
+        ) : null}
+        {isModalEffect ? (
+          <>
+            <Row label="Dialog layer">
+              <DesignDropdown
+                ariaLabel="Modal target"
+                className="interaction-dropdown"
+                disabled={modalTargetChoices.length === 0}
+                noScroll
+                onChange={setModalTarget}
+                options={
+                  modalTargetChoices.length
+                    ? [
+                        ...(!selectedModalTarget
+                          ? [{ label: "Select a dialog layer…", value: "" }]
+                          : []),
+                        ...modalTargetChoices,
+                      ]
+                    : [{ label: "No layers on this page", value: "" }]
+                }
+                value={selectedModalTarget}
+              />
+            </Row>
+            <p className="interaction-note">
+              Selecting a grouped layer opens the whole group as one dialog.
+            </p>
+            {activeEffect === "open-modal" ? (
+              <>
+                <ToggleRow
+                  checked={modalBackdrop}
+                  label="Backdrop"
+                  onChange={() => setModalBackdrop(!modalBackdrop)}
+                />
+                <ToggleRow
+                  checked={modalCloseOnEscape}
+                  label="Close on Escape"
+                  onChange={() =>
+                    setModalCloseOnEscape(!modalCloseOnEscape)
+                  }
+                />
+                <ToggleRow
+                  checked={modalCloseOnBackdrop}
+                  label="Close on backdrop"
+                  onChange={() =>
+                    setModalCloseOnBackdrop(!modalCloseOnBackdrop)
+                  }
+                />
+                <ToggleRow
+                  checked={modalTrapFocus}
+                  label="Trap keyboard focus"
+                  onChange={() => setModalTrapFocus(!modalTrapFocus)}
+                />
+                <ToggleRow
+                  checked={modalRestoreFocus}
+                  label="Restore trigger focus"
+                  onChange={() => setModalRestoreFocus(!modalRestoreFocus)}
+                />
+                <p className="interaction-note">
+                  The runtime supplies dialog semantics and blocks background
+                  interaction while this layer is open.
+                </p>
+              </>
+            ) : null}
           </>
         ) : null}
         {isModelAnimationEffect ? (
@@ -3938,6 +4276,44 @@ export function InteractionPanel({
 
         {advancedOpen ? (
           <>
+            {trigger === "drag" ||
+            isDropTargetTrigger ||
+            isTargetMotionEffect ? (
+              <>
+                <p className="interaction-subheading">Drag Constraints</p>
+                <Row label="Axis">
+                  <DesignDropdown
+                    ariaLabel="Advanced drag axis"
+                    className="interaction-dropdown"
+                    noScroll
+                    onChange={setDragAxis}
+                    options={[
+                      { label: "Free", value: "free" },
+                      { label: "X only", value: "x" },
+                      { label: "Y only", value: "y" },
+                    ]}
+                    value={dragAxis}
+                  />
+                </Row>
+                <Row label="Movement bounds">
+                  <DesignDropdown
+                    ariaLabel="Drag movement bounds"
+                    className="interaction-dropdown"
+                    noScroll
+                    onChange={setDragBounds}
+                    options={[
+                      { label: "Unbounded", value: "none" },
+                      { label: "Inside artboard", value: "artboard" },
+                    ]}
+                    value={dragBounds === "artboard" ? "artboard" : "none"}
+                  />
+                </Row>
+                <p className="interaction-note">
+                  Constraints apply while dragging, before target acceptance and
+                  snapping are evaluated.
+                </p>
+              </>
+            ) : null}
             <p className="interaction-subheading">Conflict &amp; Priority</p>
             <Row label="Same property">
               <DesignDropdown

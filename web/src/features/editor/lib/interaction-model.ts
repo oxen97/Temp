@@ -34,6 +34,13 @@ export type InteractionDefinition = {
   longPressSeconds: number;
   collisionTarget: string;
   detection: string;
+  /** Extra artboard-pixel reach around the target that counts as a valid drop. */
+  dropTolerance: number;
+  /** Maximum attached occupants; zero means unlimited. */
+  targetCapacity: number;
+  targetMatchMode: string;
+  targetMatchValue: string;
+  occupiedBehavior: string;
   joinDistance: number;
   releaseDistance: number;
   timeSeconds: number;
@@ -84,6 +91,16 @@ export type InteractionDefinition = {
   impactMass: number;
   targetMass: number;
   impactFriction: number;
+  snapAnchor: string;
+  snapOffsetX: number;
+  snapOffsetY: number;
+  attachPreserveOffset: boolean;
+  modalTarget: string;
+  modalBackdrop: boolean;
+  modalCloseOnEscape: boolean;
+  modalCloseOnBackdrop: boolean;
+  modalTrapFocus: boolean;
+  modalRestoreFocus: boolean;
 
   // HOW — motion
   motion: string;
@@ -119,6 +136,7 @@ export type InteractionDefinition = {
   resetMode: string;
 
   // ADVANCED
+  dragBounds: string;
   sameProperty: string;
   otherProperty: string;
   repeat: number;
@@ -157,6 +175,11 @@ export function createDefaultInteraction(
     longPressSeconds: 0.5,
     collisionTarget: "",
     detection: "bounding-box",
+    dropTolerance: 24,
+    targetCapacity: 1,
+    targetMatchMode: "any",
+    targetMatchValue: "",
+    occupiedBehavior: "reject",
     joinDistance: 30,
     releaseDistance: 45,
     timeSeconds: 5,
@@ -202,6 +225,16 @@ export function createDefaultInteraction(
     impactMass: 1,
     targetMass: 1,
     impactFriction: 20,
+    snapAnchor: "center",
+    snapOffsetX: 0,
+    snapOffsetY: 0,
+    attachPreserveOffset: false,
+    modalTarget: "",
+    modalBackdrop: true,
+    modalCloseOnEscape: true,
+    modalCloseOnBackdrop: true,
+    modalTrapFocus: true,
+    modalRestoreFocus: true,
 
     motion: "spring",
     springStrength: 100,
@@ -233,6 +266,7 @@ export function createDefaultInteraction(
 
     resetMode: "contextual",
 
+    dragBounds: "none",
     sameProperty: "replace",
     otherProperty: "parallel",
     repeat: 1,

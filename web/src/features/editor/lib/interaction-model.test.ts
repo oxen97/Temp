@@ -21,6 +21,13 @@ describe("interaction model", () => {
     expect(interaction.strandNeighborRadius).toBe(0);
     expect(interaction.strandNeighborStrength).toBe(0);
     expect(interaction.liquidAttraction).toBe(0);
+    expect(interaction.dropTolerance).toBe(24);
+    expect(interaction.targetCapacity).toBe(1);
+    expect(interaction.targetMatchMode).toBe("any");
+    expect(interaction.occupiedBehavior).toBe("reject");
+    expect(interaction.snapAnchor).toBe("center");
+    expect(interaction.modalCloseOnEscape).toBe(true);
+    expect(interaction.dragBounds).toBe("none");
     expect(interaction.id).toBeTruthy();
   });
 
@@ -107,6 +114,29 @@ describe("interaction model", () => {
     expect(normalizeInteraction({ effect: "liquid-merge" }).liquidAttraction).toBe(0);
     const authored = createDefaultInteraction({ effect: "liquid-merge", liquidAttraction: 72 });
     expect(normalizeInteraction(JSON.parse(JSON.stringify(authored))).liquidAttraction).toBe(72);
+  });
+
+  it("round-trips target placement and modal authoring fields", () => {
+    const interaction = createDefaultInteraction({
+      attachPreserveOffset: true,
+      collisionTarget: "slot-a",
+      dragBounds: "artboard",
+      dropTolerance: 36,
+      effect: "snap-to-target",
+      modalCloseOnBackdrop: false,
+      modalTarget: "letter-dialog",
+      occupiedBehavior: "replace",
+      snapAnchor: "custom",
+      snapOffsetX: 4,
+      snapOffsetY: -8,
+      targetCapacity: 3,
+      targetMatchMode: "object-type",
+      targetMatchValue: "star",
+      trigger: "drop-on-target",
+    });
+    expect(normalizeInteraction(JSON.parse(JSON.stringify(interaction)))).toEqual(
+      interaction,
+    );
   });
 
   it("normalizes a list, dropping non-objects", () => {

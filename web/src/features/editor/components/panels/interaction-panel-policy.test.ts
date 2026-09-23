@@ -25,6 +25,9 @@ describe("interaction mapping policy", () => {
     ["click-tap", []],
     ["overlap-start", []],
     ["drop-on-target", []],
+    ["drop-outside-target", []],
+    ["drag-enter-target", []],
+    ["drag-leave-target", []],
     ["page-enter", []],
     ["video-starts", []],
   ])("shows only the mappings relevant to %s", (trigger, expected) => {
@@ -41,6 +44,15 @@ describe("effect options by selected element", () => {
     expect(effects).not.toContain("text-reveal");
     expect(effects).not.toContain("play");
     expect(effects).not.toContain("group-animation");
+    expect(effects).toEqual(
+      expect.arrayContaining([
+        "snap-to-target",
+        "return-to-origin",
+        "attach-to-target",
+        "open-modal",
+        "close-modal",
+      ]),
+    );
   });
 
   it.each([
@@ -145,7 +157,7 @@ describe("effect and motion compatibility", () => {
     ]);
   });
 
-  it.each(["order", "play", "pause", "resume", "seek"])(
+  it.each(["order", "play", "pause", "resume", "seek", "open-modal", "close-modal"])(
     "hides HOW for the immediate %s command",
     (effect) => {
       expect(getMotionOptions("click-tap", "", effect)).toEqual([]);
@@ -176,6 +188,16 @@ describe("effect and motion compatibility", () => {
     expect(
       values(getMotionOptions("overlap-start", "", "collision-bounce")),
     ).toEqual(["collision-bounce"]);
+  });
+
+  it("limits target placement and modal actions to their authored motions", () => {
+    expect(
+      values(getMotionOptions("drop-on-target", "", "snap-to-target")),
+    ).toEqual(["direct", "spring"]);
+    expect(
+      values(getMotionOptions("drag-leave-target", "", "return-to-origin")),
+    ).toEqual(["direct", "spring"]);
+    expect(getMotionOptions("click-tap", "", "open-modal")).toEqual([]);
   });
 });
 
@@ -232,6 +254,21 @@ describe("contextual reset policy", () => {
     const policy = getResetPolicy("page-enter", "tap", "move", true);
     expect(policy.description).toContain("settled pile until page exit");
     expect(values(policy.options)).toEqual(["contextual", "restart"]);
+  });
+
+  it("offers target-aware reset choices for placement actions", () => {
+    const policy = getResetPolicy(
+      "drop-on-target",
+      "tap",
+      "snap-to-target",
+    );
+    expect(values(policy.options)).toEqual([
+      "contextual",
+      "stay-at-target",
+      "return-to-origin",
+      "page-exit",
+    ]);
+    expect(policy.description).toContain("stay attached");
   });
 });
 
@@ -305,6 +342,10 @@ describe("3D interaction policy", () => {
         "material-parameter",
       ]),
     );
+    expect(threeD).not.toContain("snap-to-target");
+    expect(threeD).not.toContain("return-to-origin");
+    expect(threeD).not.toContain("open-modal");
+    expect(threeD).not.toContain("close-modal");
     expect(threeD).not.toContain("play-model-animation");
   });
 

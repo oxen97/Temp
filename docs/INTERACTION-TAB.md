@@ -1,4 +1,4 @@
-# Interaction 탭 — 전체 기획 + 구현 현황 (2026-09-21)
+# Interaction 탭 — 전체 기획 + 구현 현황 (2026-09-24)
 
 관람객 인터랙션(클릭·호버·드래그·충돌·시간 등)에 반응하는 효과를 작가가
 코드 없이 붙이는 탭. 확정 스펙 목업: `docs/interaction-panel-final.png`
@@ -6,24 +6,28 @@
 
 ## 현재 상태
 
-- **패널과 런타임의 연결은 아직 없음.** 현재 `interaction-panel.tsx`의 설정은
-  컴포넌트 로컬 샘플이며, 패널에서 바꾼 값은 에디터 스토어의 인터랙션 데이터나
-  뷰어에 반영되지 않는다. 다만 `InteractionDefinition` 모델, 요소별 스토어
-  조작과 일부 인터랙션을 재생하는 독립 뷰어 런타임은 이미 구현됐다. 즉
-  "패널에서 설정 불가"와 "런타임 자체가 없음"을 혼동하지 않는다.
-- **2026-09-19 UI 추가**: 근접한 두 도형의 `Liquid Merge`와 충돌 시
-  `Bounce Off Target` 설정 필드를 추가했다. 상대 요소 목록은 현재 페이지의
-  실제 레이어를 사용하지만, 설정 저장·뷰어 렌더링·충돌 물리는 여전히 미연결이다.
+- **2D 패널 → 요소 데이터 → Preview 연결됨.** `InteractionPanel`은 요소별
+  `InteractionDefinition`을 스토어에서 읽고 추가·수정·삭제한다. Preview는
+  지원하는 트리거·효과를 이 데이터에서 실행한다. 아래 표의 전체 기획 조합이
+  모두 재생되는 것은 아니며, 3D 확장 UI·Logic 연동에는 별도 제한이 있다.
+- **2026-09-24 2D 타깃 드래그·모달 추가**: Drop On/Outside Target,
+  Drag Enter/Leave Target은 드래그 제스처를 자동으로 제공한다. Snap to Target,
+  Return to Origin, Attach to Target 및 Open/Close Modal을 패널에서 설정하고
+  Preview에서 실행한다. 드롭 판정은 화면에 그려진 2D 요소의 bounding box를
+  사용한다. 3D 오브젝트에는 이 2D 타깃 드롭 기능을 표시하지 않는다.
+- **2026-09-19 두 요소 효과 추가**: 근접한 두 도형의 `Liquid Merge`와 충돌 시
+  `Bounce Off Target` 설정 필드를 추가했다. 2D Liquid Merge는 Preview의
+  제한된 메타볼/스트랜드 경로에서 실행된다. Bounce Off Target의 기획된
+  물체 간 충돌 반응은 아직 Preview에 연결되지 않았다.
 - **2026-09-19 UI 추가**: `Move → Gravity → Contact behavior: Stack & Settle`을
   추가했다. 쌓일 물체와 고정 장애물, Mass·Friction·Bounciness·Settle speed를
-  설정하는 조건부 UI이며, 실제 쌓임·안정화 물리와 저장은 아직 미연결이다.
+  설정하는 조건부 UI이며, 실제 쌓임·안정화 물리는 아직 미연결이다.
 - **2026-09-20 3D·씬 로직 기획 UI 완성**: 3D 오브젝트의 물리 충돌,
   XYZ/좌표 공간, 카메라, 조명·그림자·후처리·Shader, GLB 애니메이션·재질·
   모프·Bone·Joint·Mesh·Face Group, 3D Reset scope와 Rigid body/Collider/
   Constraint/Blending 설정을 표시한다. 2D 요소도 3D 요소가 같은 Scene에 있으면
   Z·Depth를 가진 충돌 프록시로 실제 2D↔3D 물리 충돌을 기획할 수 있다.
-  **이 확장도 현재는 패널 로컬 상태를 바꾸는 UI 프리뷰다. 아래의 제한된
-  런타임 구현과 패널의 전체 기획 항목은 아직 연결되지 않았다.**
+  **3D 확장 항목 전체가 Preview에서 실행되는 상태는 아니다.**
 - **3D Scene 기반은 별도로 구현됨**: 페이지의 `objects3d`/`scene3d`, 3D
   프리미티브·벡터 변환·GLB 데이터 모델, WebGL 렌더링, 선택, 프로젝트 문서
   직렬화와 GLB IndexedDB 저장 기반은 존재한다. 3D 장면의 일부 호버·클릭
@@ -32,13 +36,17 @@
 - **제한된 런타임 기반**: `interaction-model.ts`가 패널·스토어·뷰어의 공통
   데이터 타입을 제공한다. 뷰어는 2D Click/Tap, Hover, Drag, After Delay,
   Pointer Move, Scroll/Swipe 트리거와 Move, Rotate, Scale, Opacity, Skew,
-  Blur, Shadow, Show/Hide, Shake 효과의 일부 조합을 재생한다. Rapier 2D/3D
-  중력·바운스 및 2D↔3D 정적 충돌 프록시는 별도 경로다. 전체 조건표,
-  충돌 이벤트, 우선순위, 키프레임, Logic 연동은 아직 런타임과 연결되지 않았다.
-- **배포 시 데모 자동 생성 없음**: `?threeDemo=1`과
-  `?interactionDemo=1`은 더 이상 샘플 객체를 생성하지 않으며 Pages 빌드에도
-  데모 활성화 플래그를 사용하지 않는다. 3D GLB/GLTF 업로드 버튼도 UI 확정
-  전에는 제외한다. 모델 파일 처리와 장면 렌더링 기반 코드는 유지된다.
+  Blur, Shadow, Show/Hide, Shake 효과의 일부 조합을 재생한다. 위의 2D 타깃
+  드래그·모달 명령도 실행한다. Rapier 2D/3D 중력·바운스 및 2D↔3D 정적
+  충돌 프록시는 별도 경로다. 전체 조건표, 정밀 충돌 이벤트, 우선순위,
+  키프레임, Logic 연동은 아직 런타임과 연결되지 않았다.
+- **에디터 데모 URL**: `?interactionDemo=1`/`mon-native`/`mon-art`는
+  MON 샘플을, `?interactionDemo=pinocchio-native`는 피노키오 샘플을,
+  `?interactionDemo=classic`은 기존 2D 샘플을 생성한다. `?threeDemo=1`은
+  3D 샘플을 생성한다. `?interactionDemo=night-post-office`는 별자리 샘플을
+  생성하고 Preview를 연다. Preview를 닫으면 별을 선택해 INTERACTION 탭의
+  설정을 확인할 수 있다. 독립 경로 `/demos/night-post-office`의 세 별 완료
+  조건·동적 진행률은 해당 페이지 코드이며 에디터 seed의 Logic 연동은 아직 없다.
 - **정밀 Keyframe 편집기 UI 추가**: 2D/3D Position·Rotation·Scale·Opacity,
   Material, Morph Target 트랙과 키프레임 추가·복제·삭제, 시간·값·Easing,
   재생 헤드와 확대/축소를 별도 전체 화면 편집기에서 조절한다.
@@ -119,7 +127,7 @@
 
 ## 1. WHEN — 트리거
 
-**Trigger** 드롭다운 (6그룹 23종, 그룹 헤딩 표시):
+**Trigger** 드롭다운 (2D 기본 6그룹 26종, 그룹 헤딩 표시):
 
 | 그룹          | 트리거                    | 의미 · 규칙                                                                        |
 | ------------- | ------------------------- | ---------------------------------------------------------------------------------- |
@@ -136,11 +144,14 @@
 |               | While Overlapping         | 겹쳐 있는 동안 (연속형 — Overlap Time 매핑 사용 가능)                              |
 |               | Overlap End               | 겹침이 끝나는 순간                                                                 |
 |               | Drop On Target            | 대상 위에 겹친 상태로 드래그를 놓는 순간 (드롭 존)                                 |
+|               | Drop Outside Target       | 드래그를 놓을 때 지정 대상 바깥에 있는 경우                                      |
+|               | Drag Enter Target         | 드래그 중 지정 대상의 판정 영역에 들어가는 순간                                  |
+|               | Drag Leave Target         | 드래그 중 지정 대상의 판정 영역에서 나오는 순간                                  |
 |               | Near Target               | 상대 외곽선과 Join distance 이내로 가까워진 동안. Liquid Merge용 연속형            |
 | Time          | After Delay               | 페이지 진입 N초 후 1회                                                             |
 |               | Repeat Every…             | 페이지 진입 후 N초마다 반복 (상시 구동 연출)                                       |
 |               | Idle Start / Idle End     | 관람객 입력이 N초 없을 때 / 다시 입력이 들어올 때                                  |
-| Media         | Video Starts / Video Ends | 비디오 요소 재생 시작/끝 (비디오 요소 타입 신설 선행)                              |
+| Media         | Video Starts / Video Ends | 비디오 요소 재생 시작/끝 (현재 Source video 선택·감지 런타임은 미연결)              |
 | Page          | Page Enter / Page Exit    | 페이지 진입/이탈                                                                   |
 
 **Trigger area** — 행동을 감지하는 범위 (효과 적용 대상과 별개).
@@ -155,8 +166,8 @@ Tap & pointer·Continuous·Collision 트리거에서만 표시한다. Page·Time
 
 **Source video** — Video Starts/Ends에서 Trigger area 대신 표시한다.
 현재 페이지의 비디오 요소 중 재생 이벤트를 감지할 대상을 고른다.
-비디오 요소 타입이 아직 없을 때는 선택 불가 상태와 안내 문구를 보여주며,
-존재하지 않는 비디오를 임의로 지정하지 않는다.
+비디오 요소 타입은 존재하지만 현재 패널의 Source video 선택칸은 비활성화돼
+있고, Video Starts/Ends 감지 런타임도 연결되지 않았다.
 
 **Hold duration** — Long Press 트리거 또는 Hover의 Mobile fallback에서
 Long Press를 선택했을 때 표시한다. 기본 0.5초, 최소 0.1초, 0.1초 단위로
@@ -178,6 +189,16 @@ Long Press를 선택했을 때 표시한다. 기본 0.5초, 최소 0.1초, 0.1�
 | Target element                   | 겹침 상대 요소 지정. **대상이 삭제되면 이 인터랙션은 자동 비활성 + 경고 표시**                               |
 | Detection                        | Bounding box(기본, 빠름) / Precise outline(도형 외곽선 정밀 판정)                                            |
 | Join distance / Release distance | Near Target 전용. 연결 시작 거리와 다시 분리할 거리(px). Release는 Join 이상으로 제한해 경계에서 깜빡임 방지 |
+
+**2D 타깃 드래그 전용 (Preview 실행됨)**: 위 네 트리거는 별도 Drag 행이 없어도
+마우스·터치 드래그를 시작한다. Detection은 Bounding box만 제공한다. 이동 중
+렌더링된 외곽 사각형의 간격이 Drop tolerance(px) 이내이면 대상에 닿은 것으로
+판정한다. `Accept`는 Any object / Object ID / Object type이며, 조건에 맞지
+않으면 발동하지 않는다. Drop On Target에서만 `Capacity for this drop rule`
+(0=무제한)과 `When occupied`(Reject new object / Replace current object /
+Allow together)를 표시한다. 같은 드롭에 효과 행이 여러 개 있으면 수용 여부를
+확인한 뒤 해당 행들을 함께 실행한다. 이동 제한은 ADVANCED의 Drag Constraints를
+따른다. 이 경로는 2D 요소용이며 3D 오브젝트 선택 시 표시하지 않는다.
 
 현재 프리뷰의 Target element는 같은 페이지의 실제 다른 요소만 나열한다.
 Liquid Merge 선택 시에는 닫힌 도형(사각형·원·삼각형·별)만 대상에 표시하며,
@@ -250,9 +271,25 @@ Target: A).
 | 요소 타입        | 추가 효과                                                                                                      |
 | ---------------- | -------------------------------------------------------------------------------------------------------------- |
 | Image            | 공통 + Particle · Pixelate · Dissolve · Trail (WebGL 이펙트 레이어)                                            |
-| Video            | Blur · Color · Play · Pause · Resume · Seek (비디오 요소 타입 신설 선행 — 현재 CanvasElementType에 video 없음) |
+| Video            | 공통 + Play · Pause · Resume · Seek (UI에 있음. 재생 제어 런타임은 미연결)                                |
 | Text             | Reveal · **Stroke Draw**(획 그리기) · Character / Word Animation                                               |
 | Multi(다중 선택) | Group Animation (TIMING의 Stagger 사용)                                                                        |
+
+**2D 요소용 타깃·모달 명령 (패널과 Preview 연결됨)**:
+
+| 효과             | 설정과 Preview 동작                                                                                       |
+| ---------------- | --------------------------------------------------------------------------------------------------------- |
+| Snap to Target   | Target, Snap anchor(중앙·네 모서리·사용자 오프셋). 승인된 위치에 정렬                                     |
+| Return to Origin | 드래그 시작 때 캡처한 위치로 복귀                                                                        |
+| Attach to Target | Target, Snap anchor, Preserve current offset. 대상이 이동하면 붙은 요소도 따라감                        |
+| Open Modal       | Dialog layer(그룹 선택 시 그룹 전체), Backdrop, ESC/배경 클릭 닫기, 키보드 포커스 제한·복원             |
+| Close Modal      | Dialog layer를 닫음                                                                                       |
+
+Snap·Return·Attach의 HOW는 Direct/Spring 중 선택한다. Open/Close Modal은
+HOW를 숨기고 Preview에서 Delay 후 상태를 변경한다. 모달은
+대화상자 역할을 부여하고
+열린 동안 배경 상호작용을 막는다. 여러 조건을 결합하는 Logic 카운터(예: 별 세
+개가 모두 자리를 채우면 편지 열기)는 이 기능에 포함되지 않는다.
 
 **두 요소 효과(UI 프리뷰)**:
 
@@ -301,7 +338,7 @@ Effect별 허용 Behavior (A-2의 트리거·매핑 제한과 다시 교집합�
 | Scale                                                                                                                                               | Direct · Spring · Bounce                                                                                      |
 | Skew · Distort                                                                                                                                      | Direct · Spring                                                                                               |
 | Opacity · Color · Blur · Shadow · Show/Hide · Shake · Particle · Pixelate · Dissolve · Trail · Text Reveal · Stroke Draw · Character/Word Animation | Direct만. 이벤트형에서는 TIMING의 Time·Easing으로 시각 전환 가능                                              |
-| Order · Video Play/Pause/Resume/Seek                                                                                                                | HOW 섹션 숨김(내부적으로 즉시 실행). TIMING은 Delay만 표시                                                    |
+| Order · Video Play/Pause/Resume/Seek · Open/Close Modal                                                                                              | HOW 섹션 숨김(내부적으로 즉시 실행). TIMING은 Delay만 표시                                                    |
 | Group Animation                                                                                                                                     | 그룹 안에서 고른 자식 Effect의 허용 Behavior를 따름                                                           |
 | Liquid Merge                                                                                                                                        | Direct · Spring. 근접도를 따라 연결 정도를 연속 갱신                                                          |
 | Bounce Off Target                                                                                                                                   | Collision bounce 단일 Behavior. Bounciness · 선택 요소 Mass · (Both일 때) Target mass · Friction을 HOW에 표시 |
@@ -352,7 +389,9 @@ Duration/Easing/Keyframes/Playback은 숨기고 HOW의 물리값은 유지한다
 | Drag                                                                     | Return when trigger ends(놓으면 복귀)                                                                                | Keep final state             |
 | While Overlapping                                                        | 겹침이 끝나면 복귀                                                                                                   | Keep final state             |
 | Near Target                                                              | Release distance 밖으로 떨어지면 분리                                                                                | Keep final state             |
-| Overlap Start/End · Drop On Target                                       | Keep final state                                                                                                     | Restart when triggered again |
+| Overlap Start/End                                                        | Keep final state                                                                                                     | Restart when triggered again |
+| Drop On Target · Drag Enter Target                                       | 승인된 대상 위치에 유지                                                                                             | Return to origin · Return on page exit |
+| Drop Outside Target · Drag Leave Target                                 | 대상 밖에 놓거나 영역을 나가면 드래그 시작 위치로 복귀                                                               | Stay at target · Return on page exit |
 | Scroll/Swipe                                                             | 스크롤 진행도·역방향을 따라 효과도 되돌아감                                                                          | Keep final state             |
 | Wheel/Pinch                                                              | 마지막 매핑값 유지, 페이지 이탈 시 런타임 상태 폐기                                                                  | Return when trigger ends     |
 | Time(After Delay·Repeat Every·Idle Start/End) · Media(Video Starts/Ends) | Keep final state                                                                                                     | Restart when triggered again |
@@ -364,6 +403,11 @@ Duration/Easing/Keyframes/Playback은 숨기고 HOW의 물리값은 유지한다
 상태를 유지하고, 다음 페이지 진입 시 초기화한다. 대안은 재발동 시 처음부터
 다시 쌓는 Restart when triggered again이다.
 
+Snap/Attach/Return은 `Stay at target`, `Return to origin`, `Return on page
+exit` 중 선택할 수 있다. Open/Close Modal은 다른 인터랙션이 모달 상태를
+바꾸거나 페이지를 나갈 때까지 상태를 유지한다. 타깃 드래그의 복귀·유지
+처리는 현재 2D Preview 런타임에 구현되어 있다.
+
 Fire at threshold는 발생 순간부터 단발 이벤트로 취급하되, 선택한 원래
 트리거의 복귀 의미를 유지한다(예: Drag는 놓으면 복귀, Scroll은 역방향으로
 임계값 아래로 내려갈 때 재장전). 복귀 애니메이션은 이벤트형이면 해당
@@ -372,6 +416,10 @@ Time·Easing, Follow input이면 Smoothing·Easing을 따른다.
 패널에 상시 표기).
 
 ## ADVANCED (기본 접힘)
+
+2D Drag 및 타깃 드래그에는 **Drag Constraints**가 표시된다. Axis는 Free /
+X only / Y only, Movement bounds는 Unbounded / Inside artboard이며 이동 중
+적용한 뒤 드롭 판정과 스냅을 수행한다.
 
 | 컨트롤          | 기능                                                                                                                              |
 | --------------- | --------------------------------------------------------------------------------------------------------------------------------- |
@@ -396,12 +444,10 @@ Trigger는 같은 Scene에 두 종류가 있을 때 2D 또는 3D 단일 선택�
 에디터 탐색 카메라는 계속 정면 고정이며, Camera Effect는 관람 Preview의 작품
 카메라를 애니메이션한다. 좌표 공간·회전·물리는 해당 오브젝트에 적용된다.
 
-> 패널 구현 범위: 아래 필드를 조건부로 표시하고 값을 바꿀 수 있으며, GLB
-> 메타데이터를 읽어 선택지를 채운다. 값은 `interaction-panel.tsx`의 로컬
-> 상태이므로 선택을 벗어나거나 새로고침하면 유지되지 않는다. 별도로 구현된
-> Rapier 기반 중력·바운스 및 2D↔3D 정적 프록시 충돌은 이 패널 값과 아직
-> 연결되지 않았다. 기획된 충돌 이벤트, 애니메이션 믹싱, 셰이더 변경,
-> 패널 설정 저장도 후속 범위다.
+> 패널 구현 범위: 아래 3D 필드는 조건부로 표시하지만, 2D 타깃 드래그·모달
+> 명령처럼 모두 Preview와 연결된 것은 아니다. Rapier 기반 중력·바운스 및
+> 2D↔3D 정적 프록시 충돌은 별도 경로다. 기획된 충돌 이벤트,
+> 애니메이션 믹싱, 셰이더 변경은 후속 범위다.
 
 ### 3D WHEN — 물리 충돌과 모델 애니메이션
 
@@ -528,20 +574,20 @@ Friction, Bounciness 같은 물리 반응값은 감지 결과에 영향을 주�
 
 ## 다음 구현 단계 가이드 (기능 구현 시)
 
-1. **패널 연결**: 로컬 샘플 상태를 기존 `InteractionDefinition`과 요소별
-   스토어 조작에 연결한다. Collision/Multi 선택을 위한 감지 주체·적용 대상
-   참조 구조를 확정하고 SOUND 탭 Trigger 어휘와 통일한다.
+1. **패널 연결 범위 확장**: 2D 기본 설정과 타깃 드래그·모달은 요소별
+   `InteractionDefinition`과 Preview에 연결됐다. 남은 3D·충돌 기획 항목 및
+   SOUND 탭과의 Trigger 어휘를 정리한다.
 2. **뷰어 런타임 확장**: `viewer-preview.tsx`의 기존 2D 트리거·효과 평가기에
    조건표, Reset, 우선순위, 키프레임을 단계적으로 추가한다. 관람 효과는
    런타임 상태에서만 계산하고 원본 요소 속성은 변경하지 않는다.
-3. **2D 충돌 이벤트**: AABB 우선 → 겹칠 때만 `lib/pathfinder.ts` 외곽선 교차.
-   참여 요소만 검사.
+3. **2D 정밀 충돌 이벤트**: 타깃 드래그의 AABB 판정 외에 기획된 일반 충돌
+   이벤트를 확장한다. 필요한 경우에만 `lib/pathfinder.ts` 외곽선 교차를 사용한다.
 4. **3D 충돌·애니메이션 확장**: 기존 Rapier 3D World와 2D 정적 프록시에
    기획된 충돌 이벤트·물체 간 반응을 연결한다. GLB AnimationMixer와 물리
    body의 생명주기는 페이지 진입/이탈에 맞춰 생성·해제한다.
-5. **저장 정책**: 공통 `InteractionDefinition`을 패널과 연결하되 프로젝트
-   저장·로드/IndexedDB 정책은 별도 결정 후 통합한다. 구버전 문서 migration을
-   검증하고 3D 전용 설정은 판별 가능한 하위 객체로 저장한다.
+5. **저장 정책**: 2D 요소의 `InteractionDefinition`은 현재 프로젝트 문서와
+   함께 직렬화된다. 전체 프로젝트의 저장·로드/IndexedDB 정책을 확정할 때
+   구버전 문서 migration과 3D 전용 설정도 검증한다.
 6. **알려진 이슈**: e2e `editor.spec.ts` "draws a shape on the canvas outside
    the artboard"는 드래그 커밋 직후 boundingBox 샘플링 타이밍에 민감한
    기존 측정 레이스로, 번들 크기가 바뀌면 실패할 수 있음(테스트 위 주석 참고).
@@ -551,19 +597,23 @@ Friction, Bounciness 같은 물리 반응값은 감지 결과에 영향을 주�
 
 ## 부록 A — 컨트롤별 드롭다운 항목·표시 조건 전수표
 
-UI 동작을 구현할 때 이 표가 단일 기준이다. "표시 조건"이 없는 행은 항상 표시.
+UI 동작의 기획 기준이다. 2026-09-24의 2D 타깃 드래그·모달 구현 예외는
+아래 해당 행에 명시한다. "표시 조건"이 없는 행은 항상 표시.
 
 ### A-1. 드롭다운을 눌렀을 때 뜨는 항목 (전수)
 
 | 컨트롤                    | 표시 조건                                                      | 눌렀을 때 표시되는 항목 (순서대로)                                                                                                                                                                                                                                                                                                                                                                                                            |
 | ------------------------- | -------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Trigger                   | 항상                                                           | 그룹 헤딩 6개 아래로: **TAP & POINTER** Click/Tap · Double Click/Double Tap · Hover · Touch Start · Touch End · Long Press / **CONTINUOUS** Pointer Move/Touch Move · Drag · Wheel/Pinch · Scroll/Swipe / **COLLISION** Overlap Start · While Overlapping · Overlap End · Drop On Target · Near Target / **TIME** After Delay · Repeat Every… · Idle Start · Idle End / **MEDIA** Video Starts · Video Ends / **PAGE** Page Enter · Page Exit |
+| Trigger                   | 항상                                                           | 그룹 헤딩 6개 아래로: **TAP & POINTER** Click/Tap · Double Click/Double Tap · Hover · Touch Start · Touch End · Long Press / **CONTINUOUS** Pointer Move/Touch Move · Drag · Wheel/Pinch · Scroll/Swipe / **COLLISION** Overlap Start · While Overlapping · Overlap End · Drop On Target · Drop Outside Target · Drag Enter Target · Drag Leave Target · Near Target / **TIME** After Delay · Repeat Every… · Idle Start · Idle End / **MEDIA** Video Starts · Video Ends / **PAGE** Page Enter · Page Exit |
 | Trigger area              | Trigger ∈ TAP & POINTER · CONTINUOUS · COLLISION               | Selected object(기본) · Entire artwork · Draw detail area… (Page·Time·Media에서는 행 숨김)                                                                                                                                                                                                                                                                                                                                                    |
-| Source video              | Trigger = Video Starts/Ends                                    | 현재 페이지의 비디오 요소 목록. 비디오가 아직 없으면 선택 불가 안내                                                                                                                                                                                                                                                                                                                                                                           |
+| Source video              | Trigger = Video Starts/Ends                                    | 현재 UI는 비활성화된 안내 상태. 비디오 요소 타입은 있으나 페이지 영상 목록·Preview 감지는 아직 연결되지 않음                                                                                                                                                                                                                                                                                                                                   |
 | Mobile fallback           | Trigger = Hover                                                | Tap(기본) · Touch Start · Long Press                                                                                                                                                                                                                                                                                                                                                                                                          |
 | Hold duration             | Trigger = Long Press 또는 Hover의 Mobile fallback = Long Press | 길게 누르기 판정 시간. 기본 0.5초, 최소 0.1초, 0.1초 단위 입력                                                                                                                                                                                                                                                                                                                                                                                |
 | Target element            | Trigger ∈ COLLISION                                            | 현재 페이지의 다른 요소 전체 목록 (요소명 + 타입, 자기 자신 제외)                                                                                                                                                                                                                                                                                                                                                                             |
-| Detection                 | Trigger ∈ COLLISION                                            | Bounding box(기본) · Precise outline                                                                                                                                                                                                                                                                                                                                                                                                          |
+| Detection                 | Trigger ∈ COLLISION                                            | Bounding box(기본) · Precise outline. 2D 타깃 드래그 4종은 Bounding box만 제공                                                                                                                                                                                                                                                                                                                                                                 |
+| Drop tolerance            | Trigger = 2D 타깃 드래그 4종                                   | px. 렌더링된 외곽 사각형 사이 허용 거리(기본 24)                                                                                                                                                                                                                                                                                                                                                                                               |
+| Accept / Match value      | Trigger = 2D 타깃 드래그 4종                                   | Any object(기본) · Object ID · Object type. ID/타입 선택 시 해당 값 입력                                                                                                                                                                                                                                                                                                                                                                        |
+| Capacity / When occupied  | Trigger = Drop On Target                                       | Capacity(기본 1, 0=무제한) · Reject new object(기본) / Replace current object / Allow together                                                                                                                                                                                                                                                                                                                                              |
 | Join/Release distance     | Trigger = Near Target                                          | 각각 px 입력. Release는 Join보다 작아질 수 없음                                                                                                                                                                                                                                                                                                                                                                                               |
 | Input mapping             | MAPPING 섹션 표시 시                                           | Drag → Drag Progress · Drag Angle · Pointer Velocity / Pointer Move → Pointer Position · Pointer Velocity / Scroll·Swipe → Scroll Progress / Wheel·Pinch → Wheel/Pinch Amount / While Overlapping → Overlap Time / Near Target → Proximity to Target                                                                                                                                                                                          |
 | Axis                      | Input mapping = Drag Progress                                  | Free(기본) · X only · Y only                                                                                                                                                                                                                                                                                                                                                                                                                  |
@@ -580,6 +630,7 @@ UI 동작을 구현할 때 이 표가 단일 기준이다. "표시 조건"이 �
 | Collide with              | Gravity + Stack & Settle                                       | Artboard + physics objects(기본) · Physics + obstacles…(현재 페이지의 다른 요소 다중 선택). Mass · Friction · Bounciness 표시                                                                                                                                                                                                                                                                                                                 |
 | Easing                    | 이벤트형 또는 Follow input, 즉시 명령 제외                     | Linear · Ease In · Ease Out · Ease In Out · Custom Curve…(선택 시 커브 편집 팝업 열림)                                                                                                                                                                                                                                                                                                                                                        |
 | After (Reset)             | 항상                                                           | Contextual default(기본)와 6.RESET 표의 해당 트리거에 의미 있는 대안만. Page Exit는 런타임 상태 폐기 안내                                                                                                                                                                                                                                                                                                                                     |
+| Drag Constraints          | Trigger = Drag/2D 타깃 드래그 또는 타깃 이동 Effect             | Axis: Free · X only · Y only / Movement bounds: Unbounded · Inside artboard                                                                                                                                                                                                                                                                                                                                                                 |
 | Same property             | Advanced                                                       | Replace existing(기본) · Additive · Interrupt                                                                                                                                                                                                                                                                                                                                                                                                 |
 | Other property            | Advanced                                                       | Run in parallel(기본) · Run in order                                                                                                                                                                                                                                                                                                                                                                                                          |
 | Cursor on hover           | Advanced                                                       | Default · Pointer(기본)                                                                                                                                                                                                                                                                                                                                                                                                                       |
@@ -611,6 +662,8 @@ Fire at threshold에서는 선택한 입력을 단발 이벤트로 바꾸므로 
 | Bounce Off Target                                                                                                                                   | 별도 Collision bounce 물리 모드만 허용 | —                       | —                       | —                       | —                       |
 | Opacity · Color · Blur · Shadow · Show/Hide · Shake · Particle · Pixelate · Dissolve · Trail · Text Reveal · Stroke Draw · Character/Word Animation | ✓                                      | —                       | —                       | —                       | —                       |
 | Order · Video Play/Pause/Resume/Seek                                                                                                                | HOW 숨김                               | —                       | —                       | —                       | —                       |
+| Open Modal · Close Modal                                                                                                                            | HOW 숨김                               | —                       | —                       | —                       | —                       |
+| Snap to Target · Return to Origin · Attach to Target                                                                                               | ✓                                      | ✓                       | —                       | —                       | —                       |
 | Group Animation                                                                                                                                     | 자식 Effect의 행을 따름                | 자식 Effect의 행을 따름 | 자식 Effect의 행을 따름 | 자식 Effect의 행을 따름 | 자식 Effect의 행을 따름 |
 
 ### A-3. 트리거 선택 시 섹션·필드 노출 변화 (요약 매트릭스)
@@ -621,7 +674,8 @@ Fire at threshold에서는 선택한 입력을 단발 이벤트로 바꾸므로 
 | Long Press                                       | Hold duration (기본 0.5초, 최소 0.1초)             | 숨김                                                                         | 이벤트형 (Time·Delay·Easing) |
 | Hover                                            | Mobile fallback (Long Press 선택 시 Hold duration) | 숨김                                                                         | 이벤트형                     |
 | Pointer Move · Drag · Wheel/Pinch · Scroll/Swipe | 트리거에 따라 Trigger area                         | 표시: Follow input → Smoothing·Easing, Fire at threshold → Time·Delay·Easing |
-| Overlap Start · Overlap End · Drop On Target     | Target element · Detection                         | 숨김                                                                         | 이벤트형                     |
+| Overlap Start · Overlap End                      | Target element · Detection                         | 숨김                                                                         | 이벤트형                     |
+| 2D 타깃 드래그 4종                               | Target · Bounding box · Drop tolerance · Accept; Drop On에서 Capacity/When occupied 추가 | 숨김 | 이벤트형 |
 | While Overlapping                                | Target element · Detection                         | 표시: Follow input → Smoothing·Easing, Fire at threshold → Time·Delay·Easing |
 | Near Target                                      | Target element · Detection · Join/Release distance | 표시: Liquid Merge는 Follow input 고정 → Smoothing·Easing                    |
 | After Delay · Repeat Every · Idle Start/End      | Time (초), Trigger area 숨김                       | 숨김                                                                         | 이벤트형                     |
@@ -651,6 +705,10 @@ Delay만 보여주고 HOW를 숨긴다.
 | Order                                    | Bring to front / Send to back 선택                                                                                |
 | (Image) Particle·Pixelate·Dissolve·Trail | 각 강도/밀도 파라미터 (WebGL 레이어)                                                                              |
 | (Text) Reveal·Stroke Draw·Char/Word      | 방향·순서 파라미터                                                                                                |
+| Snap to Target · Attach to Target        | Target · Snap anchor(중앙/네 모서리/사용자 오프셋). Attach는 Preserve current offset 추가                      |
+| Return to Origin                         | 드래그 시작 시점의 위치로 복귀                                                                                   |
+| Open Modal                               | Dialog layer · Backdrop · ESC/배경 클릭 닫기 · 포커스 제한/복원                                               |
+| Close Modal                              | Dialog layer를 닫음                                                                                             |
 
 ### A-5. Behavior 선택 시 4.HOW 내부 필드 교체
 
@@ -820,10 +878,11 @@ undo/redo, IndexedDB 저장, viewer runtime 평가기와 연결해야 한다.
 
 Transform은 Position/Rotation/Scale XYZ와 Pivot을, Dimensions는 Width/Height/
 Depth를 가진다. Material은 Color/Opacity/Metalness/Roughness/Double sided와
-GLB 원본 재질 사용 여부를 가진다. GLB는 현재 **binary glTF 2.0 `.glb`만**
-받는 기반 API로 파일당 100MB 제한이다. Animation, Bone/Joint, Mesh, Material
-group, Morph Target 이름을 import 시 메타데이터로 추출한다. 단, 현재 이 API를
-호출하는 업로드 툴바/버튼은 아직 연결되지 않았다.
+GLB 원본 재질 사용 여부를 가진다. 모델 파일은 `.glb` 또는 내장 리소스형
+`.gltf`를 받으며 파일당 100MB 제한이다. Animation, Bone/Joint, Mesh, Material
+group, Morph Target 이름을 import 시 메타데이터로 추출한다. 좌측 ASSETS의
+3D 탭에서 `.glb`와 내장 리소스(data URI)를 사용하는 `.gltf`를 업로드할 수
+있다. 외부 파일을 참조하는 `.gltf`는 지원하지 않는다.
 
 ### B-3. Interaction 패널에 3D 항목이 나타나는 조건
 
@@ -846,10 +905,11 @@ group, Morph Target 이름을 import 시 메타데이터로 추출한다. 단, �
 
 ### B-4. GitHub Pages와 로컬 확인 범위
 
-Pages와 로컬 개발 서버 모두 빈 Scene에 샘플 2D/3D 객체를 자동 생성하지
-않는다. `?threeDemo=1`·`?interactionDemo=1` URL도 더 이상 데모를 켜지
-않는다. GLB 업로드 UI와 Interaction 패널→런타임 연결 역시 후속 작업이므로,
-새 빈 프로젝트의 UI만으로 3D 인터랙션 런타임 전체를 시연할 수는 없다.
+데모 파라미터를 주지 않은 빈 Scene은 샘플 객체를 자동 생성하지 않는다.
+`?threeDemo=1`은 3D 샘플을, `?interactionDemo=1`은 MON 샘플을 만든다.
+`?interactionDemo=night-post-office`는 별자리 요소를 만들어 Preview를 열고,
+닫은 뒤 INTERACTION 탭에서 설정을 볼 수 있다. 좌측 ASSETS 3D 탭의 모델
+업로드는 연결되어 있지만 3D 기획 항목 전체의 Preview 실행은 아직 제한된다.
 
 기반을 검증할 때는 `interaction-model`, `interaction-runtime`,
 `interaction-physics`, `interaction-physics-3d`, `editor-store.interactions`
@@ -870,15 +930,17 @@ Pages와 로컬 개발 서버 모두 빈 Scene에 샘플 2D/3D 객체를 자동 
 - 요소별 `InteractionDefinition` 데이터 모델·스토어 조작·문서 정규화 기반
 - 뷰어의 2D Click/Tap·Hover·Drag·After Delay·Pointer Move·Scroll/Swipe와
   Move·Rotate·Scale·Opacity·Skew·Blur·Shadow·Show/Hide·Shake 일부 조합
+- 2D Drop On/Outside Target·Drag Enter/Leave Target, 대상 판정·수용 규칙,
+  Snap/Return/Attach와 Open/Close Modal의 패널 설정 및 Preview 실행
 - Rapier 2D/3D 중력·바운스 기반과 3D World의 정적 2D 충돌 프록시
 
 **아직 UI 기획·프리뷰 상태**
 
-- Interaction 패널의 로컬 샘플 설정을 스토어·뷰어·Undo/Redo에 연결하고
-  프로젝트 저장·로드/IndexedDB 정책 확정
-- GLB import API를 호출하는 사용자용 업로드·재연결·삭제 UI
+- 전체 프로젝트 저장·로드/IndexedDB 정책 확정 및 3D 기획 필드의 Preview 연동
+- 3D 업로드 이후의 일부 자산 재연결·관리 UI
 - 나머지 Trigger·Effect 조합, Reset, Conflict/Priority 평가기
-- 기획된 충돌 Trigger 감지·물체 간 Bounce Off Target·Stack·Liquid Merge
+- 2D 타깃 드래그 이외의 기획된 정밀 충돌 Trigger 감지·물체 간 Bounce Off
+  Target·Stack의 완전한 물리 실행 및 3D Liquid Merge
 - Camera/Light/Shadow/Post Processing/Shader Effect의 관람 Preview 실행
 - GLB AnimationMixer, Crossfade/Root motion, Bone/Joint/Mesh/Face 런타임 제어
 - Liquid Merge 메타볼/셰이더, 정밀 Keyframe 재생기
@@ -887,9 +949,9 @@ Pages와 로컬 개발 서버 모두 빈 Scene에 샘플 2D/3D 객체를 자동 
 현재 `editor-shell.tsx`가 Logic 패널에 전달하는 Interaction 목록은 요소별
 `Configured interaction` placeholder이고 실제 Interaction 데이터가 아니다.
 Logic rule도 컴포넌트 로컬 상태다. Keyframe modal 역시 변경 콜백이 연결되지
-않은 로컬 프리뷰이므로 닫기·선택 변경·새로고침 후 프로젝트 데이터로 유지된다고
-가정하면 안 된다. `Pick face in 3D object`도 현재 캔버스 picking을 시작하지 않는
-UI placeholder다.
+않은 로컬 프리뷰이며, `Pick face in 3D object`도 현재 캔버스 picking을
+시작하지 않는 UI placeholder다. 2D 타깃 드래그·모달 설정은 이와 별개로
+요소의 `InteractionDefinition`에 기록되어 Preview에서 실행된다.
 
 기존 뷰어 런타임은 에디터의 원본 `elements`/`objects3d`를 매 프레임
 변경하지 않고 관람 Preview의 별도 상태·Object3D 인스턴스를 사용한다. 범위를
