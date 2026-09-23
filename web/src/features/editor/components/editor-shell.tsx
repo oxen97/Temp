@@ -107,7 +107,11 @@ import {
 } from "@/features/editor/lib/editor-types";
 import { createElementId } from "@/features/editor/lib/element-id";
 import { createDefaultInteraction } from "@/features/editor/lib/interaction-model";
-import { createMonDemoElements } from "@/features/editor/lib/mon-demo-elements";
+import {
+  createMonArtSceneElements,
+  createMonDemoElements,
+  MON_ART_SCENES,
+} from "@/features/editor/lib/mon-demo-elements";
 import {
   createNightPostOfficeDemoElements,
   NIGHT_POST_OFFICE_FIRST_STAR_ID,
@@ -734,6 +738,21 @@ export function EditorShell({
   const [monDemoMode, setMonDemoMode] = useState(false);
   const [nightPostOfficeDemoMode, setNightPostOfficeDemoMode] =
     useState(false);
+  const selectMonArtScene = useCallback((sceneIndex: number) => {
+    const scene = MON_ART_SCENES[sceneIndex];
+    if (!scene) return;
+    const state = useEditorStore.getState();
+    const page = state.pages.find((candidate) => candidate.id === scene.id);
+    if (!page) return;
+    state.setActivePageId(page.id);
+    const interactiveElement = page.elements.find(
+      (element) =>
+        !element.locked && element.visible && element.interactions?.length,
+    );
+    if (interactiveElement)
+      useEditorStore.getState().setSelectedElementIds([interactiveElement.id]);
+    setPropertyTab("interaction");
+  }, []);
   useEffect(() => {
     if (nightPostOfficeDemoSeededRef.current || typeof window === "undefined")
       return;
@@ -793,6 +812,42 @@ export function EditorShell({
     )
       return;
     monDemoSeededRef.current = true;
+    if (requestedDemo === "mon-art") {
+      useEditorStore.setState((state) => {
+        const existingIds = new Set(state.pages.map((page) => page.id));
+        const scenePages = MON_ART_SCENES.filter(
+          (scene) => !existingIds.has(scene.id),
+        ).map((scene) => ({
+          id: scene.id,
+          name: scene.name,
+          elements: createMonArtSceneElements(
+            MON_ART_SCENES.indexOf(scene),
+            state.artboard.width,
+            state.artboard.height,
+          ),
+          objects3d: [],
+        }));
+        const initialPageIsEmpty =
+          state.pages.length === 1 &&
+          state.pages[0].elements.length === 0 &&
+          (state.pages[0].objects3d?.length ?? 0) === 0;
+        const keptPages = initialPageIsEmpty ? [] : state.pages;
+        if (scenePages.length === 0 && !initialPageIsEmpty) return state;
+        return {
+          ...state,
+          pages: [...keptPages, ...scenePages],
+          activePageId: MON_ART_SCENES[0].id,
+          selectedElementIds: [],
+          selectedObject3DIds: [],
+        };
+      });
+      queueMicrotask(() => {
+        selectMonArtScene(0);
+        setMonDemoMode(true);
+        setPreviewVisible(true);
+      });
+      return;
+    }
     if (elements.length === 0) {
       for (const element of createMonDemoElements(
         artboard.width,
@@ -803,7 +858,7 @@ export function EditorShell({
       setSelectedElementIds([]);
     }
     queueMicrotask(() => {
-      setMonDemoMode(requestedDemo === "mon-art");
+      setMonDemoMode(false);
       setPreviewVisible(true);
     });
   }, [
@@ -811,6 +866,7 @@ export function EditorShell({
     artboard.height,
     artboard.width,
     elements.length,
+    selectMonArtScene,
     setSelectedElementIds,
   ]);
   useEffect(() => {
@@ -4713,7 +4769,12 @@ export function EditorShell({
                   key={page.id}
                   onClick={() => {
                     finishPenPath();
-                    setActivePageId(page.id);
+                    const monArtSceneIndex = MON_ART_SCENES.findIndex(
+                      (scene) => scene.id === page.id,
+                    );
+                    if (monDemoMode && monArtSceneIndex >= 0)
+                      selectMonArtScene(monArtSceneIndex);
+                    else setActivePageId(page.id);
                     setNodeEditElementId(null);
                     setSelectedGuideIds([]);
                     setArtboardSelected(false);
@@ -4722,7 +4783,12 @@ export function EditorShell({
                     if (event.key === "Enter" || event.key === " ") {
                       event.preventDefault();
                       finishPenPath();
-                      setActivePageId(page.id);
+                      const monArtSceneIndex = MON_ART_SCENES.findIndex(
+                        (scene) => scene.id === page.id,
+                      );
+                      if (monDemoMode && monArtSceneIndex >= 0)
+                        selectMonArtScene(monArtSceneIndex);
+                      else setActivePageId(page.id);
                       setNodeEditElementId(null);
                       setSelectedGuideIds([]);
                       setArtboardSelected(false);
@@ -6461,7 +6527,14 @@ export function EditorShell({
       </aside>
       {previewVisible ? (
         monDemoMode ? (
-          <MonDemoExperience onClose={() => setPreviewVisible(false)} />
+          <MonDemoExperience
+            initialScene={Math.max(
+              0,
+              MON_ART_SCENES.findIndex((scene) => scene.id === activePageId),
+            )}
+            onClose={() => setPreviewVisible(false)}
+            onSceneChange={selectMonArtScene}
+          />
         ) : (
           <ViewerPreview
             advancedSound={advancedSoundSettings}

@@ -2,6 +2,8 @@
 
 import { useEffect, useRef, useState, type PointerEvent } from "react";
 
+import { MON_ART_SCENES } from "@/features/editor/lib/mon-demo-elements";
+
 import styles from "./mon-demo-experience.module.css";
 
 type Point = { x: number; y: number };
@@ -18,28 +20,10 @@ type DemoModel = {
   previousPointer: Point;
 };
 
-const SCENES = [
-  {
-    number: "01",
-    name: "PENDULUM",
-    instruction: "선을 드래그해 공간을 흔들어 보세요",
-  },
-  {
-    number: "02",
-    name: "AFTERIMAGE",
-    instruction: "화면을 누른 채 움직여 빛의 흔적을 남겨 보세요",
-  },
-  {
-    number: "03",
-    name: "GAZE",
-    instruction: "화면을 클릭해 새로운 시선을 만들어 보세요",
-  },
-  {
-    number: "04",
-    name: "RESONANCE",
-    instruction: "포인터를 움직여 선의 흐름을 바꿔 보세요",
-  },
-] as const;
+const SCENES = MON_ART_SCENES.map((scene, index) => ({
+  ...scene,
+  number: String(index + 1).padStart(2, "0"),
+}));
 
 const initialEyes: Eye[] = [
   { u: 0.26, v: 0.32, size: 0.095, tilt: -0.18 },
@@ -369,9 +353,18 @@ function drawResonance(
   ctx.fill();
 }
 
-export function MonDemoExperience({ onClose }: { onClose: () => void }) {
-  const [scene, setScene] = useState(0);
-  const sceneRef = useRef(0);
+export function MonDemoExperience({
+  initialScene = 0,
+  onClose,
+  onSceneChange,
+}: {
+  initialScene?: number;
+  onClose: () => void;
+  onSceneChange?: (sceneIndex: number) => void;
+}) {
+  const startingScene = clamp(Math.trunc(initialScene), 0, SCENES.length - 1);
+  const [scene, setScene] = useState(startingScene);
+  const sceneRef = useRef(startingScene);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const reducedMotionRef = useRef(false);
   const modelRef = useRef<DemoModel>({
@@ -517,6 +510,7 @@ export function MonDemoExperience({ onClose }: { onClose: () => void }) {
     sceneRef.current = next;
     modelRef.current.pointerDown = false;
     setScene(next);
+    onSceneChange?.(next);
   };
 
   return (
@@ -561,7 +555,9 @@ export function MonDemoExperience({ onClose }: { onClose: () => void }) {
         <div className={styles.sceneInfo}>
           <span className={styles.sceneNumber}>
             {SCENES[scene].number}
-            <span className={styles.sceneCount}> / 04</span>
+            <span className={styles.sceneCount}>
+              {` / ${String(SCENES.length).padStart(2, "0")}`}
+            </span>
           </span>
           <span className={styles.sceneName}>{SCENES[scene].name}</span>
           <span className={styles.instruction}>
@@ -572,7 +568,7 @@ export function MonDemoExperience({ onClose }: { onClose: () => void }) {
           className={styles.next}
           type="button"
           onClick={nextScene}
-          aria-label={`다음 장면으로 이동: ${SCENES[(scene + 1) % 4].name}`}
+          aria-label={`다음 장면으로 이동: ${SCENES[(scene + 1) % SCENES.length].name}`}
         >
           <span>NEXT SCENE</span>
           <span className={styles.nextArrow} aria-hidden="true">
