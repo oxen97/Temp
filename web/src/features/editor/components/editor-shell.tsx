@@ -58,7 +58,6 @@ import { LayerSymbol } from "@/features/editor/components/ui/layer-symbol";
 import { ModelAssetThumbnail } from "@/features/editor/components/ui/model-asset-thumbnail";
 import { ScrollArea } from "@/features/editor/components/ui/scroll-area";
 import { ShapePicker } from "@/features/editor/components/ui/shape-picker";
-import { MonDemoExperience } from "@/features/editor/components/viewer/mon-demo-experience";
 import { ScenePreview } from "@/features/editor/components/viewer/scene-preview";
 import { ViewerPreview } from "@/features/editor/components/viewer/viewer-preview";
 import {
@@ -109,9 +108,16 @@ import { createElementId } from "@/features/editor/lib/element-id";
 import { createDefaultInteraction } from "@/features/editor/lib/interaction-model";
 import {
   createMonArtSceneElements,
+  createMonArtSceneLogicRules,
   createMonDemoElements,
   MON_ART_SCENES,
 } from "@/features/editor/lib/mon-demo-elements";
+import {
+  createSceneLogicState,
+  runSceneLogicEvent,
+  type SceneLogicEvent,
+  type SceneLogicState,
+} from "@/features/editor/lib/scene-logic";
 import {
   createNightPostOfficeDemoElements,
   NIGHT_POST_OFFICE_FIRST_STAR_ID,
@@ -254,6 +260,7 @@ export function EditorShell({
     selectedShape,
     setActivePageId,
     setActiveTool,
+    setPageLogicRules,
     setSelectedElementIds,
     setSelectedItems,
     setSelectedObject3DIds,
@@ -735,6 +742,8 @@ export function EditorShell({
   const { theme, themeReady, toggleTheme } = useInterfaceTheme();
   const [viewMenuOpen, setViewMenuOpen] = useState(false);
   const [previewVisible, setPreviewVisible] = useState(false);
+  const [previewEpoch, setPreviewEpoch] = useState(0);
+  const previewLogicStateRef = useRef<SceneLogicState | null>(null);
   const [monDemoMode, setMonDemoMode] = useState(false);
   const [nightPostOfficeDemoMode, setNightPostOfficeDemoMode] =
     useState(false);
@@ -753,6 +762,40 @@ export function EditorShell({
       useEditorStore.getState().setSelectedElementIds([interactiveElement.id]);
     setPropertyTab("interaction");
   }, []);
+  const handleViewerInteractionEvent = useCallback(
+    (event: SceneLogicEvent) => {
+      const state = useEditorStore.getState();
+      const page = state.pages.find(
+        (candidate) => candidate.id === state.activePageId,
+      );
+      if (!page) return;
+      const result = runSceneLogicEvent({
+        pageId: page.id,
+        pages: state.pages,
+        rules: page.logicRules ?? [],
+        event,
+        state:
+          previewLogicStateRef.current ?? createSceneLogicState(page.id),
+      });
+      previewLogicStateRef.current = result.state;
+      if (result.ended) {
+        setPreviewVisible(false);
+        previewLogicStateRef.current = null;
+        return;
+      }
+      if (result.targetPageId && result.targetPageId !== page.id) {
+        const monSceneIndex = MON_ART_SCENES.findIndex(
+          (scene) => scene.id === result.targetPageId,
+        );
+        if (monDemoMode && monSceneIndex >= 0)
+          selectMonArtScene(monSceneIndex);
+        else state.setActivePageId(result.targetPageId);
+      } else if (result.restart) {
+        setPreviewEpoch((current) => current + 1);
+      }
+    },
+    [monDemoMode, selectMonArtScene, setPreviewVisible, setPreviewEpoch],
+  );
   useEffect(() => {
     if (nightPostOfficeDemoSeededRef.current || typeof window === "undefined")
       return;
@@ -824,6 +867,9 @@ export function EditorShell({
             MON_ART_SCENES.indexOf(scene),
             state.artboard.width,
             state.artboard.height,
+          ),
+          logicRules: createMonArtSceneLogicRules(
+            MON_ART_SCENES.indexOf(scene),
           ),
           objects3d: [],
         }));
@@ -1260,7 +1306,12 @@ export function EditorShell({
   );
   const interactionElements = useMemo(
     () => [
-      ...elements.map(({ id, name, type }) => ({ id, name, type })),
+      ...elements.map(({ groupId, id, name, type }) => ({
+        groupId,
+        id,
+        name,
+        type,
+      })),
       ...objects3d.map((object) => ({
         assetId:
           object.source.kind === "asset" ? object.source.assetId : undefined,
@@ -1274,13 +1325,15 @@ export function EditorShell({
   );
   const logicInteractions = useMemo(
     () =>
-      interactionElements.map((element) => ({
-        id: `${element.id}:interaction-preview`,
-        name: "Configured interaction",
-        objectId: element.id,
-        triggerLabel: "INTERACTION tab",
-      })),
-    [interactionElements],
+      [...elements, ...objects3d].flatMap((element) =>
+        (element.interactions ?? []).map((interaction) => ({
+          id: interaction.id,
+          name: interaction.name || interaction.effect,
+          objectId: element.id,
+          triggerLabel: interaction.trigger,
+        })),
+      ),
+    [elements, objects3d],
   );
   const visiblePropertyTab = propertyTab;
   const guides = useMemo(
@@ -1700,6 +1753,7 @@ export function EditorShell({
           if (document.activeElement instanceof HTMLElement) {
             document.activeElement.blur();
           }
+          previewLogicStateRef.current = null;
           setPreviewVisible(false);
         }
         return;
@@ -6401,6 +6455,11 @@ export function EditorShell({
             onAddInteraction={addInteraction}
             onRemoveInteraction={removeInteraction}
             onUpdateInteraction={updateInteraction}
+            scenePages={pages.map(({ id, name }) => ({ id, name }))}
+            sceneLogicRules={activePage?.logicRules ?? []}
+            onSceneLogicRulesChange={(rules) =>
+              setPageLogicRules(activePageId, rules)
+            }
             projectId={projectId}
             selectedElementIds={[
               ...selectedElements.map((element) => element.id),
@@ -6425,6 +6484,8 @@ export function EditorShell({
               type,
             }))}
             pages={pages.map(({ id, name }) => ({ id, name }))}
+            rules={activePage?.logicRules ?? []}
+            onRulesChange={(rules) => setPageLogicRules(activePageId, rules)}
             selectedObjectIds={[
               ...selectedElements.map((element) => element.id),
               ...selectedObjects3D.map((object) => object.id),
@@ -6526,28 +6587,22 @@ export function EditorShell({
         </output>
       </aside>
       {previewVisible ? (
-        monDemoMode ? (
-          <MonDemoExperience
-            initialScene={Math.max(
-              0,
-              MON_ART_SCENES.findIndex((scene) => scene.id === activePageId),
-            )}
-            onClose={() => setPreviewVisible(false)}
-            onSceneChange={selectMonArtScene}
-          />
-        ) : (
-          <ViewerPreview
-            advancedSound={advancedSoundSettings}
-            artboard={artboard}
-            backgroundMusic={backgroundMusicSettings}
-            elements={elements}
-            mixer={soundMixerSettings}
-            objects3d={objects3d}
-            onClose={() => setPreviewVisible(false)}
-            projectId={projectId}
-            scene3d={activePage?.scene3d}
-          />
-        )
+        <ViewerPreview
+          key={`${activePageId}:${previewEpoch}`}
+          advancedSound={advancedSoundSettings}
+          artboard={artboard}
+          backgroundMusic={backgroundMusicSettings}
+          elements={elements}
+          mixer={soundMixerSettings}
+          objects3d={objects3d}
+          onClose={() => {
+            previewLogicStateRef.current = null;
+            setPreviewVisible(false);
+          }}
+          onInteractionEvent={handleViewerInteractionEvent}
+          projectId={projectId}
+          scene3d={activePage?.scene3d}
+        />
       ) : null}
     </main>
   );

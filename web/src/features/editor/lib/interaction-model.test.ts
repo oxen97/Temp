@@ -102,9 +102,11 @@ describe("interaction model", () => {
       strandMaxDisplacement: 80,
       strandNeighborRadius: 160,
       strandNeighborStrength: 55,
+      strandDragMode: "swipe",
     });
     expect(normalizeInteraction(JSON.parse(JSON.stringify(interaction)))).toEqual(interaction);
     expect(normalizeInteraction({ effect: "strand-bend" })).toMatchObject({
+      strandDragMode: "grab",
       strandNeighborRadius: 0,
       strandNeighborStrength: 0,
     });
@@ -114,6 +116,51 @@ describe("interaction model", () => {
     expect(normalizeInteraction({ effect: "liquid-merge" }).liquidAttraction).toBe(0);
     const authored = createDefaultInteraction({ effect: "liquid-merge", liquidAttraction: 72 });
     expect(normalizeInteraction(JSON.parse(JSON.stringify(authored))).liquidAttraction).toBe(72);
+  });
+
+  it("round-trips pointer trail, instance spawning, and wave authoring", () => {
+    const authored = [
+      createDefaultInteraction({
+        effect: "pointer-trail",
+        trailBlur: 18,
+        trailBlendMode: "lighter",
+        trailColors: "#ffcc55,#ffffff",
+        trailGrowth: 210,
+        trailLifespan: 2.2,
+        trailFadeOutDuration: 1.2,
+        trailSpacing: 8,
+      }),
+      createDefaultInteraction({
+        effect: "spawn-instance",
+        spawnSourceId: "eye-group",
+        spawnOverflow: "stop",
+        spawnInheritInteractions: false,
+        spawnMaxCount: 6,
+      }),
+      createDefaultInteraction({
+        effect: "wave-deform",
+        waveAmplitude: 12,
+        wavePhaseSpread: 35,
+        wavePointerX: 22,
+        wavePointerY: -8,
+        waveTargetIds: ["path-b", "path-c"],
+      }),
+    ];
+    expect(normalizeInteractions(JSON.parse(JSON.stringify(authored)))).toEqual(authored);
+    expect(normalizeInteraction({ effect: "pointer-trail" })).toMatchObject({
+      trailBlendMode: "screen",
+      trailBlur: 12,
+      trailLifespan: 1.6,
+      trailFadeOutDuration: 0.5,
+    });
+  });
+
+  it("keeps trail replacement fade durations nonnegative and preserves immediate removal", () => {
+    expect(normalizeInteraction({ trailFadeOutDuration: -1 }).trailFadeOutDuration).toBe(0);
+    expect(normalizeInteraction({ trailFadeOutDuration: 0 }).trailFadeOutDuration).toBe(0);
+    expect(normalizeInteraction({ trailFadeOutDuration: Number.NaN }).trailFadeOutDuration).toBe(0.5);
+    const authored = createDefaultInteraction({ effect: "pointer-trail", trailFadeOutDuration: 0 });
+    expect(normalizeInteraction(JSON.parse(JSON.stringify(authored)))).toEqual(authored);
   });
 
   it("round-trips target placement and modal authoring fields", () => {

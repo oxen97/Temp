@@ -78,6 +78,8 @@ export type InteractionDefinition = {
   liquidAttraction: number;
   liquidSmoothness: number;
   strandAnchor: "top" | "bottom" | "left" | "right";
+  /** Grab pins a material point; swipe transfers pointer velocity into a springing strand. */
+  strandDragMode: "grab" | "swipe";
   strandStiffness: number;
   strandDamping: number;
   strandInfluenceRadius: number;
@@ -86,6 +88,42 @@ export type InteractionDefinition = {
   strandNeighborRadius: number;
   /** Neighbor response as a percent of the directly touched strand (0..100). */
   strandNeighborStrength: number;
+  /** Pointer Trail emits glowing marks along a drag path, in artboard pixels. */
+  trailSpacing: number;
+  trailSizeMin: number;
+  trailSizeMax: number;
+  trailBlur: number;
+  /** Seconds each emitted mark remains visible. */
+  trailLifespan: number;
+  /** End size as a percentage of its emitted size. */
+  trailGrowth: number;
+  /** Opacity lost over the lifespan, from 0 to 100 percent. */
+  trailFade: number;
+  /** Seconds to fade older marks replaced at the maximum count; zero removes them immediately. */
+  trailFadeOutDuration: number;
+  /** Comma-separated CSS color stops for emitted marks. */
+  trailColors: string;
+  trailBlendMode: "screen" | "normal" | "lighter";
+  trailMaxCount: number;
+  /** Raw element or group ID to clone at the pointer position. */
+  spawnSourceId: string;
+  spawnSizeMin: number;
+  spawnSizeMax: number;
+  spawnRotationMin: number;
+  spawnRotationMax: number;
+  spawnMaxCount: number;
+  spawnOverflow: "remove-oldest" | "stop";
+  spawnInheritInteractions: boolean;
+  /** Wave deformation inputs use artboard pixels, cycles/second, and degrees. */
+  wavePointerX: number;
+  wavePointerY: number;
+  waveAmplitude: number;
+  waveLength: number;
+  waveSpeed: number;
+  waveFalloff: number;
+  wavePhaseSpread: number;
+  /** Other line/pen IDs driven by this wave interaction. The source path is implicit. */
+  waveTargetIds: string[];
   affectedObjects: string;
   impactBounciness: number;
   impactMass: number;
@@ -214,12 +252,40 @@ export function createDefaultInteraction(
     liquidAttraction: 0,
     liquidSmoothness: 60,
     strandAnchor: "top",
+    strandDragMode: "grab",
     strandStiffness: 0.45,
     strandDamping: 0.82,
     strandInfluenceRadius: 90,
     strandMaxDisplacement: 140,
     strandNeighborRadius: 0,
     strandNeighborStrength: 0,
+    trailSpacing: 12,
+    trailSizeMin: 6,
+    trailSizeMax: 18,
+    trailBlur: 12,
+    trailLifespan: 1.6,
+    trailGrowth: 180,
+    trailFade: 100,
+    trailFadeOutDuration: 0.5,
+    trailColors: "#f6c45e,#ffedbc",
+    trailBlendMode: "screen",
+    trailMaxCount: 180,
+    spawnSourceId: "",
+    spawnSizeMin: 85,
+    spawnSizeMax: 115,
+    spawnRotationMin: -15,
+    spawnRotationMax: 15,
+    spawnMaxCount: 12,
+    spawnOverflow: "remove-oldest",
+    spawnInheritInteractions: true,
+    wavePointerX: 18,
+    wavePointerY: 24,
+    waveAmplitude: 8,
+    waveLength: 160,
+    waveSpeed: 0.35,
+    waveFalloff: 240,
+    wavePhaseSpread: 24,
+    waveTargetIds: [],
     affectedObjects: "selected",
     impactBounciness: 65,
     impactMass: 1,
@@ -310,6 +376,7 @@ export function normalizeInteraction(raw: unknown): InteractionDefinition {
       if (typeof value === "string") result[key] = value;
     }
   }
+  result.trailFadeOutDuration = Math.max(0, result.trailFadeOutDuration as number);
   return result as InteractionDefinition;
 }
 

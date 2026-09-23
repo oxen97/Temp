@@ -111,6 +111,26 @@ describe("effect options by selected element", () => {
     expect(values(getEffectOptions(["line"], "click-tap"))).not.toContain("strand-bend");
     expect(values(getMotionOptions("drag", "drag-progress", "strand-bend"))).toEqual(["direct", "spring"]);
   });
+
+  it("offers MON pointer, spawn, wave, and logic event effects only in usable contexts", () => {
+    expect(values(getEffectOptions(["rectangle"], "drag"))).toContain("pointer-trail");
+    expect(values(getEffectOptions(["image"], "drag"))).toContain("pointer-trail");
+    expect(values(getEffectOptions(["rectangle"], "pointer-move"))).not.toContain("pointer-trail");
+    expect(values(getEffectOptions(["rectangle"], "click-tap"))).toEqual(
+      expect.arrayContaining(["spawn-instance", "emit-event"]),
+    );
+    expect(values(getEffectOptions(["pen"], "pointer-move"))).toContain("wave-deform");
+    expect(values(getEffectOptions(["line", "pen"], "pointer-move"))).toContain("wave-deform");
+    expect(values(getEffectOptions(["pen", "rectangle"], "pointer-move"))).toContain("wave-deform");
+    expect(values(getEffectOptions(["rectangle", "pen"], "pointer-move"))).not.toContain("wave-deform");
+    expect(values(getEffectOptions(["pen"], "drag"))).not.toContain("wave-deform");
+    expect(values(getEffectOptions(["image"], "pointer-move"))).not.toContain("wave-deform");
+    expect(values(getEffectOptions(["video"], "click-tap"))).not.toContain("spawn-instance");
+    expect(values(getEffectOptions(["object3d"], "click-tap", { is3D: true }))).not.toContain("spawn-instance");
+    expect(getMotionOptions("drag", "drag-progress", "pointer-trail")).toEqual([]);
+    expect(getMotionOptions("click-tap", "", "spawn-instance")).toEqual([]);
+    expect(values(getMotionOptions("pointer-move", "pointer-position", "wave-deform"))).toEqual(["direct"]);
+  });
 });
 
 describe("effect and motion compatibility", () => {

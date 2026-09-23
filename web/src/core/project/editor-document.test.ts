@@ -4,6 +4,7 @@ import type {
   ArtboardSettings,
   EditorPage,
 } from "@/features/editor/store/editor-store";
+import { createSceneLogicRule } from "@/features/editor/lib/scene-logic";
 import { createPrimitiveObject3D } from "@/features/editor/three/types";
 
 import {
@@ -23,6 +24,25 @@ const artboard: ArtboardSettings = {
 };
 
 describe("editor document serialization", () => {
+  it("round-trips scene navigation rules", () => {
+    const rule = createSceneLogicRule({
+      id: "intro-next",
+      objectId: "next-button",
+      interactionId: "next-click",
+      targetPageId: "scene-2",
+    });
+    const document = serializeEditorDocument({
+      artboard,
+      id: "project-navigation",
+      name: "Navigation",
+      pages: [
+        { id: "scene-1", name: "Intro", elements: [], logicRules: [rule] },
+        { id: "scene-2", name: "Gallery", elements: [] },
+      ],
+    });
+    expect(hydrateEditorDocument(document).pages[0].logicRules).toEqual([rule]);
+  });
+
   it("writes a V2 project while retaining 2D and sound page fields", () => {
     const pages: EditorPage[] = [
       {
@@ -112,25 +132,29 @@ describe("editor document serialization", () => {
       primitive: "box",
     });
     cube.interactionSoundExpanded = true;
-    cube.interactionSounds = [{
-      assets: [{
-        durationSeconds: 1.25,
-        mimeType: "audio/wav",
-        name: "cube.wav",
-        sizeBytes: 1200,
-        src: "blob:cube-sound",
-      }],
-      avoidRepeating: true,
-      enabled: true,
-      event: "click",
-      fadeInSeconds: 0,
-      fadeOutSeconds: 0.2,
-      id: "cube-sound",
-      playbackMode: "shuffle",
-      soundSource: "single",
-      trigger: "click",
-      volume: 75,
-    }];
+    cube.interactionSounds = [
+      {
+        assets: [
+          {
+            durationSeconds: 1.25,
+            mimeType: "audio/wav",
+            name: "cube.wav",
+            sizeBytes: 1200,
+            src: "blob:cube-sound",
+          },
+        ],
+        avoidRepeating: true,
+        enabled: true,
+        event: "click",
+        fadeInSeconds: 0,
+        fadeOutSeconds: 0.2,
+        id: "cube-sound",
+        playbackMode: "shuffle",
+        soundSource: "single",
+        trigger: "click",
+        volume: 75,
+      },
+    ];
     const document = serializeEditorDocument({
       artboard,
       assets: [

@@ -4,6 +4,7 @@ import {
   type CurrentExhibitionProject,
 } from "@/core/project/schema";
 import { normalizeInteractions } from "@/features/editor/lib/interaction-model";
+import { normalizeSceneLogicRules } from "@/features/editor/lib/scene-logic";
 import type {
   ArtboardSettings,
   CanvasElement,
@@ -79,6 +80,7 @@ function hydratePage(
   const page = cloneSerializable(scene) as unknown as EditorPage;
   return {
     ...page,
+    logicRules: normalizeSceneLogicRules(scene.logicRules),
     elements: cloneSerializable(scene.elements).map((rawElement) => {
       const element = rawElement as CanvasElement;
       return element && typeof element === "object" && "interactions" in element

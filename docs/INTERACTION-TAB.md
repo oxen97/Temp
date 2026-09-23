@@ -10,6 +10,45 @@
   `InteractionDefinition`을 스토어에서 읽고 추가·수정·삭제한다. Preview는
   지원하는 트리거·효과를 이 데이터에서 실행한다. 아래 표의 전체 기획 조합이
   모두 재생되는 것은 아니며, 3D 확장 UI·Logic 연동에는 별도 제한이 있다.
+- **2026-09-24 FIELD NOTES 오리지널 4개 Scene**: 기존 `?interactionDemo=mon-art`
+  링크는 유지하며 화면은 AMOUS의 BREEZE·INK·BLOOM·TOPOGRAPHY로 교체했다.
+  배경·갈대·꽃·등고선·텍스트는 모두 편집 가능한 기본 도형과 펜 경로로 구성하며
+  원본 작품의 로고·눈·붉은 끈·이미지 리소스를 사용하지 않는다.
+  왼쪽 설명은 제거하고 작품을 전체 폭으로 확장했다. 상단 FIELD NOTES와
+  작은 장면명, 하단 NEXT FIELD를 유지하며 아트보드와 Preview의 구성이 같다.
+  네 장면의
+  `elements`에 실제 Interaction 규칙을 저장하고 공통 `ViewerPreview`에서
+  Strand Bend, Emit Pointer Trail, Spawn Instance, Wave / Curve Deform을
+  실행한다. NEXT SCENE 버튼의 `Click / Tap → Emit Event`는 페이지의
+  `logicRules`를 통해 다음 Scene으로 이동한다. INTERACTION 탭에서 목적지를
+  바꾸면 같은 규칙을 쓰는 Preview 이동 경로도 바뀐다. 작품 안의 CLOSE도
+  `Emit Event → End Artwork` Logic 규칙으로 Preview를 닫는다. 데스크톱 브라우저
+  E2E에서 네 장면의 효과와 순환 이동을 확인했다.
+  - BREEZE: 열린 펜 경로 → Drag → Strand Bend → Swipe & sway,
+    Anchor Bottom. 아래 뿌리를 고정하고 수평 드래그의 힘을 주변 갈대에 전달한다.
+    수평 이동이 0인 이벤트에서도 grab으로 전환되지 않으며, 변위·속도 제한은
+    선 전체의 곡선 비율을 보존해 가운데가 급격히 꺾이지 않게 처리한다.
+  - INK: Drag / Entire artwork → Emit Pointer Trail. Normal 블렌드의
+    청색 잉크 흔적을 남기며, 8초 동안 번지고 사라진다.
+    Fade가 켜져 있으면 표시 개수 초과로 밀려난 흔적도 현재 투명도에서
+    `DO → Emit Pointer Trail → Fade-out time` 동안 페이드아웃한다.
+    기본 0.5초, 0초는 즉시 제거하며, 기존 데이터에도 0.5초를 기본 적용한다.
+    `Lifespan`은 각 흔적의 전체 수명, `Fade`는 수명 동안 감소하는 투명도,
+    `Fade-out time`은 `Max. marks` 초과 시 교체되는 흔적의 종료 시간이다.
+    종료 중인 흔적은 별도 제한된 임시 목록으로 유지한다.
+    흔적 전용 렌더러가 위치·기본 크기를 고정한 채 transform/opacity를 갱신하며,
+    애니메이션 프레임마다 ViewerPreview 전체나 정적 도형을 다시 렌더하지 않는다.
+    Trail만 있는 드래그 감지 영역은 불필요한 이동 상태 갱신을 생략하지만,
+    Move 등 다른 효과를 함께 설정하면 기존 드래그 런타임도 계속 실행한다.
+  - BLOOM: Click / Tap / Entire artwork → Spawn Instance. 기본 타원으로
+    만든 꽃 그룹을 크기·각도 변화를 주며 복제한다. 최대 12개에서 오래된 꽃부터 제거한다.
+    작품 전체를 받는 클릭 감지 필드는 클릭·터치·키보드 모두 테두리를 표시하지 않는다.
+    키보드 실행은 유지하며, NEXT FIELD 같은 일반 컨트롤에는 키보드 포커스를 표시한다.
+  - TOPOGRAPHY: Pointer Move / Touch Move → Wave / Curve Deform.
+    28개 펜 경로의 등고선을 포인터와 잔잔한 시간 파동으로 변형한다.
+  - 모든 효과는 `InteractionDefinition`과 공통 `ViewerPreview`를 사용한다.
+    장면 데이터는 `field-notes-demo-elements.ts`, 이전 import 호환은
+    `mon-demo-elements.ts`의 re-export만 담당한다.
 - **2026-09-24 2D 타깃 드래그·모달 추가**: Drop On/Outside Target,
   Drag Enter/Leave Target은 드래그 제스처를 자동으로 제공한다. Snap to Target,
   Return to Origin, Attach to Target 및 Open/Close Modal을 패널에서 설정하고
@@ -38,8 +77,9 @@
   Pointer Move, Scroll/Swipe 트리거와 Move, Rotate, Scale, Opacity, Skew,
   Blur, Shadow, Show/Hide, Shake 효과의 일부 조합을 재생한다. 위의 2D 타깃
   드래그·모달 명령도 실행한다. Rapier 2D/3D 중력·바운스 및 2D↔3D 정적
-  충돌 프록시는 별도 경로다. 전체 조건표, 정밀 충돌 이벤트, 우선순위,
-  키프레임, Logic 연동은 아직 런타임과 연결되지 않았다.
+  충돌 프록시는 별도 경로다. Click / Tap의 On Trigger·On Complete 이벤트를
+  페이지 Logic에 전달하는 경로가 추가됐다. 전체 조건표, 정밀 충돌 이벤트,
+  우선순위, 키프레임 및 그 밖의 수명주기 이벤트는 아직 제한적이다.
 - **에디터 데모 URL**: `?interactionDemo=1`/`mon-native`/`mon-art`는
   MON 샘플을, `?interactionDemo=pinocchio-native`는 피노키오 샘플을,
   `?interactionDemo=classic`은 기존 2D 샘플을 생성한다. `?threeDemo=1`은
@@ -55,7 +95,9 @@
 - **LOGIC 탭 UI 추가**: Interaction의 `On Trigger`, `On Start`, `On Complete`,
   `On Reset`, `On Collision`, `Custom Event`를 입력으로 받아 조건·변수 처리 후
   `Go to Scene`, `Previous Scene`, `Restart Scene`, `End Artwork`로 Scene만
-  분기한다. 애니메이션과 물리 설정은 계속 Interaction 탭이 소유한다.
+  분기한다. 페이지별 규칙은 저장·복원되며 Click / Tap의 On Trigger·
+  On Complete는 Preview에서 전달된다. 애니메이션과 물리 설정은 계속
+  Interaction 탭이 소유한다.
 - 구현 파일:
   - `web/src/features/editor/components/panels/interaction-panel.tsx` (신규)
   - `editor-shell.tsx` — INTERACTION 탭 버튼 활성화 + 렌더 분기.
@@ -126,6 +168,10 @@
    이때 Effect 드롭다운에 **Group Animation**이 노출되고, TIMING의
    **Stagger**(순차 지연)가 의미를 갖는다.
 4. 행의 토글/삭제도 선택된 모든 요소의 해당 인터랙션에 일괄 적용된다.
+
+위 1~4는 전체 다중 선택 기획이다. 현재 일반 인터랙션 편집은 선택 목록의 첫
+요소에 저장된다. `Wave / Curve Deform`은 예외로, 추가로 선택한 Line/Pen의 ID를
+첫 요소의 `waveTargetIds`에 기록해 여러 경로를 함께 움직인다.
 
 ## 1. WHEN — 트리거
 
@@ -292,6 +338,20 @@ HOW를 숨기고 Preview에서 Delay 후 상태를 변경한다. 모달은
 대화상자 역할을 부여하고
 열린 동안 배경 상호작용을 막는다. 여러 조건을 결합하는 Logic 카운터(예: 별 세
 개가 모두 자리를 채우면 편지 열기)는 이 기능에 포함되지 않는다.
+
+**MON 작품용 2D 포인터·씬 효과**:
+
+| 효과 | 표시 조건 | INTERACTION 탭 설정 |
+| --- | --- | --- |
+| Emit Pointer Trail | 2D 요소의 Drag | 포인터 경로에서 생성하는 점의 간격·크기 범위·수명·번짐·성장률·페이드·색상 목록·합성 방식(Screen/Normal/Lighter)·최대 개수. 기존 Image `Trail`과 별도 효과다. 선택하면 Trigger area를 Entire artwork로 설정한다. |
+| Spawn Instance | 2D 요소의 Click / Tap | 원본 요소 또는 그룹 ID, 클릭 위치에 복제, 크기·회전 변화 범위, 최대 복제 수, 한도 도달 시 가장 오래된 복제 제거/생성 중단, 원본 Interaction 상속 여부. 선택하면 Trigger area를 Entire artwork로 설정한다. |
+| Wave / Curve Deform | Line/Pen의 Pointer Move. 여러 Line/Pen 선택 가능 | 추가로 영향을 받을 경로 선택, 포인터 X/Y 영향, 상시 물결 진폭·파장·속도, 포인터 영향 반경, 경로별 위상 차이. 여러 경로를 선택하고 이 효과를 지정하면 첫 경로의 규칙에 나머지 경로 ID를 연결한다. |
+| Emit Event (Logic Only) | 2D 요소의 Click / Tap | 화면 변형 없이 이벤트만 발생시킨다. 같은 패널의 `On Trigger → Go to Scene`에서 목적지를 선택하면 해당 페이지의 LOGIC 규칙을 직접 추가·수정한다. 복잡한 조건은 LOGIC 탭에서 편집한다. |
+
+위 네 효과의 설정은 `InteractionDefinition`에 저장된다. `Emit Event`의 씬
+목적지는 별도 Interaction 필드를 중복 생성하지 않고 페이지의 `logicRules`에
+저장한다. 그룹 복제 원본은 그룹 ID 그대로, 개별 원본은 요소 ID 그대로
+`spawnSourceId`에 기록한다. `trailColors`는 쉼표로 구분한 CSS 색상 문자열이다.
 
 **두 요소 효과(UI 프리뷰)**:
 
@@ -936,6 +996,16 @@ group, Morph Target 이름을 import 시 메타데이터로 추출한다. 좌측
   Move·Rotate·Scale·Opacity·Skew·Blur·Shadow·Show/Hide·Shake 일부 조합
 - 2D Drop On/Outside Target·Drag Enter/Leave Target, 대상 판정·수용 규칙,
   Snap/Return/Attach와 Open/Close Modal의 패널 설정 및 Preview 실행
+- FIELD NOTES 네 Scene의 Strand Bend, Emit Pointer Trail, Spawn Instance,
+  Wave / Curve Deform과 Click / Tap → Logic 씬 이동 Preview 실행
+- Strand Bend의 Drag response는 `Grab & follow`(선의 잡은 지점이 포인터를
+  따라감)와 `Swipe & sway`(포인터의 수평 이동량이 주변 열린 선에 운동량을
+  전달하고, 앵커를 고정한 채 스프링으로 왕복) 중 선택한다. BREEZE
+  데모는 후자를 사용하며 두 모드는 같은 인터랙션 모델과 관람 Preview에서 실행된다.
+- Wave / Curve Deform은 열린 Line/Pen 경로에 적용한다. Pointer Move /
+  Touch Move에서 경로를 먼저 선택하면 DO의 Effect 목록에 표시된다.
+- 페이지별 Logic 규칙 저장·복원, INTERACTION 탭의 직접 씬 이동 설정,
+  Click / Tap의 On Trigger·On Complete 이벤트 전달
 - Rapier 2D/3D 중력·바운스 기반과 3D World의 정적 2D 충돌 프록시
 
 **아직 UI 기획·프리뷰 상태**
@@ -948,14 +1018,13 @@ group, Morph Target 이름을 import 시 메타데이터로 추출한다. 좌측
 - Camera/Light/Shadow/Post Processing/Shader Effect의 관람 Preview 실행
 - GLB AnimationMixer, Crossfade/Root motion, Bone/Joint/Mesh/Face 런타임 제어
 - Liquid Merge 메타볼/셰이더, 정밀 Keyframe 재생기
-- Interaction 수명주기 이벤트를 Logic Scene 분기로 전달하는 런타임 Event Bus
+- Click / Tap 외 트리거의 수명주기 이벤트를 Logic Scene 분기로 전달하는 경로
 
-현재 `editor-shell.tsx`가 Logic 패널에 전달하는 Interaction 목록은 요소별
-`Configured interaction` placeholder이고 실제 Interaction 데이터가 아니다.
-Logic rule도 컴포넌트 로컬 상태다. Keyframe modal 역시 변경 콜백이 연결되지
-않은 로컬 프리뷰이며, `Pick face in 3D object`도 현재 캔버스 picking을
-시작하지 않는 UI placeholder다. 2D 타깃 드래그·모달 설정은 이와 별개로
-요소의 `InteractionDefinition`에 기록되어 Preview에서 실행된다.
+`editor-shell.tsx`는 요소별 실제 Interaction 목록과 페이지별 `logicRules`를
+LOGIC 탭에 전달한다. Keyframe modal은 변경 콜백이 연결되지 않은 로컬
+프리뷰이며, `Pick face in 3D object`도 현재 캔버스 picking을 시작하지 않는
+UI placeholder다. 2D 타깃 드래그·모달과 FIELD NOTES 효과는 요소의
+`InteractionDefinition`에 기록되어 Preview에서 실행된다.
 
 기존 뷰어 런타임은 에디터의 원본 `elements`/`objects3d`를 매 프레임
 변경하지 않고 관람 Preview의 별도 상태·Object3D 인스턴스를 사용한다. 범위를

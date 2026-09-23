@@ -1,5 +1,7 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { createSceneLogicRule } from "@/features/editor/lib/scene-logic";
 
 import { LogicPanel } from "./logic-panel";
 
@@ -150,7 +152,7 @@ describe("LogicPanel", () => {
     renderPanel();
     expect(
       screen.getByRole("button", { name: "Remove branch 1" }),
-    ).toBeDisabled();
+    ).toBeEnabled();
 
     fireEvent.click(screen.getByRole("button", { name: "Add branch rule" }));
     expect(screen.getAllByText(/BRANCH 0[12]/)).toHaveLength(2);
@@ -160,5 +162,35 @@ describe("LogicPanel", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Remove branch 2" }));
     expect(screen.queryByText("BRANCH 02")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Remove branch 1" }));
+    expect(screen.getByText(/No scene routes yet/)).toBeVisible();
+  });
+
+  it("reports edits to persisted rules for the active scene", () => {
+    const onRulesChange = vi.fn();
+    render(
+      <LogicPanel
+        currentPageId="intro"
+        interactions={interactions}
+        objects={objects}
+        onRulesChange={onRulesChange}
+        pages={pages}
+        rules={[
+          createSceneLogicRule({
+            id: "intro-next",
+            objectId: "door",
+            interactionId: "door-open",
+            targetPageId: "gallery",
+          }),
+        ]}
+      />,
+    );
+
+    fireEvent.change(screen.getByRole("combobox", { name: "Target Scene" }), {
+      target: { value: "ending" },
+    });
+    expect(onRulesChange).toHaveBeenCalledWith([
+      expect.objectContaining({ id: "intro-next", targetPageId: "ending" }),
+    ]);
   });
 });

@@ -3,6 +3,7 @@ import { useState } from "react";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { createDefaultInteraction, type InteractionDefinition } from "@/features/editor/lib/interaction-model";
+import { createSceneLogicRule, type SceneLogicRule } from "@/features/editor/lib/scene-logic";
 import { InteractionPanel } from "./interaction-panel";
 
 afterEach(cleanup);
@@ -61,6 +62,152 @@ function renderModel3DPanel() {
 }
 
 describe("InteractionPanel conditional UI", () => {
+  it("authors a scene-wide pointer trail with glow and decay controls", () => {
+    let saved = createDefaultInteraction({ id: "trail" });
+    function Harness() {
+      const [interaction, setInteraction] = useState(saved);
+      saved = interaction;
+      return (
+        <InteractionPanel
+          elements={[{ id: "emitter", name: "Trail area", type: "rectangle" }]}
+          interactionsByElement={{ emitter: [interaction] }}
+          onUpdateInteraction={(_, __, updates) => setInteraction((current) => ({ ...current, ...updates }))}
+          selectedElementIds={["emitter"]}
+          selectedName="Trail area"
+          selectedTypes={["rectangle"]}
+        />
+      );
+    }
+    render(<Harness />);
+    choose("Trigger", "Drag");
+    choose("Effect", "Emit Pointer Trail");
+    expect(saved).toMatchObject({ effect: "pointer-trail", triggerArea: "entire-artwork" });
+    expect(screen.getByRole("button", { name: "Mapping response mode" })).toHaveTextContent("Follow input");
+    expect(screen.queryByRole("spinbutton", { name: "Threshold" })).toBeNull();
+    fireEvent.change(screen.getByRole("spinbutton", { name: "Pointer trail blur" }), { target: { value: "18" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "Pointer trail colors" }), { target: { value: "#ffe082,#ffffff" } });
+    choose("Pointer trail blend mode", "Lighter");
+    expect(saved).toMatchObject({ trailBlur: 18, trailColors: "#ffe082,#ffffff", trailBlendMode: "lighter" });
+    expect(screen.getByRole("spinbutton", { name: "Pointer trail lifespan" })).toBeTruthy();
+    expect(screen.getByRole("spinbutton", { name: "Pointer trail maximum marks" })).toBeTruthy();
+    const fadeDuration = screen.getByRole("spinbutton", { name: "Pointer trail fade-out duration" });
+    expect(fadeDuration).toHaveValue(0.5);
+    fireEvent.change(fadeDuration, { target: { value: "1.2" } });
+    expect(saved.trailFadeOutDuration).toBe(1.2);
+    fireEvent.change(fadeDuration, { target: { value: "0" } });
+    expect(saved.trailFadeOutDuration).toBe(0);
+    expect(screen.getByText("Fade older marks when Max. marks is reached. 0 s removes them immediately.")).toBeTruthy();
+  });
+
+  it("selects an element group to spawn at the click position", () => {
+    let saved = createDefaultInteraction({ id: "spawn" });
+    function Harness() {
+      const [interaction, setInteraction] = useState(saved);
+      saved = interaction;
+      return (
+        <InteractionPanel
+          elements={[
+            { id: "emitter", name: "Spawn area", type: "rectangle" },
+            { id: "iris", groupId: "eye-group", name: "Iris", type: "circle" },
+            { id: "pupil", groupId: "eye-group", name: "Pupil", type: "circle" },
+          ]}
+          interactionsByElement={{ emitter: [interaction] }}
+          onUpdateInteraction={(_, __, updates) => setInteraction((current) => ({ ...current, ...updates }))}
+          selectedElementIds={["emitter"]}
+          selectedName="Spawn area"
+          selectedTypes={["rectangle"]}
+        />
+      );
+    }
+    render(<Harness />);
+    choose("Effect", "Spawn Instance");
+    expect(saved).toMatchObject({ effect: "spawn-instance", spawnSourceId: "eye-group", triggerArea: "entire-artwork" });
+    expect(screen.getByText("At pointer position")).toBeTruthy();
+    choose("Spawn source template", "Iris (circle)");
+    fireEvent.change(screen.getByRole("spinbutton", { name: "Spawn maximum instances" }), { target: { value: "7" } });
+    fireEvent.click(screen.getByRole("button", { name: "Inherit template interactions" }));
+    expect(saved).toMatchObject({ spawnSourceId: "iris", spawnMaxCount: 7, spawnInheritInteractions: false });
+  });
+
+  it("exposes wave controls for selected pen paths", () => {
+    let saved = createDefaultInteraction({ id: "wave" });
+    function Harness() {
+      const [interaction, setInteraction] = useState(saved);
+      saved = interaction;
+      return (
+        <InteractionPanel
+          elements={[
+            { id: "path-a", name: "Path A", type: "pen" },
+            { id: "path-b", name: "Path B", type: "pen" },
+          ]}
+          interactionsByElement={{ "path-a": [interaction] }}
+          onUpdateInteraction={(_, __, updates) => setInteraction((current) => ({ ...current, ...updates }))}
+          selectedElementIds={["path-a", "path-b"]}
+          selectedName="Paths"
+          selectedTypes={["pen", "pen"]}
+        />
+      );
+    }
+    render(<Harness />);
+    choose("Trigger", "Pointer Move / Touch Move");
+    choose("Effect", "Wave / Curve Deform");
+    expect(saved.waveTargetIds).toEqual(["path-b"]);
+    fireEvent.change(screen.getByRole("spinbutton", { name: "Wave amplitude" }), { target: { value: "14" } });
+    fireEvent.change(screen.getByRole("spinbutton", { name: "Wave phase spread" }), { target: { value: "42" } });
+    expect(saved).toMatchObject({ effect: "wave-deform", waveAmplitude: 14, wavePhaseSpread: 42 });
+    expect(screen.getByRole("spinbutton", { name: "Wave pointer X influence" })).toBeTruthy();
+    expect(screen.getByRole("spinbutton", { name: "Wave speed" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Wave path: Path B" }));
+    expect(saved.waveTargetIds).toEqual([]);
+  });
+
+  it("offers a logic-only click without visual motion", () => {
+    render(<InteractionPanel selectedName="Next Scene" selectedTypes={["rectangle"]} />);
+    choose("Effect", "Emit Event (Logic Only)");
+    expect(screen.getByText("Go to Scene")).toBeTruthy();
+    expect(screen.queryByText("4. HOW")).toBeNull();
+  });
+
+  it("edits the same direct scene rule shown in Logic", () => {
+    let savedRules: SceneLogicRule[] = [createSceneLogicRule({
+      id: "next-route",
+      objectId: "next-button",
+      interactionId: "next-click",
+      targetPageId: "scene-2",
+    })];
+    const interaction = createDefaultInteraction({
+      effect: "emit-event",
+      id: "next-click",
+      trigger: "click-tap",
+    });
+    function Harness() {
+      const [rules, setRules] = useState(savedRules);
+      savedRules = rules;
+      return (
+        <InteractionPanel
+          elements={[{ id: "next-button", name: "Next Scene", type: "rectangle" }]}
+          interactionsByElement={{ "next-button": [interaction] }}
+          onSceneLogicRulesChange={setRules}
+          sceneLogicRules={rules}
+          scenePages={[
+            { id: "scene-1", name: "Scene 1" },
+            { id: "scene-2", name: "Scene 2" },
+            { id: "scene-3", name: "Scene 3" },
+          ]}
+          selectedElementIds={["next-button"]}
+          selectedName="Next Scene"
+          selectedTypes={["rectangle"]}
+        />
+      );
+    }
+    render(<Harness />);
+    expect(screen.getByRole("button", { name: "Interaction target scene" })).toHaveTextContent("Scene 2");
+    choose("Interaction target scene", "Scene 3");
+    expect(savedRules).toMatchObject([{ id: "next-route", targetPageId: "scene-3" }]);
+    choose("Interaction target scene", "Choose scene…");
+    expect(savedRules).toEqual([]);
+  });
+
   it("authors a selected strand through canonical interaction callbacks", () => {
     let saved: InteractionDefinition[] = [];
     function Harness() {
@@ -85,6 +232,8 @@ describe("InteractionPanel conditional UI", () => {
     expect(saved).toHaveLength(1);
     choose("Trigger", "Drag");
     choose("Effect", "Strand Bend");
+    choose("Strand drag response", "Swipe & sway");
+    expect(saved[0].strandDragMode).toBe("swipe");
     expect(saved[0]).toMatchObject({ trigger: "drag", effect: "strand-bend", name: "Strand Bend" });
     fireEvent.change(screen.getByRole("spinbutton", { name: "Strand max displacement" }), { target: { value: "75" } });
     expect(saved[0].strandMaxDisplacement).toBe(75);

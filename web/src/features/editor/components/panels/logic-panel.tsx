@@ -3,6 +3,15 @@
 import { ArrowRight, Braces, GitBranch, Plus, Trash2 } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 
+import {
+  createSceneLogicRule,
+  type SceneLogicAction,
+  type SceneLogicCondition,
+  type SceneLogicEventSource,
+  type SceneLogicRule,
+  type SceneLogicVariableAction,
+} from "@/features/editor/lib/scene-logic";
+
 import styles from "./logic-panel.module.css";
 
 export type LogicPanelPage = {
@@ -27,53 +36,14 @@ export type LogicPanelProps = {
   currentPageId: string | null;
   interactions?: readonly LogicPanelInteraction[];
   objects?: readonly LogicPanelObject[];
+  onRulesChange?: (rules: SceneLogicRule[]) => void;
   pages: readonly LogicPanelPage[];
+  rules?: readonly SceneLogicRule[];
   selectedInteractionIds?: readonly string[];
   selectedObjectIds?: readonly string[];
 };
 
-type EventSource =
-  | "on-trigger"
-  | "on-start"
-  | "on-complete"
-  | "on-reset"
-  | "on-collision"
-  | "custom-event";
-
-type ConditionKind = "variable" | "visited" | "count";
-type SceneAction =
-  "go-to-scene" | "previous-scene" | "restart-scene" | "end-artwork";
-type VariableOperation = "set" | "increase" | "decrease" | "toggle";
-
-type LogicCondition = {
-  id: string;
-  kind: ConditionKind;
-  operator: string;
-  pageId: string;
-  value: string;
-  variableName: string;
-};
-
-type VariableAction = {
-  id: string;
-  operation: VariableOperation;
-  value: string;
-  variableName: string;
-};
-
-type BranchRule = {
-  action: SceneAction;
-  conditions: LogicCondition[];
-  customEventName: string;
-  eventSource: EventSource;
-  id: string;
-  interactionId: string;
-  objectId: string;
-  targetPageId: string;
-  variableActions: VariableAction[];
-};
-
-const eventSourceOptions: { label: string; value: EventSource }[] = [
+const eventSourceOptions: { label: string; value: SceneLogicEventSource }[] = [
   { label: "On Trigger", value: "on-trigger" },
   { label: "On Start", value: "on-start" },
   { label: "On Complete", value: "on-complete" },
@@ -102,7 +72,7 @@ const countOperators = [
   { label: "At most", value: "at-most" },
 ];
 
-const actionOptions: { label: string; value: SceneAction }[] = [
+const actionOptions: { label: string; value: SceneLogicAction }[] = [
   { label: "Go to Scene", value: "go-to-scene" },
   { label: "Previous Scene", value: "previous-scene" },
   { label: "Restart Scene", value: "restart-scene" },
@@ -111,7 +81,7 @@ const actionOptions: { label: string; value: SceneAction }[] = [
 
 const variableActionOptions: {
   label: string;
-  value: VariableOperation;
+  value: SceneLogicVariableAction["operation"];
 }[] = [
   { label: "Set", value: "set" },
   { label: "Increase", value: "increase" },
@@ -194,7 +164,9 @@ export function LogicPanel({
   currentPageId,
   interactions = [],
   objects = [],
+  onRulesChange,
   pages,
+  rules: persistedRules,
   selectedInteractionIds = [],
   selectedObjectIds = [],
 }: LogicPanelProps) {
@@ -215,19 +187,25 @@ export function LogicPanel({
     "";
   const defaultTargetPageId = nextPageId(pages, currentPageId);
   const nextId = useRef(2);
-  const [rules, setRules] = useState<BranchRule[]>([
-    {
-      action: "go-to-scene",
-      conditions: [],
-      customEventName: "",
-      eventSource: "on-complete",
+  const [localRules, setLocalRules] = useState<SceneLogicRule[]>(() => [
+    createSceneLogicRule({
       id: "branch-1",
-      interactionId: initialInteractionId,
       objectId: initialObjectId,
+      interactionId: initialInteractionId,
       targetPageId: defaultTargetPageId,
-      variableActions: [],
-    },
+      eventSource: "on-complete",
+    }),
   ]);
+  const rules = persistedRules ?? localRules;
+  const setRules = (
+    updater: (current: SceneLogicRule[]) => SceneLogicRule[],
+  ) => {
+    if (persistedRules && onRulesChange) {
+      onRulesChange(updater([...persistedRules]));
+    } else {
+      setLocalRules(updater);
+    }
+  };
 
   const currentPage = useMemo(
     () => pages.find((page) => page.id === currentPageId),
@@ -236,7 +214,7 @@ export function LogicPanel({
 
   const updateRule = (
     ruleId: string,
-    update: (rule: BranchRule) => BranchRule,
+    update: (rule: SceneLogicRule) => SceneLogicRule,
   ) => {
     setRules((current) =>
       current.map((rule) => (rule.id === ruleId ? update(rule) : rule)),
@@ -244,20 +222,18 @@ export function LogicPanel({
   };
 
   const addRule = () => {
-    const id = nextId.current++;
+    let id = nextId.current++;
+    while (rules.some((rule) => rule.id === `branch-${id}`)) {
+      id = nextId.current++;
+    }
     setRules((current) => [
       ...current,
-      {
-        action: "go-to-scene",
-        conditions: [],
-        customEventName: "",
-        eventSource: "on-trigger",
+      createSceneLogicRule({
         id: `branch-${id}`,
         interactionId: initialInteractionId,
         objectId: initialObjectId,
         targetPageId: defaultTargetPageId,
-        variableActions: [],
-      },
+      }),
     ]);
   };
 
@@ -284,6 +260,11 @@ export function LogicPanel({
       </div>
 
       <div className={styles.ruleList}>
+        {rules.length === 0 ? (
+          <div className={styles.emptyState}>
+            No scene routes yet. Add a branch rule to connect an interaction.
+          </div>
+        ) : null}
         {rules.map((rule, ruleIndex) => {
           const availableInteractions = interactions.filter(
             (interaction) =>
@@ -293,7 +274,7 @@ export function LogicPanel({
             (interaction) => interaction.id === rule.interactionId,
           )
             ? rule.interactionId
-            : (availableInteractions[0]?.id ?? "");
+            : "";
 
           return (
             <article className={styles.ruleCard} key={rule.id}>
@@ -309,17 +290,12 @@ export function LogicPanel({
                 <button
                   aria-label={`Remove branch ${ruleIndex + 1}`}
                   className={styles.iconButton}
-                  disabled={rules.length === 1}
                   onClick={() =>
                     setRules((current) =>
                       current.filter((candidate) => candidate.id !== rule.id),
                     )
                   }
-                  title={
-                    rules.length === 1
-                      ? "At least one branch is required"
-                      : "Remove branch"
-                  }
+                  title="Remove branch"
                   type="button"
                 >
                   <Trash2 aria-hidden="true" size={13} strokeWidth={1.6} />
@@ -341,7 +317,7 @@ export function LogicPanel({
                   onChange={(value) =>
                     updateRule(rule.id, (current) => ({
                       ...current,
-                      eventSource: value as EventSource,
+                      eventSource: value as SceneLogicEventSource,
                     }))
                   }
                   value={rule.eventSource}
@@ -396,6 +372,8 @@ export function LogicPanel({
                 >
                   {availableInteractions.length === 0 ? (
                     <option value="">No interactions available</option>
+                  ) : !effectiveInteractionId ? (
+                    <option value="">Choose an interaction</option>
                   ) : null}
                   {availableInteractions.map((interaction) => (
                     <option key={interaction.id} value={interaction.id}>
@@ -474,7 +452,7 @@ export function LogicPanel({
                                 candidate.id === condition.id
                                   ? {
                                       ...candidate,
-                                      kind: kind as ConditionKind,
+                                      kind: kind as SceneLogicCondition["kind"],
                                       operator:
                                         kind === "visited"
                                           ? "has-visited"
@@ -704,7 +682,7 @@ export function LogicPanel({
                   onChange={(action) =>
                     updateRule(rule.id, (current) => ({
                       ...current,
-                      action: action as SceneAction,
+                      action: action as SceneLogicAction,
                     }))
                   }
                   value={rule.action}
@@ -800,7 +778,8 @@ export function LogicPanel({
                               candidate.id === variableAction.id
                                 ? {
                                     ...candidate,
-                                    operation: operation as VariableOperation,
+                                    operation:
+                                      operation as SceneLogicVariableAction["operation"],
                                   }
                                 : candidate,
                           ),

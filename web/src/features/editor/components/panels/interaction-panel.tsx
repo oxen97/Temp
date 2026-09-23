@@ -42,6 +42,11 @@ import {
   createDefaultInteraction,
   type InteractionDefinition,
 } from "@/features/editor/lib/interaction-model";
+import {
+  findDirectSceneRoute,
+  upsertDirectSceneRoute,
+  type SceneLogicRule,
+} from "@/features/editor/lib/scene-logic";
 import type { Model3DAssetMetadata } from "@/features/editor/three/types";
 import { assetPath } from "@/lib/asset-path";
 
@@ -50,6 +55,7 @@ export type InteractionPanelElement = {
   assetId?: string;
   boneNames?: readonly string[];
   id: string;
+  groupId?: string;
   jointNames?: readonly string[];
   materialNames?: readonly string[];
   meshFaceGroupNames?: readonly string[];
@@ -202,6 +208,12 @@ function interactionMeta(interaction: InteractionDefinition) {
     return `Bridge ${interaction.bridgeWidth} px`;
   if (interaction.effect === "strand-bend")
     return `${interaction.strandMaxDisplacement} px`;
+  if (interaction.effect === "pointer-trail")
+    return `${interaction.trailLifespan} s trail`;
+  if (interaction.effect === "spawn-instance")
+    return `up to ${interaction.spawnMaxCount}`;
+  if (interaction.effect === "wave-deform")
+    return `${interaction.waveAmplitude} px wave`;
   if (interaction.effect === "move") return `X ${interaction.moveX >= 0 ? "+" : ""}${interaction.moveX} px`;
   if (interaction.effect === "scale") return `${interaction.scaleX} %`;
   if (interaction.effect === "opacity") return `→ ${interaction.opacityTo} %`;
@@ -669,21 +681,27 @@ export function InteractionPanel({
   interactionsByElement,
   onAddInteraction,
   onRemoveInteraction,
+  onSceneLogicRulesChange,
   onUpdateInteraction,
   projectId = LOCAL_PROJECT_ID,
   selectedElementIds = [],
   selectedName,
   selectedTypes = [],
+  sceneLogicRules = [],
+  scenePages = [],
 }: {
   elements?: readonly InteractionPanelElement[];
   interactionsByElement?: Record<string, InteractionDefinition[]>;
   onAddInteraction?: (elementId: string, interaction: InteractionDefinition) => void;
   onRemoveInteraction?: (elementId: string, interactionId: string) => void;
+  onSceneLogicRulesChange?: (rules: SceneLogicRule[]) => void;
   onUpdateInteraction?: (elementId: string, interactionId: string, updates: Partial<InteractionDefinition>) => void;
   projectId?: string;
   selectedElementIds?: readonly string[];
   selectedName: string | null;
   selectedTypes?: readonly string[];
+  sceneLogicRules?: readonly SceneLogicRule[];
+  scenePages?: readonly { id: string; name: string }[];
 }) {
   const noop = () => {};
   const selectedEntries = useMemo(
@@ -864,6 +882,9 @@ export function InteractionPanel({
     ? (authoredInteractions[0]?.id ?? "")
     : selectedId;
   const authoredInteraction = authoredInteractions.find((item) => item.id === activeSelectedId);
+  const directSceneRoute = selectedElementId && authoredInteraction
+    ? findDirectSceneRoute(sceneLogicRules, selectedElementId, authoredInteraction.id)
+    : undefined;
   const binding = { interaction: authoredInteraction, elementId: selectedElementId, onUpdateInteraction };
   const interactions = authoredMode
     ? authoredInteractions.map((item) => ({
@@ -930,12 +951,40 @@ export function InteractionPanel({
   const [liquidAttraction, setLiquidAttraction] = useInteractionField("liquidAttraction", 0, binding);
   const [liquidSmoothness, setLiquidSmoothness] = useInteractionField("liquidSmoothness", 60, binding);
   const [strandAnchor, setStrandAnchor] = useInteractionField("strandAnchor", "top", binding);
+  const [strandDragMode, setStrandDragMode] = useInteractionField("strandDragMode", "grab", binding);
   const [strandStiffness, setStrandStiffness] = useInteractionField("strandStiffness", 0.45, binding);
   const [strandDamping, setStrandDamping] = useInteractionField("strandDamping", 0.82, binding);
   const [strandInfluenceRadius, setStrandInfluenceRadius] = useInteractionField("strandInfluenceRadius", 90, binding);
   const [strandMaxDisplacement, setStrandMaxDisplacement] = useInteractionField("strandMaxDisplacement", 140, binding);
   const [strandNeighborRadius, setStrandNeighborRadius] = useInteractionField("strandNeighborRadius", 0, binding);
   const [strandNeighborStrength, setStrandNeighborStrength] = useInteractionField("strandNeighborStrength", 0, binding);
+  const [trailSpacing, setTrailSpacing] = useInteractionField("trailSpacing", 12, binding);
+  const [trailSizeMin, setTrailSizeMin] = useInteractionField("trailSizeMin", 6, binding);
+  const [trailSizeMax, setTrailSizeMax] = useInteractionField("trailSizeMax", 18, binding);
+  const [trailBlur, setTrailBlur] = useInteractionField("trailBlur", 12, binding);
+  const [trailLifespan, setTrailLifespan] = useInteractionField("trailLifespan", 1.6, binding);
+  const [trailGrowth, setTrailGrowth] = useInteractionField("trailGrowth", 180, binding);
+  const [trailFade, setTrailFade] = useInteractionField("trailFade", 100, binding);
+  const [trailFadeOutDuration, setTrailFadeOutDuration] = useInteractionField("trailFadeOutDuration", 0.5, binding);
+  const [trailColors, setTrailColors] = useInteractionField("trailColors", "#f6c45e,#ffedbc", binding);
+  const [trailBlendMode, setTrailBlendMode] = useInteractionField("trailBlendMode", "screen", binding);
+  const [trailMaxCount, setTrailMaxCount] = useInteractionField("trailMaxCount", 180, binding);
+  const [spawnSourceId, setSpawnSourceId] = useInteractionField("spawnSourceId", "", binding);
+  const [spawnSizeMin, setSpawnSizeMin] = useInteractionField("spawnSizeMin", 85, binding);
+  const [spawnSizeMax, setSpawnSizeMax] = useInteractionField("spawnSizeMax", 115, binding);
+  const [spawnRotationMin, setSpawnRotationMin] = useInteractionField("spawnRotationMin", -15, binding);
+  const [spawnRotationMax, setSpawnRotationMax] = useInteractionField("spawnRotationMax", 15, binding);
+  const [spawnMaxCount, setSpawnMaxCount] = useInteractionField("spawnMaxCount", 12, binding);
+  const [spawnOverflow, setSpawnOverflow] = useInteractionField("spawnOverflow", "remove-oldest", binding);
+  const [spawnInheritInteractions, setSpawnInheritInteractions] = useInteractionField("spawnInheritInteractions", true, binding);
+  const [wavePointerX, setWavePointerX] = useInteractionField("wavePointerX", 18, binding);
+  const [wavePointerY, setWavePointerY] = useInteractionField("wavePointerY", 24, binding);
+  const [waveAmplitude, setWaveAmplitude] = useInteractionField("waveAmplitude", 8, binding);
+  const [waveLength, setWaveLength] = useInteractionField("waveLength", 160, binding);
+  const [waveSpeed, setWaveSpeed] = useInteractionField("waveSpeed", 0.35, binding);
+  const [waveFalloff, setWaveFalloff] = useInteractionField("waveFalloff", 240, binding);
+  const [wavePhaseSpread, setWavePhaseSpread] = useInteractionField("wavePhaseSpread", 24, binding);
+  const [waveTargetIds, setWaveTargetIds] = useInteractionField("waveTargetIds", [] as string[], binding);
   const [affectedObjects, setAffectedObjects] = useInteractionField("affectedObjects", "selected", binding);
   const [impactBounciness, setImpactBounciness] = useInteractionField("impactBounciness", 65, binding);
   const [impactMass, setImpactMass] = useInteractionField("impactMass", 1, binding);
@@ -1074,7 +1123,7 @@ export function InteractionPanel({
   const isPairEffect = isLiquidMerge || isCollisionBounce;
   const isImmediate = immediateEffects.has(activeEffect);
   const selectedMappingMode =
-    isLiquidMerge && showMapping
+    (isLiquidMerge || activeEffect === "pointer-trail") && showMapping
       ? "follow"
       : isImmediate && showMapping
         ? "threshold"
@@ -1107,6 +1156,28 @@ export function InteractionPanel({
     : "contextual";
   const obstacleChoices = elements.filter(
     (element) => !selectedElementIds.includes(element.id),
+  );
+  const spawnGroupChoices = Array.from(
+    new Map(
+      elements
+        .filter((element) => element.type !== "object3d" && element.groupId)
+        .map((element) => [element.groupId!, element.name] as const),
+    ),
+    ([id, name]) => ({ label: `Group · ${name}`, value: id }),
+  );
+  const spawnSourceChoices = [
+    ...spawnGroupChoices,
+    ...elements
+      .filter((element) => element.type !== "object3d")
+      .map((element) => ({
+        label: `${element.name} (${element.type})`,
+        value: element.id,
+      })),
+  ];
+  const wavePathChoices = elements.filter(
+    (element) =>
+      (element.type === "line" || element.type === "pen") &&
+      element.id !== selectedElementId,
   );
   const targetChoices = obstacleChoices
     .filter((element) => {
@@ -2249,10 +2320,15 @@ export function InteractionPanel({
               </p>
             </>
           ) : null}
-          {isImmediate ? (
+          {isImmediate && activeEffect !== "pointer-trail" ? (
             <p className="interaction-note">
               Immediate actions use a threshold so they do not repeat every
               frame.
+            </p>
+          ) : null}
+          {activeEffect === "pointer-trail" ? (
+            <p className="interaction-note">
+              Pointer Trail follows the path continuously; Spacing controls how often marks appear.
             </p>
           ) : null}
           {isLiquidMerge ? (
@@ -2296,10 +2372,22 @@ export function InteractionPanel({
               const currentModalTargetIsValid = modalTargetChoices.some(
                 (item) => item.value === modalTarget,
               );
+              const usesPointerEmitter = nextEffect === "pointer-trail" || nextEffect === "spawn-instance";
+              const firstSpawnSource = nextEffect === "spawn-instance" && !spawnSourceId
+                ? (spawnSourceChoices.find((item) => item.value !== selectedElementId)?.value ?? "")
+                : "";
+              const selectedWaveTargets = nextEffect === "wave-deform"
+                ? wavePathChoices
+                    .filter((item) => selectedElementIds.includes(item.id))
+                    .map((item) => item.id)
+                : [];
               if (authoredInteraction && selectedElementId && onUpdateInteraction)
                 onUpdateInteraction(selectedElementId, authoredInteraction.id, {
                   effect: nextEffect,
                   name: interactionLabel(nextEffect),
+                  ...(usesPointerEmitter ? { triggerArea: "entire-artwork" } : {}),
+                  ...(firstSpawnSource ? { spawnSourceId: firstSpawnSource } : {}),
+                  ...(nextEffect === "wave-deform" ? { waveTargetIds: selectedWaveTargets } : {}),
                   ...(firstMergeTarget && !currentMergeTargetIsValid
                     ? { collisionTarget: firstMergeTarget, detection: "precise-outline" }
                     : {}),
@@ -2312,6 +2400,9 @@ export function InteractionPanel({
                 });
               else {
                 setEffect(nextEffect);
+                if (usesPointerEmitter) setTriggerArea("entire-artwork");
+                if (firstSpawnSource) setSpawnSourceId(firstSpawnSource);
+                if (nextEffect === "wave-deform") setWaveTargetIds(selectedWaveTargets);
                 if (firstMergeTarget && !currentMergeTargetIsValid) setCollisionTarget(firstMergeTarget);
                 if (firstPlacementTarget && !currentPlacementTargetIsValid)
                   setCollisionTarget(firstPlacementTarget);
@@ -2323,7 +2414,10 @@ export function InteractionPanel({
             scrollToEndOnOpen={effectChoices.some(
               (option) =>
                 option.value === "liquid-merge" ||
-                option.value === "collision-bounce",
+                option.value === "collision-bounce" ||
+                option.value === "wave-deform" ||
+                option.value === "pointer-trail" ||
+                option.value === "spawn-instance",
             )}
             value={selectedEffect}
           />
@@ -2332,6 +2426,14 @@ export function InteractionPanel({
         !effectChoices.some((option) => option.value === "liquid-merge") ? (
           <p className="interaction-note">
             Liquid Merge needs one selected 2D vector shape or strand.
+          </p>
+        ) : null}
+        {trigger === "pointer-move" &&
+        selectedTypes.length > 0 &&
+        !effectChoices.some((option) => option.value === "wave-deform") &&
+        !is3DSelection ? (
+          <p className="interaction-note">
+            Wave / Curve Deform is available when a Line or Pen path is selected first.
           </p>
         ) : null}
         {selectedEffect === "group-animation" ? (
@@ -2347,6 +2449,38 @@ export function InteractionPanel({
               value={groupEffect}
             />
           </Row>
+        ) : null}
+        {activeEffect === "emit-event" ? (
+          <>
+            <p className="interaction-note">
+              This Click / Tap emits an event without changing the artwork.
+            </p>
+            <Row label="On Trigger">
+              <span className="interaction-value-caption">Go to Scene</span>
+            </Row>
+            <Row label="Target scene">
+              <DesignDropdown
+                ariaLabel="Interaction target scene"
+                className="interaction-dropdown"
+                disabled={!authoredInteraction || !selectedElementId || !onSceneLogicRulesChange || scenePages.length === 0}
+                noScroll
+                onChange={(targetPageId) => {
+                  if (!authoredInteraction || !selectedElementId || !onSceneLogicRulesChange) return;
+                  onSceneLogicRulesChange(upsertDirectSceneRoute(sceneLogicRules, {
+                    objectId: selectedElementId,
+                    interactionId: authoredInteraction.id,
+                    targetPageId,
+                  }));
+                }}
+                options={[
+                  { label: "Choose scene…", value: "" },
+                  ...scenePages.map((page) => ({ label: page.name, value: page.id })),
+                ]}
+                value={directSceneRoute?.targetPageId ?? ""}
+              />
+            </Row>
+            <p className="interaction-note">Advanced scene conditions remain in Logic.</p>
+          </>
         ) : null}
         {activeEffect === "move" && !isStacking ? (
           <>
@@ -3620,6 +3754,21 @@ export function InteractionPanel({
         ) : null}
         {activeEffect === "strand-bend" ? (
           <>
+            {trigger === "drag" ? (
+              <Row label="Drag response">
+                <DesignDropdown
+                  ariaLabel="Strand drag response"
+                  className="interaction-dropdown"
+                  noScroll
+                  onChange={(value) => setStrandDragMode(value as InteractionDefinition["strandDragMode"])}
+                  options={[
+                    { label: "Grab & follow", value: "grab" },
+                    { label: "Swipe & sway", value: "swipe" },
+                  ]}
+                  value={strandDragMode}
+                />
+              </Row>
+            ) : null}
             <Row label="Anchor end">
               <DesignDropdown
                 ariaLabel="Strand anchor"
@@ -3701,6 +3850,325 @@ export function InteractionPanel({
             <p className="interaction-note">
               Nearby lines and open pen paths with Strand Bend follow the pointer during Drag or Pointer Move; each keeps its own anchor, stiffness, and damping.
             </p>
+          </>
+        ) : null}
+        {activeEffect === "pointer-trail" ? (
+          <>
+            <p className="interaction-note">
+              Emit marks at the pointer position while dragging. Each mark grows and fades on its own timer.
+            </p>
+            <Row label="Spacing">
+              <DesignNumberField
+                ariaLabel="Pointer trail spacing"
+                label=""
+                min={1}
+                onChange={(value) => setTrailSpacing(Math.max(1, value))}
+                unit="px"
+                value={trailSpacing}
+              />
+            </Row>
+            <Row label="Mark size">
+              <div className="interaction-field-pair">
+                <DesignNumberField
+                  ariaLabel="Pointer trail minimum size"
+                  label="Min"
+                  min={0}
+                  onChange={(value) => setTrailSizeMin(Math.max(0, value))}
+                  value={trailSizeMin}
+                />
+                <DesignNumberField
+                  ariaLabel="Pointer trail maximum size"
+                  label="Max"
+                  min={0}
+                  onChange={(value) => setTrailSizeMax(Math.max(0, value))}
+                  value={trailSizeMax}
+                />
+              </div>
+            </Row>
+            <Row label="Lifespan">
+              <DesignNumberField
+                ariaLabel="Pointer trail lifespan"
+                label=""
+                min={0.1}
+                onChange={(value) => setTrailLifespan(Math.max(0.1, value))}
+                precision={1}
+                unit="s"
+                value={trailLifespan}
+              />
+            </Row>
+            <Row label="Glow blur">
+              <DesignNumberField
+                ariaLabel="Pointer trail blur"
+                label=""
+                min={0}
+                onChange={(value) => setTrailBlur(Math.max(0, value))}
+                unit="px"
+                value={trailBlur}
+              />
+            </Row>
+            <Row label="Growth">
+              <DesignNumberField
+                ariaLabel="Pointer trail end size"
+                label=""
+                min={0}
+                onChange={(value) => setTrailGrowth(Math.max(0, value))}
+                unit="%"
+                value={trailGrowth}
+              />
+            </Row>
+            <Row label="Fade">
+              <DesignRange
+                ariaLabel="Pointer trail fade"
+                className="sound-slider"
+                max={100}
+                min={0}
+                onChange={setTrailFade}
+                value={trailFade}
+              />
+              <span className="interaction-value-caption">{trailFade} %</span>
+            </Row>
+            <Row label="Colors">
+              <input
+                aria-label="Pointer trail colors"
+                className="interaction-text-input"
+                onChange={(event) => setTrailColors(event.currentTarget.value)}
+                placeholder="#f6c45e, #ffedbc"
+                type="text"
+                value={trailColors}
+              />
+            </Row>
+            <Row label="Blend mode">
+              <DesignDropdown
+                ariaLabel="Pointer trail blend mode"
+                className="interaction-dropdown"
+                noScroll
+                onChange={(value) => setTrailBlendMode(value as InteractionDefinition["trailBlendMode"])}
+                options={[
+                  { label: "Screen", value: "screen" },
+                  { label: "Normal", value: "normal" },
+                  { label: "Lighter", value: "lighter" },
+                ]}
+                value={trailBlendMode}
+              />
+            </Row>
+            <Row label="Max. marks">
+              <DesignNumberField
+                ariaLabel="Pointer trail maximum marks"
+                label=""
+                min={1}
+                onChange={(value) => setTrailMaxCount(Math.max(1, Math.round(value)))}
+                unit=""
+                value={trailMaxCount}
+              />
+            </Row>
+            <Row label="Fade-out time">
+              <DesignNumberField
+                ariaLabel="Pointer trail fade-out duration"
+                label=""
+                min={0}
+                onChange={(value) => setTrailFadeOutDuration(Math.max(0, value))}
+                precision={1}
+                unit="s"
+                value={trailFadeOutDuration}
+              />
+            </Row>
+            <p className="interaction-note">
+              Fade older marks when Max. marks is reached. 0 s removes them immediately.
+            </p>
+          </>
+        ) : null}
+        {activeEffect === "spawn-instance" ? (
+          <>
+            <p className="interaction-note">
+              Clone the chosen element or group at the click / tap position.
+            </p>
+            <Row label="Source template">
+              <DesignDropdown
+                ariaLabel="Spawn source template"
+                className="interaction-dropdown"
+                disabled={spawnSourceChoices.length === 0}
+                noScroll
+                onChange={setSpawnSourceId}
+                options={[
+                  { label: "Select source…", value: "" },
+                  ...spawnSourceChoices,
+                ]}
+                value={spawnSourceId}
+              />
+            </Row>
+            <Row label="Placement">
+              <span className="interaction-value-caption">At pointer position</span>
+            </Row>
+            <Row label="Size variation">
+              <div className="interaction-field-pair">
+                <DesignNumberField
+                  ariaLabel="Spawn minimum size"
+                  label="Min"
+                  min={1}
+                  onChange={(value) => setSpawnSizeMin(Math.max(1, value))}
+                  unit="%"
+                  value={spawnSizeMin}
+                />
+                <DesignNumberField
+                  ariaLabel="Spawn maximum size"
+                  label="Max"
+                  min={1}
+                  onChange={(value) => setSpawnSizeMax(Math.max(1, value))}
+                  unit="%"
+                  value={spawnSizeMax}
+                />
+              </div>
+            </Row>
+            <Row label="Rotation variation">
+              <div className="interaction-field-pair">
+                <DesignNumberField
+                  ariaLabel="Spawn minimum rotation"
+                  label="Min"
+                  onChange={setSpawnRotationMin}
+                  unit="°"
+                  value={spawnRotationMin}
+                />
+                <DesignNumberField
+                  ariaLabel="Spawn maximum rotation"
+                  label="Max"
+                  onChange={setSpawnRotationMax}
+                  unit="°"
+                  value={spawnRotationMax}
+                />
+              </div>
+            </Row>
+            <Row label="Max. instances">
+              <DesignNumberField
+                ariaLabel="Spawn maximum instances"
+                label=""
+                min={1}
+                onChange={(value) => setSpawnMaxCount(Math.max(1, Math.round(value)))}
+                unit=""
+                value={spawnMaxCount}
+              />
+            </Row>
+            <Row label="At capacity">
+              <DesignDropdown
+                ariaLabel="Spawn capacity behavior"
+                className="interaction-dropdown"
+                noScroll
+                onChange={(value) => setSpawnOverflow(value as InteractionDefinition["spawnOverflow"])}
+                options={[
+                  { label: "Remove oldest", value: "remove-oldest" },
+                  { label: "Stop spawning", value: "stop" },
+                ]}
+                value={spawnOverflow}
+              />
+            </Row>
+            <ToggleRow
+              checked={spawnInheritInteractions}
+              label="Inherit template interactions"
+              onChange={() => setSpawnInheritInteractions(!spawnInheritInteractions)}
+            />
+          </>
+        ) : null}
+        {activeEffect === "wave-deform" ? (
+          <>
+            <p className="interaction-note">
+              Deform the source path and chosen line / pen paths together. Pointer X / Y bends the curves while ambient waves keep them moving.
+            </p>
+            {wavePathChoices.length > 0 ? (
+              <>
+                <p className="interaction-subheading">Additional paths</p>
+                <div className="interaction-wave-path-list">
+                  {wavePathChoices.map((path) => {
+                    const selected = waveTargetIds.includes(path.id);
+                    return (
+                      <button
+                        aria-label={`Wave path: ${path.name}`}
+                        aria-pressed={selected}
+                        className="interaction-wave-path-option"
+                        key={path.id}
+                        onClick={() => setWaveTargetIds((current) =>
+                          current.includes(path.id)
+                            ? current.filter((id) => id !== path.id)
+                            : [...current, path.id]
+                        )}
+                        type="button"
+                      >
+                        <span className="interaction-wave-path-name">{path.name}</span>
+                        <span aria-hidden="true" className={selected ? "sound-toggle is-active" : "sound-toggle"}>
+                          <span />
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </>
+            ) : null}
+            <Row label="Pointer influence">
+              <div className="interaction-field-pair">
+                <DesignNumberField
+                  ariaLabel="Wave pointer X influence"
+                  label="X"
+                  onChange={setWavePointerX}
+                  unit="px"
+                  value={wavePointerX}
+                />
+                <DesignNumberField
+                  ariaLabel="Wave pointer Y influence"
+                  label="Y"
+                  onChange={setWavePointerY}
+                  unit="px"
+                  value={wavePointerY}
+                />
+              </div>
+            </Row>
+            <Row label="Amplitude">
+              <DesignNumberField
+                ariaLabel="Wave amplitude"
+                label=""
+                min={0}
+                onChange={(value) => setWaveAmplitude(Math.max(0, value))}
+                unit="px"
+                value={waveAmplitude}
+              />
+            </Row>
+            <Row label="Wavelength">
+              <DesignNumberField
+                ariaLabel="Wave wavelength"
+                label=""
+                min={1}
+                onChange={(value) => setWaveLength(Math.max(1, value))}
+                unit="px"
+                value={waveLength}
+              />
+            </Row>
+            <Row label="Speed">
+              <DesignNumberField
+                ariaLabel="Wave speed"
+                label=""
+                min={0}
+                onChange={(value) => setWaveSpeed(Math.max(0, value))}
+                precision={2}
+                unit="Hz"
+                value={waveSpeed}
+              />
+            </Row>
+            <Row label="Pointer falloff">
+              <DesignNumberField
+                ariaLabel="Wave pointer falloff"
+                label=""
+                min={1}
+                onChange={(value) => setWaveFalloff(Math.max(1, value))}
+                unit="px"
+                value={waveFalloff}
+              />
+            </Row>
+            <Row label="Phase between paths">
+              <DesignNumberField
+                ariaLabel="Wave phase spread"
+                label=""
+                onChange={setWavePhaseSpread}
+                unit="°"
+                value={wavePhaseSpread}
+              />
+            </Row>
           </>
         ) : null}
         {isCollisionBounce ? (
@@ -3970,6 +4438,8 @@ export function InteractionPanel({
             ? "Physics simulation"
             : isCollisionBounce
               ? "Impact action"
+              : activeEffect === "pointer-trail"
+                ? "Continuous emission"
               : isImmediate
                 ? "Immediate action"
                 : eventTiming
@@ -4105,6 +4575,8 @@ export function InteractionPanel({
                 ? "Stacking runs until the page exits; no fixed duration or easing."
                 : isCollisionBounce
                   ? "Impact timing comes from the collision; no fixed duration or easing."
+                  : activeEffect === "pointer-trail"
+                    ? "Marks are emitted throughout the drag and expire after the Lifespan set above."
                   : "Instant actions do not use motion or animation duration."}
             </p>
           </>

@@ -172,6 +172,8 @@ const projectV1Schema = z
   .passthrough();
 
 export const projectSceneSchema = projectSceneV1Schema.extend({
+  // Rules are normalized at hydration so malformed legacy data cannot block a scene.
+  logicRules: z.array(z.unknown()).optional().catch([]),
   objects3d: z.array(object3DElementSchema),
   scene3d: scene3DSettingsSchema,
 });

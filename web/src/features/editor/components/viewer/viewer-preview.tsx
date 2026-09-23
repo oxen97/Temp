@@ -16,6 +16,10 @@ import { Artboard3DScene } from "@/features/editor/components/canvas/artboard-3d
 import { ShapeGraphic } from "@/features/editor/components/canvas/shape-graphic";
 import { MetaballLayer } from "@/features/editor/components/viewer/metaball-layer";
 import { ViewerBackgroundMusic } from "@/features/editor/components/viewer/viewer-background-music";
+import {
+  ViewerPointerTrails,
+  type ViewerPointerTrailsHandle,
+} from "@/features/editor/components/viewer/viewer-pointer-trails";
 import { textStyleForElement } from "@/features/editor/lib/element-style";
 import { clamp } from "@/features/editor/lib/geometry";
 import {
@@ -32,8 +36,10 @@ import {
   type StrandBendVisual,
 } from "@/features/editor/lib/strand-bend";
 import {
+  applyStrandSwipeImpulse,
   closestStrandBone,
   createStrandPose,
+  limitStrandPoseDisplacement,
   stepStrandPose,
   strandPosePath,
   strandPoseRibbonPath,
@@ -44,6 +50,15 @@ import {
   pathData,
   vectorPathsForElement,
 } from "@/features/editor/lib/vector-path";
+import {
+  createSpawnInstance,
+  createTrailParticles,
+  sampleTrailSegment,
+  waveDeformedPaths,
+  type ViewerPoint,
+  type ViewerSpawnInstance,
+} from "@/features/editor/lib/viewer-generated-effects";
+import type { SceneLogicEvent } from "@/features/editor/lib/scene-logic";
 import {
   InteractionPhysicsWorld,
   loadRapier,
@@ -318,30 +333,6 @@ function constrainedStrandGrab(
   };
 }
 
-function limitStrandPoseDisplacement(
-  pose: StrandPose,
-  maxDisplacement: number,
-): StrandPose {
-  const limit = Math.max(0, maxDisplacement);
-  const points = pose.points.map((point, index) => {
-    const rest = pose.rest[index];
-    const dx = point.x - rest.x;
-    const dy = point.y - rest.y;
-    const distance = Math.hypot(dx, dy);
-    if (distance <= limit) return point;
-    const ratio = limit / Math.max(0.0001, distance);
-    return { x: rest.x + dx * ratio, y: rest.y + dy * ratio };
-  });
-  if (points.every((point, index) => point === pose.points[index])) return pose;
-  return {
-    ...pose,
-    points,
-    velocities: pose.velocities.map((velocity, index) =>
-      points[index] === pose.points[index] ? velocity : { x: 0, y: 0 },
-    ),
-  };
-}
-
 function strandBendForElement(
   element: CanvasElement,
   runtime: ElementRuntimeState,
@@ -534,6 +525,7 @@ export function ViewerPreview({
   mixer,
   objects3d,
   onClose,
+  onInteractionEvent,
   projectId,
   scene3d,
 }: {
@@ -544,6 +536,7 @@ export function ViewerPreview({
   mixer: SoundMixerSettings;
   objects3d: Object3DElement[];
   onClose: () => void;
+  onInteractionEvent?: (event: SceneLogicEvent) => void;
   projectId: string;
   scene3d?: Partial<Scene3DSettings>;
 }) {
@@ -583,6 +576,20 @@ export function ViewerPreview({
   const scrollStopTimersRef = useRef(new Map<string, number>());
   const lastPointerRef = useRef<{ x: number; y: number } | null>(null);
   const pageRef = useRef<HTMLDivElement>(null);
+  const trailSessionsRef = useRef(new Map<number, Map<string, ViewerPoint>>());
+  const nextParticleIdRef = useRef(1);
+  const trailLayerRef = useRef<ViewerPointerTrailsHandle>(null);
+  const nextSpawnIdRef = useRef(1);
+  const [spawnInstances, setSpawnInstances] = useState<ViewerSpawnInstance[]>(
+    [],
+  );
+  const [waveFrame, setWaveFrame] = useState<{
+    pointer: ViewerPoint | null;
+    seconds: number;
+    strength: number;
+  }>({ pointer: null, seconds: 0, strength: 0 });
+  const waveFrameRef = useRef(waveFrame);
+  const waveTargetPointerRef = useRef<ViewerPoint | null>(null);
   const [pagePointer, setPagePointer] = useState<{
     x: number;
     y: number;
@@ -1335,11 +1342,123 @@ export function ViewerPreview({
   const pageType = artboard.pageType ?? "screen";
   const viewportMode = artboard.viewportMode ?? "fit";
   const layout = viewerPreviewLayout(artboard, viewport);
+  const renderElements = useMemo(
+    () => [
+      ...elements,
+      ...spawnInstances.flatMap((instance) => instance.elements),
+    ],
+    [elements, spawnInstances],
+  );
+  useEffect(() => {
+    const liveIds = new Set(renderElements.map((element) => element.id));
+    const current = runtimeStateRef.current;
+    if (Array.from(current.keys()).some((id) => !liveIds.has(id))) {
+      const next = new Map(
+        Array.from(current).filter(([id]) => liveIds.has(id)),
+      );
+      runtimeStateRef.current = next;
+      setRuntimeState(next);
+    }
+    for (const id of strandPosesRef.current.keys()) {
+      if (!liveIds.has(id)) strandPosesRef.current.delete(id);
+    }
+  }, [renderElements]);
+  const spawnScaleByElementId = new Map(
+    spawnInstances.flatMap((instance) =>
+      instance.elements.map((element) => [element.id, instance.scale] as const),
+    ),
+  );
+  const spawnIdByElementId = new Map(
+    spawnInstances.flatMap((instance) =>
+      instance.elements.map((element) => [element.id, instance.id] as const),
+    ),
+  );
+  const sourceIdBySpawnElementId = new Map(
+    spawnInstances.flatMap((instance) =>
+      instance.elements.map(
+        (element) =>
+          [element.id, element.id.slice(instance.id.length + 1)] as const,
+      ),
+    ),
+  );
+  const trailRows = useMemo(
+    () =>
+      elements.flatMap((source) =>
+        source.visible
+          ? (source.interactions ?? [])
+              .filter(
+                (interaction) =>
+                  interaction.enabled !== false &&
+                  interaction.trigger === "drag" &&
+                  interaction.effect === "pointer-trail",
+              )
+              .map((interaction) => ({ source, interaction }))
+          : [],
+      ),
+    [elements],
+  );
+  const trailLimits = useMemo(
+    () =>
+      new Map(
+        trailRows.map(({ interaction }) => [
+          interaction.id,
+          interaction.trailMaxCount,
+        ]),
+      ),
+    [trailRows],
+  );
+  const waveInteractionsByElementId = new Map<string, InteractionDefinition>();
+  for (const source of renderElements) {
+    for (const interaction of source.interactions ?? []) {
+      if (
+        interaction.enabled === false ||
+        interaction.trigger !== "pointer-move" ||
+        interaction.effect !== "wave-deform"
+      )
+        continue;
+      waveInteractionsByElementId.set(source.id, interaction);
+      for (const targetId of interaction.waveTargetIds ?? [])
+        waveInteractionsByElementId.set(targetId, interaction);
+    }
+  }
+  const usesWaveDeform = renderElements.some(
+    (element) =>
+      (element.type === "pen" || element.type === "line") &&
+      waveInteractionsByElementId.has(element.id),
+  );
+  waveTargetPointerRef.current = pagePointer;
+  useEffect(() => {
+    if (!usesWaveDeform) return;
+    let frame = 0;
+    let previous = 0;
+    const animate = (now: number) => {
+      const deltaSeconds = Math.min(
+        0.05,
+        (now - (previous || now - 16)) / 1000,
+      );
+      previous = now;
+      const target = waveTargetPointerRef.current;
+      const prior = waveFrameRef.current;
+      const strength =
+        prior.strength +
+        ((target ? 1 : 0) - prior.strength) * Math.min(1, deltaSeconds * 10);
+      const next = {
+        pointer: target ?? prior.pointer,
+        seconds: now / 1000,
+        strength: strength < 0.01 && !target ? 0 : strength,
+      };
+      waveFrameRef.current = next;
+      setWaveFrame(next);
+      if (!prefersReducedMotion) frame = requestAnimationFrame(animate);
+    };
+    frame = requestAnimationFrame(animate);
+    return () => cancelAnimationFrame(frame);
+  }, [usesWaveDeform, prefersReducedMotion]);
   // Every visible 2D element is a static collision proxy in the 3D world
   // (extruded through z), so 3D physics bodies collide with 2D shapes.
   const collision3DProxies = useMemo(
     () =>
-      elements
+      renderElements
         .filter((element) => element.visible)
         .map((element) => ({
           depth: 600,
@@ -1350,15 +1469,15 @@ export function ViewerPreview({
           y: -(element.y + element.height / 2),
           z: 0,
         })),
-    [elements],
+    [renderElements],
   );
-  const usesPointerMove = elements.some((element) =>
+  const usesPointerMove = renderElements.some((element) =>
     (element.interactions ?? []).some(
       (interaction) =>
         interaction.enabled !== false && interaction.trigger === "pointer-move",
     ),
   );
-  const visibleElements = elements.filter((element) => element.visible);
+  const visibleElements = renderElements.filter((element) => element.visible);
   const elementsById = new Map(
     visibleElements.map((element) => [element.id, element]),
   );
@@ -1605,19 +1724,62 @@ export function ViewerPreview({
       targetRect,
     };
   };
+  const spawnInstanceAt = (
+    source: CanvasElement,
+    interaction: InteractionDefinition,
+    point: ViewerPoint,
+  ) => {
+    const interactionKey = `${source.id}:${interaction.id}`;
+    const count = spawnInstances.filter(
+      (instance) => instance.interactionId === interactionKey,
+    ).length;
+    const maxCount = Math.max(1, interaction.spawnMaxCount);
+    if (count >= maxCount && interaction.spawnOverflow === "stop") return false;
+    const instance = createSpawnInstance(
+      elements,
+      interaction,
+      point,
+      `viewer-spawn-${nextSpawnIdRef.current++}`,
+    );
+    if (!instance) return false;
+    const keyedInstance = { ...instance, interactionId: interactionKey };
+    setSpawnInstances((current) => {
+      const next = [...current, keyedInstance];
+      const matching = next.filter(
+        (entry) => entry.interactionId === interactionKey,
+      );
+      if (matching.length <= maxCount) return next;
+      const oldest = matching[0];
+      return next.filter((entry) => entry.id !== oldest.id);
+    });
+    return true;
+  };
   const applyTargetEffect = ({
     interaction,
+    pointer,
     source,
     sourceVisual,
     target,
     targetRect,
   }: {
     interaction: InteractionDefinition;
+    pointer?: ViewerPoint;
     source: CanvasElement;
     sourceVisual: RuntimeVisual;
     target?: CanvasElement;
     targetRect?: RuntimeRect;
   }): boolean => {
+    if (interaction.effect === "emit-event") return true;
+    if (interaction.effect === "spawn-instance") {
+      return spawnInstanceAt(
+        source,
+        interaction,
+        pointer ?? {
+          x: source.x + source.width / 2,
+          y: source.y + source.height / 2,
+        },
+      );
+    }
     if (interaction.effect === "open-modal") {
       if (!elementsById.has(interaction.modalTarget)) return false;
       openRuntimeModal(interaction);
@@ -1725,6 +1887,7 @@ export function ViewerPreview({
     sourceId: string,
     interaction: InteractionDefinition,
     onApplied?: () => void,
+    pointer?: ViewerPoint,
   ): TargetDispatchStatus => {
     const run = () => {
       const source = elementsById.get(sourceId);
@@ -1743,11 +1906,14 @@ export function ViewerPreview({
         interaction.effect === "attach-to-target";
       const isCommand =
         isPlacement ||
+        interaction.effect === "emit-event" ||
+        interaction.effect === "spawn-instance" ||
         interaction.effect === "return-to-origin" ||
         interaction.effect === "open-modal" ||
         interaction.effect === "close-modal";
       const commandApplied = applyTargetEffect({
         interaction,
+        pointer,
         source,
         sourceVisual,
         target,
@@ -1777,6 +1943,7 @@ export function ViewerPreview({
     source: CanvasElement,
     trigger: string,
     interactionId?: string,
+    pointer?: ViewerPoint,
   ) => {
     for (const interaction of source.interactions ?? []) {
       if (
@@ -1785,7 +1952,7 @@ export function ViewerPreview({
         (interactionId && interaction.id !== interactionId)
       )
         continue;
-      dispatchTargetEffect(source.id, interaction);
+      dispatchTargetEffect(source.id, interaction, undefined, pointer);
     }
   };
   directTargetEffectRef.current = fireDirectTargetEffects;
@@ -2116,6 +2283,7 @@ export function ViewerPreview({
             damping: interaction.strandDamping,
           }),
           interaction.strandMaxDisplacement,
+          { preserveShape: interaction.strandDragMode === "swipe" },
         );
         next.set(id, stepped);
         changed = true;
@@ -2269,6 +2437,66 @@ export function ViewerPreview({
     pageType === "scroll"
       ? Math.max(0, (viewport.height - layout.height) / 2)
       : (viewport.height - layout.height) / 2;
+  const pointFromClient = (
+    clientX: number,
+    clientY: number,
+  ): ViewerPoint | null => {
+    const rect = pageRef.current?.getBoundingClientRect();
+    if (!rect) return null;
+    return {
+      x: clamp(
+        (clientX - rect.left) / Math.max(0.0001, layout.scaleX),
+        0,
+        artboard.width,
+      ),
+      y: clamp(
+        (clientY - rect.top) / Math.max(0.0001, layout.scaleY),
+        0,
+        artboard.height,
+      ),
+    };
+  };
+  const appendTrailPoints = (
+    additions: { interaction: InteractionDefinition; points: ViewerPoint[] }[],
+  ) => {
+    if (!additions.length) return;
+    // Called only from pointer event handlers, never while rendering.
+    // eslint-disable-next-line react-hooks/purity
+    const now = performance.now();
+    const particles = additions.flatMap(({ interaction, points }) => {
+      const firstId = nextParticleIdRef.current;
+      nextParticleIdRef.current += points.length;
+      return createTrailParticles(interaction, points, now, firstId);
+    });
+    trailLayerRef.current?.append(particles, now);
+  };
+  const emitClickInteractionEvents = (
+    element: CanvasElement,
+    interactions = (element.interactions ?? []).filter(
+      (interaction) =>
+        interaction.enabled !== false && interaction.trigger === "click-tap",
+    ),
+  ) => {
+    if (!onInteractionEvent) return;
+    const objectId = sourceIdBySpawnElementId.get(element.id) ?? element.id;
+    for (const interaction of interactions) {
+      onInteractionEvent({
+        objectId,
+        interactionId: interaction.id,
+        eventSource: "on-trigger",
+      });
+      const duration = Math.max(0, interaction.delay + interaction.duration);
+      const timer = window.setTimeout(() => {
+        targetCommandTimersRef.current.delete(timer);
+        onInteractionEvent({
+          objectId,
+          interactionId: interaction.id,
+          eventSource: "on-complete",
+        });
+      }, duration * 1000);
+      targetCommandTimersRef.current.add(timer);
+    }
+  };
   return (
     <section
       aria-label="Viewer preview"
@@ -2346,25 +2574,112 @@ export function ViewerPreview({
           >
             <div
               className="viewer-preview-page"
+              onClick={(event) => {
+                const point = pointFromClient(event.clientX, event.clientY);
+                if (!point) return;
+                const clickedElementId =
+                  (event.target as Element)
+                    .closest?.("[data-element-id]")
+                    ?.getAttribute("data-element-id") ?? null;
+                for (const source of elements) {
+                  if (!source.visible || source.id === clickedElementId)
+                    continue;
+                  for (const interaction of source.interactions ?? []) {
+                    if (
+                      interaction.enabled === false ||
+                      interaction.trigger !== "click-tap" ||
+                      interaction.triggerArea !== "entire-artwork" ||
+                      interaction.effect !== "spawn-instance"
+                    )
+                      continue;
+                    dispatchTargetEffect(
+                      source.id,
+                      interaction,
+                      undefined,
+                      point,
+                    );
+                    emitClickInteractionEvents(source, [interaction]);
+                  }
+                }
+              }}
+              onPointerDown={(event) => {
+                if (
+                  ((event.pointerType === "touch" ||
+                    event.pointerType === "pen") &&
+                    event.isPrimary === false) ||
+                  (event.pointerType === "mouse" && event.button !== 0)
+                )
+                  return;
+                const point = pointFromClient(event.clientX, event.clientY);
+                if (!point) return;
+                const targetId =
+                  (event.target as Element)
+                    .closest?.("[data-element-id]")
+                    ?.getAttribute("data-element-id") ?? null;
+                const activeRows = trailRows.filter(
+                  ({ source, interaction }) =>
+                    interaction.triggerArea === "entire-artwork" ||
+                    source.id === targetId,
+                );
+                if (!activeRows.length) return;
+                trailSessionsRef.current.set(
+                  event.pointerId,
+                  new Map(
+                    activeRows.map(({ interaction }) => [
+                      interaction.id,
+                      point,
+                    ]),
+                  ),
+                );
+                appendTrailPoints(
+                  activeRows.map(({ interaction }) => ({
+                    interaction,
+                    points: [point],
+                  })),
+                );
+              }}
               onPointerLeave={
                 usesPointerMove ? () => setPagePointer(null) : undefined
               }
               onPointerMove={
-                usesPointerMove
+                usesPointerMove || trailRows.length
                   ? (event) => {
-                      const rect = pageRef.current?.getBoundingClientRect();
-                      if (!rect) return;
-                      setPagePointer({
-                        x:
-                          (event.clientX - rect.left) /
-                          Math.max(0.0001, layout.scaleX),
-                        y:
-                          (event.clientY - rect.top) /
-                          Math.max(0.0001, layout.scaleY),
-                      });
+                      const point = pointFromClient(
+                        event.clientX,
+                        event.clientY,
+                      );
+                      if (!point) return;
+                      if (usesPointerMove) setPagePointer(point);
+                      const session = trailSessionsRef.current.get(
+                        event.pointerId,
+                      );
+                      if (!session) return;
+                      const additions: {
+                        interaction: InteractionDefinition;
+                        points: ViewerPoint[];
+                      }[] = [];
+                      for (const { interaction } of trailRows) {
+                        const lastEmission = session.get(interaction.id);
+                        if (!lastEmission) continue;
+                        const points = sampleTrailSegment(
+                          lastEmission,
+                          point,
+                          interaction.trailSpacing,
+                        );
+                        if (!points.length) continue;
+                        session.set(interaction.id, points[points.length - 1]);
+                        additions.push({ interaction, points });
+                      }
+                      appendTrailPoints(additions);
                     }
                   : undefined
               }
+              onPointerUp={(event) => {
+                trailSessionsRef.current.delete(event.pointerId);
+              }}
+              onPointerCancel={(event) => {
+                trailSessionsRef.current.delete(event.pointerId);
+              }}
               ref={pageRef}
               style={{
                 borderRadius: artboard.cornerRadius,
@@ -2429,11 +2744,58 @@ export function ViewerPreview({
                   />
                 )
               ) : null}
-              {visibleElements.map((element) => {
+              {visibleElements.map((element, elementIndex) => {
                 const runtime =
                   runtimeState.get(element.id) ?? IDLE_RUNTIME_STATE;
                 const runtimeVisual = runtimeVisuals.get(element.id)!;
                 const strandPose = strandPoses.get(element.id);
+                const waveInteraction = waveInteractionsByElementId.get(
+                  element.id,
+                );
+                const wavePointer = (prefersReducedMotion
+                  ? pagePointer
+                  : waveFrame.pointer) ?? {
+                  x: artboard.width / 2,
+                  y: artboard.height / 2,
+                };
+                const wavePaths =
+                  waveInteraction &&
+                  (element.type === "pen" || element.type === "line")
+                    ? waveDeformedPaths(
+                        element,
+                        waveInteraction,
+                        strandLocalPoint(wavePointer, element, runtimeVisual),
+                        {
+                          x:
+                            (wavePointer.x / Math.max(1, artboard.width) -
+                              0.5) *
+                            2,
+                          y:
+                            (wavePointer.y / Math.max(1, artboard.height) -
+                              0.5) *
+                            2,
+                        },
+                        prefersReducedMotion ? 0 : waveFrame.seconds,
+                        prefersReducedMotion
+                          ? pagePointer
+                            ? 1
+                            : 0
+                          : waveFrame.strength,
+                        elementIndex,
+                      )
+                    : null;
+                const graphicElement =
+                  wavePaths && element.type === "pen"
+                    ? {
+                        ...element,
+                        vectorPaths: wavePaths,
+                        points: wavePaths[0]?.points,
+                      }
+                    : element;
+                const waveLinePathData =
+                  wavePaths && element.type === "line"
+                    ? pathData(wavePaths[0]?.points ?? [])
+                    : undefined;
                 const strandBend = strandPose
                   ? undefined
                   : strandBendForElement(
@@ -2458,11 +2820,27 @@ export function ViewerPreview({
                     (interaction.trigger === "drag" ||
                       isTargetDragTrigger(interaction.trigger)),
                 );
-                const clickEnabled = (element.interactions ?? []).some(
+                const trailOnlyDrag =
+                  dragEnabled &&
+                  (element.interactions ?? [])
+                    .filter((interaction) => interaction.enabled !== false)
+                    .every(
+                      (interaction) =>
+                        interaction.trigger === "drag" &&
+                        interaction.effect === "pointer-trail",
+                    );
+                const clickInteractions = (element.interactions ?? []).filter(
                   (interaction) =>
                     interaction.enabled !== false &&
                     interaction.trigger === "click-tap",
                 );
+                const clickEnabled = clickInteractions.length > 0;
+                const isArtworkInputSurface =
+                  clickEnabled &&
+                  clickInteractions.every(
+                    (interaction) =>
+                      interaction.triggerArea === "entire-artwork",
+                  );
                 const isModalMember = activeModalElementIds.has(element.id);
                 const isModalDialog = activeModal?.targetId === element.id;
                 const isInactiveModalElement =
@@ -2489,6 +2867,10 @@ export function ViewerPreview({
                     aria-modal={isModalDialog ? true : undefined}
                     aria-label={isModalDialog ? element.name : undefined}
                     data-element-id={element.id}
+                    data-interaction-area={
+                      isArtworkInputSurface ? "entire-artwork" : undefined
+                    }
+                    data-spawn-instance-id={spawnIdByElementId.get(element.id)}
                     data-modal-dialog={isModalDialog ? "true" : undefined}
                     data-modal-member={isModalMember ? "true" : undefined}
                     inert={isBehindModal ? true : undefined}
@@ -2507,12 +2889,21 @@ export function ViewerPreview({
                           ? 0
                           : undefined
                     }
-                    onClick={() => {
-                      if (suppressDragClickRef.current.delete(element.id))
+                    onClick={(event) => {
+                      if (suppressDragClickRef.current.delete(element.id)) {
+                        event.stopPropagation();
                         return;
+                      }
                       playInteractionEvent(element, "click", "click");
                       fireInteractionClick(element);
-                      fireDirectTargetEffects(element, "click-tap");
+                      fireDirectTargetEffects(
+                        element,
+                        "click-tap",
+                        undefined,
+                        pointFromClient(event.clientX, event.clientY) ??
+                          undefined,
+                      );
+                      emitClickInteractionEvents(element);
                     }}
                     onDoubleClick={() => {
                       playInteractionEvent(element, "click", "double-click");
@@ -2527,7 +2918,11 @@ export function ViewerPreview({
                       event.preventDefault();
                       playInteractionEvent(element, "click", "click");
                       fireInteractionClick(element);
-                      fireDirectTargetEffects(element, "click-tap");
+                      fireDirectTargetEffects(element, "click-tap", undefined, {
+                        x: element.x + element.width / 2,
+                        y: element.y + element.height / 2,
+                      });
+                      emitClickInteractionEvents(element);
                     }}
                     onPointerCancel={(event) => {
                       const session = pointerSessionsRef.current.get(
@@ -2581,8 +2976,9 @@ export function ViewerPreview({
                         x: event.clientX,
                         y: event.clientY,
                       };
-                      if (clickEnabled)
-                        event.currentTarget.focus({ preventScroll: true });
+                      // Let the browser focus tabbable click targets normally.
+                      // Calling focus() before its pointer default action can
+                      // incorrectly show a keyboard ring on the first click.
                       if (event.pointerType === "touch")
                         fireDirectTargetEffects(element, "touch-start");
                       const pageRect = pageRef.current?.getBoundingClientRect();
@@ -2694,6 +3090,7 @@ export function ViewerPreview({
                         event.pointerId,
                       );
                       if (!session || session.elementId !== element.id) return;
+                      const pointerDeltaX = event.clientX - session.currentX;
                       session.currentX = event.clientX;
                       session.currentY = event.clientY;
                       if (!session.dragging) {
@@ -2711,6 +3108,11 @@ export function ViewerPreview({
                         "while-dragging",
                         true,
                       );
+                      // Trail-only surfaces are static: their transient marks
+                      // are handled by the page's bubbling pointer event. Keep
+                      // sound/capture handling, but don't rerender the artwork
+                      // for an unused drag transform. Mixed effects stay here.
+                      if (trailOnlyDrag) return;
                       const currentRuntime =
                         runtimeStateRef.current.get(element.id) ??
                         IDLE_RUNTIME_STATE;
@@ -2749,12 +3151,87 @@ export function ViewerPreview({
                           proposedVisual,
                         ),
                       });
-                      setInteractionDrag(element, {
-                        dx: constrainedDrag.x,
-                        dy: constrainedDrag.y,
-                      });
+                      const swipeStrand =
+                        strandInteractionForElement(element)?.strandDragMode ===
+                        "swipe";
+                      const swipeOnlyStrand =
+                        swipeStrand &&
+                        !(element.interactions ?? []).some(
+                          (interaction) =>
+                            interaction.enabled !== false &&
+                            (interaction.trigger === "drag" ||
+                              isTargetDragTrigger(interaction.trigger)) &&
+                            interaction.effect !== "strand-bend",
+                        );
+                      if (!swipeOnlyStrand)
+                        setInteractionDrag(element, {
+                          dx: constrainedDrag.x,
+                          dy: constrainedDrag.y,
+                        });
                       updateTargetBoundaryEvents(element, session);
-                      if (pullsNeighbors && session.strandGrab) {
+                      if (swipeStrand && Math.abs(pointerDeltaX) > 0.01) {
+                        const rect = pageRef.current?.getBoundingClientRect();
+                        if (rect) {
+                          const pointerX =
+                            (event.clientX - rect.left) /
+                            Math.max(0.0001, layout.scaleX);
+                          const deltaX =
+                            pointerDeltaX / Math.max(0.0001, layout.scaleX);
+                          const next = new Map(strandPosesRef.current);
+                          let changed = false;
+                          for (const candidate of visibleElements) {
+                            const interaction =
+                              strandInteractionForElement(candidate);
+                            if (
+                              !interaction ||
+                              interaction.strandDragMode !== "swipe"
+                            )
+                              continue;
+                            const visual = visualForCurrentGesture(candidate);
+                            const centerX =
+                              candidate.x + visual.tx + candidate.width / 2;
+                            const radius = Math.max(
+                              1,
+                              interaction.strandNeighborRadius,
+                            );
+                            const proximity = Math.max(
+                              0,
+                              1 - Math.abs(pointerX - centerX) / radius,
+                            );
+                            if (proximity <= 0) continue;
+                            const pose =
+                              next.get(candidate.id) ??
+                              (() => {
+                                const path = strandPathForElement(candidate);
+                                return path
+                                  ? createStrandPose(path, {
+                                      anchor: interaction.strandAnchor,
+                                      spacing: strandSampleSpacing(candidate),
+                                    })
+                                  : undefined;
+                              })();
+                            if (!pose?.points.length) continue;
+                            const strength =
+                              proximity *
+                              (candidate.id === element.id
+                                ? 1
+                                : interaction.strandNeighborStrength / 100);
+                            next.set(
+                              candidate.id,
+                              applyStrandSwipeImpulse(pose, deltaX, strength),
+                            );
+                            changed = true;
+                          }
+                          if (changed) {
+                            strandPosesRef.current = next;
+                            setStrandPoses(next);
+                          }
+                        }
+                      } else if (
+                        !swipeStrand &&
+                        pullsNeighbors &&
+                        session.strandGrab
+                      ) {
                         const rect = pageRef.current?.getBoundingClientRect();
                         if (rect) {
                           const artboardPointer = {
@@ -2910,7 +3387,17 @@ export function ViewerPreview({
                       top: element.y,
                       transform: composeTransform(
                         element.rotation,
-                        runtimeVisual,
+                        spawnScaleByElementId.has(element.id)
+                          ? {
+                              ...runtimeVisual,
+                              scaleX:
+                                runtimeVisual.scaleX *
+                                (spawnScaleByElementId.get(element.id) ?? 1),
+                              scaleY:
+                                runtimeVisual.scaleY *
+                                (spawnScaleByElementId.get(element.id) ?? 1),
+                            }
+                          : runtimeVisual,
                       ),
                       transformOrigin: "center",
                       touchAction: dragEnabled ? "none" : undefined,
@@ -2944,10 +3431,12 @@ export function ViewerPreview({
                       </span>
                     ) : (
                       <ShapeGraphic
-                        element={element}
+                        element={graphicElement}
                         strandBend={strandBend}
                         strandPathData={
-                          strandPose ? strandPosePath(strandPose) : undefined
+                          strandPose
+                            ? strandPosePath(strandPose)
+                            : waveLinePathData
                         }
                         strandRibbonPathData={
                           strandPose && element.strokeStyle !== "none"
@@ -2976,6 +3465,9 @@ export function ViewerPreview({
                   width={artboard.width}
                 />
               ))}
+              {trailRows.length ? (
+                <ViewerPointerTrails limits={trailLimits} ref={trailLayerRef} />
+              ) : null}
             </div>
           </div>
         </div>

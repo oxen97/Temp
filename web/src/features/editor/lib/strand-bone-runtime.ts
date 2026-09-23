@@ -43,6 +43,87 @@ const clamp = (value: number, min: number, max: number) =>
 
 const copy = (point: StrandBonePoint): StrandBonePoint => ({ ...point });
 
+/** Transfer a passing pointer's horizontal momentum through a hanging strand.
+ * Unlike a grab, this never pins a bone to the pointer or moves its anchor.
+ */
+export function applyStrandSwipeImpulse(
+  pose: StrandPose,
+  deltaX: number,
+  strength: number,
+): StrandPose {
+  if (!pose.points.length || !Number.isFinite(deltaX) || strength <= 0)
+    return pose;
+  const impulse = clamp(deltaX, -70, 70) * 12 * clamp(strength, 0, 1);
+  if (Math.abs(impulse) < 0.01) return pose;
+  const lastIndex = Math.max(1, pose.points.length - 1);
+  const points = pose.points.map(copy);
+  const velocities = pose.velocities.map(copy);
+  for (let index = 0; index < points.length; index += 1) {
+    if (index === pose.anchorIndex) continue;
+    const progress = Math.abs(index - pose.anchorIndex) / lastIndex;
+    const weight = progress ** 2.2;
+    velocities[index].x += impulse * weight;
+    points[index].x += (impulse / 12) * weight * 0.18;
+  }
+  // Cap the connected motion together. Clipping individual bones makes the
+  // fastest part of the free end flatten while the middle keeps bending.
+  const maximumSpeed = Math.max(
+    ...velocities.map((velocity) => Math.abs(velocity.x)),
+  );
+  if (maximumSpeed > 850) {
+    const ratio = 850 / maximumSpeed;
+    for (const velocity of velocities) velocity.x *= ratio;
+  }
+  return { ...pose, points, velocities };
+}
+
+/** Enforce authored reach, optionally preserving the connected swipe shape. */
+export function limitStrandPoseDisplacement(
+  pose: StrandPose,
+  maxDisplacement: number,
+  options: { preserveShape?: boolean } = {},
+): StrandPose {
+  const limit = Math.max(0, maxDisplacement);
+  if (options.preserveShape) {
+    const maximum = Math.max(
+      0,
+      ...pose.points.map((point, index) =>
+        Math.hypot(point.x - pose.rest[index].x, point.y - pose.rest[index].y),
+      ),
+    );
+    if (maximum <= limit) return pose;
+    const ratio = limit / Math.max(0.0001, maximum);
+    return {
+      ...pose,
+      points: pose.points.map((point, index) => ({
+        x: pose.rest[index].x + (point.x - pose.rest[index].x) * ratio,
+        y: pose.rest[index].y + (point.y - pose.rest[index].y) * ratio,
+      })),
+      velocities: pose.velocities.map((velocity) => ({
+        x: velocity.x * ratio,
+        y: velocity.y * ratio,
+      })),
+    };
+  }
+  const points = pose.points.map((point, index) => {
+    const rest = pose.rest[index];
+    const dx = point.x - rest.x;
+    const dy = point.y - rest.y;
+    const distance = Math.hypot(dx, dy);
+    if (distance <= limit) return point;
+    const ratio = limit / Math.max(0.0001, distance);
+    return { x: rest.x + dx * ratio, y: rest.y + dy * ratio };
+  });
+  if (points.every((point, index) => point === pose.points[index])) return pose;
+  return {
+    ...pose,
+    points,
+    velocities: pose.velocities.map((velocity, index) =>
+      points[index] === pose.points[index] ? velocity : { x: 0, y: 0 },
+    ),
+  };
+}
+
 function interpolate(
   from: StrandBonePoint,
   to: StrandBonePoint,

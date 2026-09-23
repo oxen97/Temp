@@ -50,7 +50,13 @@ export function ShapeGraphic({
   const visibleStrokeWidth = strokeVisible ? element.strokeWidth : 0;
   const ribbonOpacity = Math.max(0, Math.min(1, (element.strokeOpacity ?? 100) / 100));
   const pinocchioNose = element.id === "pinocchio-demo-nose";
-  const ribbonGradient = strandRibbonPathData ? (
+  const swipeStrand = (element.interactions ?? []).some(
+    (interaction) =>
+      interaction.enabled !== false &&
+      interaction.effect === "strand-bend" &&
+      interaction.strandDragMode === "swipe",
+  );
+  const ribbonGradient = strandRibbonPathData && !swipeStrand ? (
     <defs>
       <linearGradient
         id={ribbonGradientId}
@@ -375,9 +381,9 @@ export function ShapeGraphic({
             className="pen-visible-path"
             d={index === 0 && strandPathData ? strandPathData : pathData(path.points, path.closed)}
             key={`visible-${index}`}
-            stroke={index === 0 && strandRibbonPathData ? "none" : stroke}
+            stroke={index === 0 && strandRibbonPathData && !swipeStrand ? "none" : stroke}
             strokeDasharray={strokeDasharrayForElement(element)}
-            strokeOpacity={(element.strokeOpacity ?? 100) / 100}
+            strokeOpacity={swipeStrand ? undefined : (element.strokeOpacity ?? 100) / 100}
             strokeLinecap="round"
             strokeLinejoin="round"
             strokeWidth={visibleStrokeWidth}
@@ -385,7 +391,7 @@ export function ShapeGraphic({
             vectorEffect="non-scaling-stroke"
           />
         ))}
-        {strandRibbonPathData ? (
+        {strandRibbonPathData && !swipeStrand ? (
           <>
             <path
               className="strand-ribbon"
@@ -456,13 +462,13 @@ export function ShapeGraphic({
               d={bentPath}
               fill="none"
               pointerEvents="none"
-              stroke={strandRibbonPathData ? "none" : stroke}
+              stroke={strandRibbonPathData && !swipeStrand ? "none" : stroke}
               strokeDasharray={strokeDasharrayForElement(element)}
               strokeLinecap="round"
               strokeWidth={visibleStrokeWidth}
               vectorEffect="non-scaling-stroke"
             />
-            {strandRibbonPathData ? (
+            {strandRibbonPathData && !swipeStrand ? (
               <path
                 className="strand-ribbon"
                 d={strandRibbonPathData}

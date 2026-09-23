@@ -5,6 +5,7 @@ import {
   serializeEditorDocument,
 } from "@/core/project/editor-document";
 import { createDefaultInteraction } from "@/features/editor/lib/interaction-model";
+import { createSceneLogicRule } from "@/features/editor/lib/scene-logic";
 import {
   type CanvasElement,
   useEditorStore,
@@ -47,6 +48,21 @@ beforeEach(() => {
 });
 
 describe("editor store interactions", () => {
+  it("stores page routes in undo history", () => {
+    const rule = createSceneLogicRule({
+      id: "intro-next",
+      objectId: "shape-1",
+      interactionId: "next-click",
+      targetPageId: "gallery",
+    });
+    useEditorStore.getState().setPageLogicRules("page-1", [rule]);
+    expect(useEditorStore.getState().pages[0].logicRules).toEqual([rule]);
+    useEditorStore.getState().undo();
+    expect(useEditorStore.getState().pages[0].logicRules).toBeUndefined();
+    useEditorStore.getState().redo();
+    expect(useEditorStore.getState().pages[0].logicRules).toEqual([rule]);
+  });
+
   it("adds an interaction to an element", () => {
     useEditorStore
       .getState()

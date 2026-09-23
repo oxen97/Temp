@@ -1,6 +1,7 @@
 import { create } from "zustand";
 
 import type { InteractionDefinition } from "@/features/editor/lib/interaction-model";
+import type { SceneLogicRule } from "@/features/editor/lib/scene-logic";
 import type { PathPoint, VectorPath } from "@/features/editor/lib/vector-types";
 import {
   cloneObject3D,
@@ -218,6 +219,7 @@ export type EditorPage = {
   id: string;
   name: string;
   elements: CanvasElement[];
+  logicRules?: SceneLogicRule[];
   objects3d?: Object3DElement[];
   scene3d?: Scene3DSettings;
   backgroundMusic?: BackgroundMusicSettings;
@@ -319,6 +321,7 @@ type EditorState = {
     elementId: string,
     interactions: InteractionDefinition[],
   ) => void;
+  setPageLogicRules: (pageId: string, rules: SceneLogicRule[]) => void;
   updateObject3D: (objectId: string, updates: Partial<Object3DElement>) => void;
   updateScene3D: (updates: Partial<Scene3DSettings>) => void;
   replaceElements: (
@@ -386,6 +389,7 @@ function createId(prefix: string) {
 function clonePages(pages: EditorPage[]) {
   return pages.map((page) => ({
     ...page,
+    logicRules: page.logicRules ? structuredClone(page.logicRules) : undefined,
     objects3d: page.objects3d?.map(cloneObject3D),
     scene3d: page.scene3d ? resolveScene3DSettings(page.scene3d) : undefined,
     backgroundMusic: page.backgroundMusic
@@ -584,7 +588,9 @@ function unlockedSelection(
 ) {
   const page = state.pages.find((item) => item.id === state.activePageId);
   const unlockedElements = new Set(
-    page?.elements.filter((element) => !element.locked).map((element) => element.id),
+    page?.elements
+      .filter((element) => !element.locked)
+      .map((element) => element.id),
   );
   const unlockedObjects3D = new Set(
     page?.objects3d
@@ -909,6 +915,19 @@ export const useEditorStore = create<EditorState>((set) => ({
       past: pushHistory(state),
       future: [],
     })),
+  setPageLogicRules: (pageId, rules) =>
+    set((state) => {
+      if (!state.pages.some((page) => page.id === pageId)) return state;
+      return {
+        pages: state.pages.map((page) =>
+          page.id === pageId
+            ? { ...page, logicRules: structuredClone(rules) }
+            : page,
+        ),
+        past: pushHistory(state),
+        future: [],
+      };
+    }),
   updateObject3D: (objectId, updates) =>
     set((state) => ({
       pages: updateActivePageObjects3D(state, (objects) =>

@@ -112,6 +112,8 @@ const threeDMappingAdditions: Record<string, InteractionOption[]> = {
 
 const liquidMergeTriggers = new Set(["near-target", "while-overlapping"]);
 const strandBendTriggers = new Set(["drag", "pointer-move"]);
+const pointerTrailTriggers = new Set(["drag"]);
+const waveDeformTriggers = new Set(["pointer-move"]);
 const collisionBounceTriggers = new Set(["overlap-start", "drop-on-target"]);
 const mergeable2DTypes = new Set([
   "rectangle", "circle", "triangle", "star", "line", "pen",
@@ -221,6 +223,9 @@ const modelAnimationEffectValues = new Set(
 );
 
 export const immediateEffects = new Set([
+  "pointer-trail",
+  "spawn-instance",
+  "emit-event",
   "order",
   "play",
   "pause",
@@ -271,6 +276,23 @@ export function getEffectOptions(
             : []),
         ]
       : [];
+  const authoredPointerEffects: InteractionOption[] = isPure2D
+    ? [
+        ...(trigger === "click-tap"
+          ? [{ label: "Emit Event (Logic Only)", value: "emit-event" }]
+          : []),
+        ...(pointerTrailTriggers.has(trigger)
+          ? [{ label: "Emit Pointer Trail", value: "pointer-trail" }]
+          : []),
+        ...(trigger === "click-tap"
+          ? [{ label: "Spawn Instance", value: "spawn-instance" }]
+          : []),
+        ...(waveDeformTriggers.has(trigger) &&
+        (selectedTypes[0] === "pen" || selectedTypes[0] === "line")
+          ? [{ label: "Wave / Curve Deform", value: "wave-deform" }]
+          : []),
+      ]
+    : [];
   if (selectedTypes.length > 1) {
     return [
       ...commonEffects,
@@ -278,6 +300,7 @@ export function getEffectOptions(
       ...visualPipelineEffects,
       ...(is3D ? spatial3DEffects : []),
       ...(isPure2D ? twoDTargetEffects : []),
+      ...authoredPointerEffects,
       { label: "Group Animation", value: "group-animation" },
     ];
   }
@@ -289,6 +312,7 @@ export function getEffectOptions(
       ...visualPipelineEffects,
       ...twoDTargetEffects,
       ...imageEffects,
+      ...authoredPointerEffects,
       ...(collisionBounceTriggers.has(trigger)
         ? [{ label: "Bounce Off Target", value: "collision-bounce" }]
         : []),
@@ -302,6 +326,7 @@ export function getEffectOptions(
       ...visualPipelineEffects,
       ...twoDTargetEffects,
       ...textEffects,
+      ...authoredPointerEffects,
       ...hybridCollisionEffects,
     ];
   if (type === "video")
@@ -362,6 +387,7 @@ export function getEffectOptions(
     ...cameraEffects,
     ...visualPipelineEffects,
     ...twoDTargetEffects,
+    ...authoredPointerEffects,
     ...(type !== undefined &&
     (type === "line" || type === "pen") &&
     strandBendTriggers.has(trigger)
@@ -428,6 +454,7 @@ export function getMotionOptions(
     distort: ["direct", "spring"],
     "liquid-merge": ["direct", "spring"],
     "strand-bend": ["direct", "spring"],
+    "wave-deform": ["direct"],
     "look-at-target": ["direct", "spring"],
     "orbit-around-target": ["direct", "spring", "inertia"],
     "attach-to-target": ["direct", "spring"],
@@ -502,6 +529,18 @@ function getBaseResetPolicy(
       description:
         "Default: keep the dialog state until another interaction changes it or the page exits.",
       options: [contextual, keep, pageExit],
+    };
+  }
+  if (effect === "pointer-trail") {
+    return {
+      description: "Default: each emitted mark fades after its own lifespan.",
+      options: [contextual, pageExit],
+    };
+  }
+  if (effect === "spawn-instance") {
+    return {
+      description: "Default: spawned instances remain until page exit or the instance limit is reached.",
+      options: [contextual, pageExit],
     };
   }
   if (

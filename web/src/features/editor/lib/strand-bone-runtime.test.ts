@@ -3,8 +3,10 @@ import { describe, expect, it } from "vitest";
 import type { VectorPath } from "@/features/editor/lib/vector-types";
 
 import {
+  applyStrandSwipeImpulse,
   closestStrandBone,
   createStrandPose,
+  limitStrandPoseDisplacement,
   stepStrandPose,
   strandPosePath,
   strandPoseRibbonPath,
@@ -49,6 +51,100 @@ describe("createStrandPose", () => {
 });
 
 describe("strand bone interaction", () => {
+  it("passes swipe momentum to the free end without moving the anchor", () => {
+    const pose = createStrandPose(straight, { anchor: "top", spacing: 12 });
+    const swiped = applyStrandSwipeImpulse(pose, 24, 1);
+    expect(swiped.points[0]).toEqual(pose.rest[0]);
+    expect(swiped.velocities[0]).toEqual({ x: 0, y: 0 });
+    expect(swiped.velocities.at(-1)?.x).toBeGreaterThan(0);
+    expect(swiped.velocities.at(-1)?.x).toBeGreaterThan(
+      swiped.velocities[1].x,
+    );
+    const moved = stepStrandPose(swiped, {
+      dt: 1 / 60,
+      stiffness: 0.25,
+      damping: 0.14,
+    });
+    expect(moved.points.at(-1)?.x).toBeGreaterThan(swiped.points.at(-1)!.x);
+    expect(pose.points.at(-1)?.x).toBe(0);
+  });
+
+  it("keeps a graded swipe velocity when repeated impulses reach the speed limit", () => {
+    let pose = createStrandPose(straight, { anchor: "bottom", spacing: 12 });
+    for (let swipe = 0; swipe < 20; swipe += 1) {
+      pose = applyStrandSwipeImpulse(pose, 70, 1);
+    }
+    expect(pose.velocities[0].x).toBeCloseTo(850);
+    expect(pose.velocities[0].x).toBeGreaterThan(pose.velocities[5].x * 3);
+    for (let index = 1; index < pose.points.length; index += 1) {
+      expect(pose.velocities[index - 1].x).toBeGreaterThan(
+        pose.velocities[index].x,
+      );
+    }
+    expect(pose.points[pose.anchorIndex]).toEqual(pose.rest[pose.anchorIndex]);
+    expect(pose.velocities[pose.anchorIndex]).toEqual({ x: 0, y: 0 });
+  });
+
+  it.each(["top", "bottom"] as const)(
+    "keeps a smooth %s-anchored bend at the displacement limit across repeated reversals",
+    (anchor) => {
+      let pose = createStrandPose(
+        {
+          points: [
+            { x: 0, y: 0 },
+            { x: 0, y: 360 },
+          ],
+        },
+        { anchor, spacing: 12 },
+      );
+      const sway = { dt: 1 / 60, stiffness: 0.29, damping: 0.18 };
+      let maximumDisplacement = 0;
+      let maximumTangentChange = 0;
+      for (let frame = 0; frame < 120; frame += 1) {
+        const direction = Math.floor(frame / 30) % 2 === 0 ? 1 : -1;
+        pose = limitStrandPoseDisplacement(
+          stepStrandPose(
+            applyStrandSwipeImpulse(pose, direction * 70, 1),
+            sway,
+          ),
+          175,
+          { preserveShape: true },
+        );
+        const displacements = pose.points.map((point, index) =>
+          Math.hypot(point.x - pose.rest[index].x, point.y - pose.rest[index].y),
+        );
+        maximumDisplacement = Math.max(maximumDisplacement, ...displacements);
+        expect(Math.max(...displacements)).toBeLessThanOrEqual(175.0001);
+        expect(pose.points[pose.anchorIndex]).toEqual(
+          pose.rest[pose.anchorIndex],
+        );
+        const tangents = pose.points.slice(1).map((point, index) =>
+          Math.atan2(
+            point.x - pose.points[index].x,
+            point.y - pose.points[index].y,
+          ),
+        );
+        for (let index = 1; index < tangents.length; index += 1) {
+          // Per-bone clipping makes a sharp tangent break where the upper
+          // section hits the limit and the lower section is still moving.
+          maximumTangentChange = Math.max(
+            maximumTangentChange,
+            Math.abs(tangents[index] - tangents[index - 1]),
+          );
+        }
+      }
+      expect(maximumDisplacement).toBeCloseTo(175);
+      expect(maximumTangentChange).toBeLessThan(Math.PI / 18);
+      for (let frame = 0; frame < 600; frame += 1) {
+        pose = stepStrandPose(pose, sway);
+      }
+      expect(pose.points).toEqual(pose.rest);
+      expect(
+        pose.velocities.every((velocity) => velocity.x === 0 && velocity.y === 0),
+      ).toBe(true);
+    },
+  );
+
   it("keeps a fully rigid nose straight through a 2D grab and spring release", () => {
     const horizontal: VectorPath = {
       points: [
