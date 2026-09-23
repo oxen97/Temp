@@ -580,6 +580,7 @@ function topography(): CanvasElement[] {
       triggerArea: "entire-artwork",
       effect: "move",
       motion: "direct",
+      smoothing: 0,
       moveX: 32,
       moveY: 21,
       trackDistance: 620,

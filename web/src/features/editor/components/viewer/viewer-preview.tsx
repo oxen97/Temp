@@ -16,6 +16,12 @@ import { Artboard3DScene } from "@/features/editor/components/canvas/artboard-3d
 import { ShapeGraphic } from "@/features/editor/components/canvas/shape-graphic";
 import { MetaballLayer } from "@/features/editor/components/viewer/metaball-layer";
 import { ViewerBackgroundMusic } from "@/features/editor/components/viewer/viewer-background-music";
+import { ViewerWaveGraphic } from "@/features/editor/components/viewer/viewer-wave-graphic";
+import {
+  ViewerPointerVisual,
+  isolatedPointerVisualIds,
+} from "@/features/editor/components/viewer/viewer-pointer-visual";
+import { ViewerWaveClock } from "@/features/editor/lib/viewer-wave-clock";
 import {
   ViewerPointerTrails,
   type ViewerPointerTrailsHandle,
@@ -54,7 +60,7 @@ import {
   createSpawnInstance,
   createTrailParticles,
   sampleTrailSegment,
-  waveDeformedPaths,
+  viewerPointToElementLocal as strandLocalPoint,
   type ViewerPoint,
   type ViewerSpawnInstance,
 } from "@/features/editor/lib/viewer-generated-effects";
@@ -288,28 +294,6 @@ function strandWorldPoint(
       centerY +
       x * Math.sin(angle) +
       y * Math.cos(angle),
-  };
-}
-
-function strandLocalPoint(
-  point: StrandBonePoint,
-  element: CanvasElement,
-  visual: RuntimeVisual,
-): StrandBonePoint {
-  const centerX = element.width / 2;
-  const centerY = element.height / 2;
-  const x = point.x - element.x - visual.tx - centerX;
-  const y = point.y - element.y - visual.ty - centerY;
-  const angle = ((element.rotation + visual.rotate) * Math.PI) / 180;
-  return {
-    x:
-      centerX +
-      (x * Math.cos(angle) + y * Math.sin(angle)) /
-        (Math.max(0.0001, Math.abs(visual.scaleX)) * (element.flipX ? -1 : 1)),
-    y:
-      centerY +
-      (-x * Math.sin(angle) + y * Math.cos(angle)) /
-        (Math.max(0.0001, Math.abs(visual.scaleY)) * (element.flipY ? -1 : 1)),
   };
 }
 
@@ -583,13 +567,7 @@ export function ViewerPreview({
   const [spawnInstances, setSpawnInstances] = useState<ViewerSpawnInstance[]>(
     [],
   );
-  const [waveFrame, setWaveFrame] = useState<{
-    pointer: ViewerPoint | null;
-    seconds: number;
-    strength: number;
-  }>({ pointer: null, seconds: 0, strength: 0 });
-  const waveFrameRef = useRef(waveFrame);
-  const waveTargetPointerRef = useRef<ViewerPoint | null>(null);
+  const [waveClock] = useState(() => new ViewerWaveClock());
   const [pagePointer, setPagePointer] = useState<{
     x: number;
     y: number;
@@ -719,7 +697,15 @@ export function ViewerPreview({
   );
   const setInteractionHover = useCallback(
     (element: CanvasElement, hovering: boolean) => {
-      if (!hasRuntimeInteractions(element.interactions)) return;
+      // Crossing animated paths must not rerender the scene when they only
+      // listen to Pointer Move. Sound and direct-target hover events run
+      // separately; this state is consumed exclusively by Hover effects.
+      if (
+        !(element.interactions ?? []).some(
+          (interaction) =>
+            interaction.enabled !== false && interaction.trigger === "hover",
+        )
+      ) return;
       mutateRuntimeState(element.id, (state) => ({ ...state, hovering }));
     },
     [mutateRuntimeState],
@@ -1407,53 +1393,26 @@ export function ViewerPreview({
       ),
     [trailRows],
   );
-  const waveInteractionsByElementId = new Map<string, InteractionDefinition>();
-  for (const source of renderElements) {
-    for (const interaction of source.interactions ?? []) {
-      if (
-        interaction.enabled === false ||
-        interaction.trigger !== "pointer-move" ||
-        interaction.effect !== "wave-deform"
-      )
-        continue;
-      waveInteractionsByElementId.set(source.id, interaction);
-      for (const targetId of interaction.waveTargetIds ?? [])
-        waveInteractionsByElementId.set(targetId, interaction);
+  const waveInteractionsByElementId = useMemo(() => {
+    const interactions = new Map<string, InteractionDefinition>();
+    for (const source of renderElements) {
+      for (const interaction of source.interactions ?? []) {
+        if (
+          interaction.enabled === false ||
+          interaction.trigger !== "pointer-move" ||
+          interaction.effect !== "wave-deform"
+        )
+          continue;
+        interactions.set(source.id, interaction);
+        for (const targetId of interaction.waveTargetIds ?? [])
+          interactions.set(targetId, interaction);
+      }
     }
-  }
-  const usesWaveDeform = renderElements.some(
-    (element) =>
-      (element.type === "pen" || element.type === "line") &&
-      waveInteractionsByElementId.has(element.id),
-  );
-  waveTargetPointerRef.current = pagePointer;
-  useEffect(() => {
-    if (!usesWaveDeform) return;
-    let frame = 0;
-    let previous = 0;
-    const animate = (now: number) => {
-      const deltaSeconds = Math.min(
-        0.05,
-        (now - (previous || now - 16)) / 1000,
-      );
-      previous = now;
-      const target = waveTargetPointerRef.current;
-      const prior = waveFrameRef.current;
-      const strength =
-        prior.strength +
-        ((target ? 1 : 0) - prior.strength) * Math.min(1, deltaSeconds * 10);
-      const next = {
-        pointer: target ?? prior.pointer,
-        seconds: now / 1000,
-        strength: strength < 0.01 && !target ? 0 : strength,
-      };
-      waveFrameRef.current = next;
-      setWaveFrame(next);
-      if (!prefersReducedMotion) frame = requestAnimationFrame(animate);
-    };
-    frame = requestAnimationFrame(animate);
-    return () => cancelAnimationFrame(frame);
-  }, [usesWaveDeform, prefersReducedMotion]);
+    return interactions;
+  }, [renderElements]);
+  useLayoutEffect(() => {
+    waveClock.setReducedMotion(prefersReducedMotion);
+  }, [waveClock, prefersReducedMotion]);
   // Every visible 2D element is a static collision proxy in the 3D world
   // (extruded through z), so 3D physics bodies collide with 2D shapes.
   const collision3DProxies = useMemo(
@@ -1476,6 +1435,23 @@ export function ViewerPreview({
       (interaction) =>
         interaction.enabled !== false && interaction.trigger === "pointer-move",
     ),
+  );
+  const isolatedPointerIds = useMemo(
+    () =>
+      objects3d.length || dropPlacements.size || spawnInstances.length
+        ? new Set<string>()
+        : isolatedPointerVisualIds(renderElements),
+    [renderElements, objects3d.length, dropPlacements.size, spawnInstances.length],
+  );
+  const usesReactPointerMove = renderElements.some(
+    (element) =>
+      !isolatedPointerIds.has(element.id) &&
+      (element.interactions ?? []).some(
+        (interaction) =>
+          interaction.enabled !== false &&
+          interaction.trigger === "pointer-move" &&
+          interaction.effect !== "wave-deform",
+      ),
   );
   const visibleElements = renderElements.filter((element) => element.visible);
   const elementsById = new Map(
@@ -2639,7 +2615,12 @@ export function ViewerPreview({
                 );
               }}
               onPointerLeave={
-                usesPointerMove ? () => setPagePointer(null) : undefined
+                usesPointerMove
+                  ? () => {
+                      waveClock.setPointer(null);
+                      if (usesReactPointerMove) setPagePointer(null);
+                    }
+                  : undefined
               }
               onPointerMove={
                 usesPointerMove || trailRows.length
@@ -2649,7 +2630,8 @@ export function ViewerPreview({
                         event.clientY,
                       );
                       if (!point) return;
-                      if (usesPointerMove) setPagePointer(point);
+                      if (usesPointerMove) waveClock.setPointer(point);
+                      if (usesReactPointerMove) setPagePointer(point);
                       const session = trailSessionsRef.current.get(
                         event.pointerId,
                       );
@@ -2752,50 +2734,6 @@ export function ViewerPreview({
                 const waveInteraction = waveInteractionsByElementId.get(
                   element.id,
                 );
-                const wavePointer = (prefersReducedMotion
-                  ? pagePointer
-                  : waveFrame.pointer) ?? {
-                  x: artboard.width / 2,
-                  y: artboard.height / 2,
-                };
-                const wavePaths =
-                  waveInteraction &&
-                  (element.type === "pen" || element.type === "line")
-                    ? waveDeformedPaths(
-                        element,
-                        waveInteraction,
-                        strandLocalPoint(wavePointer, element, runtimeVisual),
-                        {
-                          x:
-                            (wavePointer.x / Math.max(1, artboard.width) -
-                              0.5) *
-                            2,
-                          y:
-                            (wavePointer.y / Math.max(1, artboard.height) -
-                              0.5) *
-                            2,
-                        },
-                        prefersReducedMotion ? 0 : waveFrame.seconds,
-                        prefersReducedMotion
-                          ? pagePointer
-                            ? 1
-                            : 0
-                          : waveFrame.strength,
-                        elementIndex,
-                      )
-                    : null;
-                const graphicElement =
-                  wavePaths && element.type === "pen"
-                    ? {
-                        ...element,
-                        vectorPaths: wavePaths,
-                        points: wavePaths[0]?.points,
-                      }
-                    : element;
-                const waveLinePathData =
-                  wavePaths && element.type === "line"
-                    ? pathData(wavePaths[0]?.points ?? [])
-                    : undefined;
                 const strandBend = strandPose
                   ? undefined
                   : strandBendForElement(
@@ -3409,6 +3347,9 @@ export function ViewerPreview({
                       zIndex: isModalMember ? 1000 : undefined,
                     }}
                   >
+                    {isolatedPointerIds.has(element.id) ? (
+                      <ViewerPointerVisual element={element} clock={waveClock} />
+                    ) : null}
                     {element.type === "text" ? (
                       <div
                         className="text-shape"
@@ -3429,14 +3370,34 @@ export function ViewerPreview({
                       >
                         <ShapeGraphic element={element} />
                       </span>
+                    ) : waveInteraction &&
+                      (element.type === "pen" || element.type === "line") ? (
+                      <ViewerWaveGraphic
+                        element={element}
+                        interaction={waveInteraction}
+                        visual={runtimeVisual}
+                        clock={waveClock}
+                        artboardWidth={artboard.width}
+                        artboardHeight={artboard.height}
+                        elementIndex={elementIndex}
+                        strandBend={strandBend}
+                        strandPathData={
+                          strandPose ? strandPosePath(strandPose) : undefined
+                        }
+                        strandRibbonPathData={
+                          strandPose && element.strokeStyle !== "none"
+                            ? strandPoseRibbonPath(strandPose, element.strokeWidth)
+                            : undefined
+                        }
+                      />
                     ) : (
                       <ShapeGraphic
-                        element={graphicElement}
+                        element={element}
                         strandBend={strandBend}
                         strandPathData={
                           strandPose
                             ? strandPosePath(strandPose)
-                            : waveLinePathData
+                            : undefined
                         }
                         strandRibbonPathData={
                           strandPose && element.strokeStyle !== "none"

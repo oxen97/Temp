@@ -322,9 +322,36 @@ export function easingToCss(easing: string): string {
   return CSS_EASINGS.has(easing) ? easing : "ease-out";
 }
 
+type TransitionProperty = "transform" | "opacity" | "filter";
+
+/** Only effects composed by RuntimeVisual own these CSS properties. */
+function transitionPropertyForEffect(effect: string): TransitionProperty | null {
+  switch (effect) {
+    case "move":
+    case "rotate":
+    case "scale":
+    case "skew":
+      return "transform";
+    case "opacity":
+    case "show-hide":
+      return "opacity";
+    case "blur":
+    case "shadow":
+      return "filter";
+    default:
+      return null;
+  }
+}
+
 /**
- * CSS transition for an element. Dragging follows the pointer with no easing;
- * otherwise transform + opacity animate over the active interaction's duration.
+ * Dragging follows the pointer without a CSS transition. Other pointer-driven
+ * properties use the continuous TIMING controls (Smoothing / Easing), never a
+ * hidden event Duration / Delay. This also applies while returning to rest
+ * after pointer leave. Unrelated event properties keep their event timing.
+ *
+ * Transform components share one CSS property: if continuous and event effects
+ * both change transform, continuous timing wins so an event cannot unexpectedly
+ * add latency to pointer following. Event-only Direct still uses Duration.
  */
 export function activeTransition(
   interactions: InteractionDefinition[] | undefined,
@@ -344,8 +371,34 @@ export function activeTransition(
     .map((id) => activeById.get(id))
     .find((interaction) => interaction !== undefined);
   const active = latestTriggered ?? activeInteractions[0];
-  let duration = active ? Math.max(0, active.duration) : 0.3;
-  let easing = active ? easingToCss(active.easing) : "ease-out";
+  const continuousByProperty = new Map<TransitionProperty, InteractionDefinition>();
+  for (const interaction of interactions ?? []) {
+    if (interaction.enabled === false || interaction.trigger !== "pointer-move") {
+      continue;
+    }
+    const property = transitionPropertyForEffect(interaction.effect);
+    if (property && !continuousByProperty.has(property)) {
+      continuousByProperty.set(property, interaction);
+    }
+  }
+  return (["transform", "opacity", "filter"] as const)
+    .map((property) => {
+      const continuous = continuousByProperty.get(property);
+      return `${property} ${transitionTiming(continuous ?? active, !!continuous)}`;
+    })
+    .join(", ");
+}
+
+function transitionTiming(
+  active: InteractionDefinition | undefined,
+  continuous: boolean,
+): string {
+  let duration = active
+    ? Math.max(0, continuous ? active.smoothing : active.duration)
+    : 0.3;
+  let easing = active
+    ? easingToCss(continuous ? active.continuousEasing : active.easing)
+    : "ease-out";
   if (active?.motion === "spring") {
     const springScale = clamp(
       Math.sqrt(
@@ -363,13 +416,14 @@ export function activeTransition(
   // at the firing moment; ordinary visual effects use a CSS delay.
   const delay =
     active &&
+    !continuous &&
     active.trigger !== "drop-on-target" &&
     active.trigger !== "drop-outside-target" &&
     active.trigger !== "drag-enter-target" &&
     active.trigger !== "drag-leave-target"
       ? Math.max(0, active.delay)
       : 0;
-  return `transform ${duration}s ${easing} ${delay}s, opacity ${duration}s ${easing} ${delay}s, filter ${duration}s ${easing} ${delay}s`;
+  return `${duration}s ${easing} ${delay}s`;
 }
 
 export function composeTransform(

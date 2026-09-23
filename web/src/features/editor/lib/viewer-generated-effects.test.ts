@@ -246,4 +246,42 @@ describe("viewer generated effects", () => {
     expect(path.points[0].handleOut?.x).toBeGreaterThan(50);
     expect(path.points[1].handleIn?.y).toBeGreaterThan(25);
   });
+
+  it("deforms an ordinary line between fixed endpoints without rewriting the authored line", () => {
+    const line = shape("authored-line", {
+      type: "line",
+      width: 200,
+      height: 20,
+    });
+    const interaction = createDefaultInteraction({
+      effect: "wave-deform",
+      waveAmplitude: 30,
+      waveLength: 200,
+      waveSpeed: 1,
+    });
+    const first = waveDeformedPaths(
+      line,
+      interaction,
+      { x: 100, y: 10 },
+      { x: 0, y: 0 },
+      0,
+      1,
+      0,
+    )[0];
+    const later = waveDeformedPaths(
+      line,
+      interaction,
+      { x: 100, y: 10 },
+      { x: 0, y: 0 },
+      0.25,
+      1,
+      0,
+    )[0];
+    expect(first.points.length).toBeGreaterThan(2);
+    expect(first.points[0].y).toBe(10);
+    expect(first.points.at(-1)?.y).toBeCloseTo(10);
+    expect(first.points.some((point) => Math.abs(point.y - 10) > 5)).toBe(true);
+    expect(later.points).not.toEqual(first.points);
+    expect(line.vectorPaths).toBeUndefined();
+  });
 });

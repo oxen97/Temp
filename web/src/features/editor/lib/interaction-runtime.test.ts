@@ -456,6 +456,180 @@ describe("interaction runtime", () => {
     ).toBe("none");
   });
 
+  it("uses zero authored smoothing for instant Direct pointer movement and return", () => {
+    const follow = createDefaultInteraction({
+      trigger: "pointer-move",
+      effect: "move",
+      motion: "direct",
+      smoothing: 0,
+      continuousEasing: "linear",
+      // Event settings must not delay a continuous interaction.
+      duration: 4,
+      delay: 2,
+      easing: "ease-in-out",
+      moveX: 50,
+      trackDistance: 100,
+    });
+    expect(activeTransition([follow], IDLE_RUNTIME_STATE)).toBe(
+      "transform 0s linear 0s, opacity 0.3s ease-out 0s, filter 0.3s ease-out 0s",
+    );
+    expect(
+      runtimeVisualForElement([follow], IDLE_RUNTIME_STATE, {
+        center: { x: 0, y: 0 },
+        pointer: { x: 100, y: 0 },
+      }).tx,
+    ).toBe(50);
+    expect(
+      runtimeVisualForElement([follow], IDLE_RUNTIME_STATE, {
+        center: { x: 0, y: 0 },
+        pointer: null,
+      }).tx,
+    ).toBe(0);
+    // Pointer leave must not reintroduce the fallback 0.3 s transition.
+    expect(activeTransition([follow], IDLE_RUNTIME_STATE)).toContain(
+      "transform 0s linear 0s",
+    );
+  });
+
+  it("honors continuous smoothing and easing independently from event timing", () => {
+    const follow = createDefaultInteraction({
+      trigger: "pointer-move",
+      effect: "scale",
+      motion: "direct",
+      smoothing: 0.18,
+      continuousEasing: "ease-in",
+      duration: 4,
+      delay: 2,
+      easing: "ease-out",
+    });
+    expect(activeTransition([follow], IDLE_RUNTIME_STATE)).toContain(
+      "transform 0.18s ease-in 0s",
+    );
+  });
+
+  it.each([
+    ["move", "transform"],
+    ["rotate", "transform"],
+    ["scale", "transform"],
+    ["skew", "transform"],
+    ["opacity", "opacity"],
+    ["show-hide", "opacity"],
+    ["blur", "filter"],
+    ["shadow", "filter"],
+  ])("limits continuous %s timing to its %s CSS property", (effect, property) => {
+    const pointer = createDefaultInteraction({
+      trigger: "pointer-move",
+      effect,
+      motion: "direct",
+      smoothing: 0,
+      continuousEasing: "linear",
+    });
+    const transition = activeTransition([pointer], IDLE_RUNTIME_STATE);
+    for (const candidate of ["transform", "opacity", "filter"]) {
+      expect(transition).toContain(
+        candidate === property
+          ? `${candidate} 0s linear 0s`
+          : `${candidate} 0.3s ease-out 0s`,
+      );
+    }
+  });
+
+  it("keeps a simultaneous click opacity animation while pointer movement stays direct", () => {
+    const pointer = createDefaultInteraction({
+      trigger: "pointer-move",
+      effect: "move",
+      motion: "direct",
+      smoothing: 0,
+    });
+    const click = createDefaultInteraction({
+      trigger: "click-tap",
+      effect: "opacity",
+      motion: "direct",
+      duration: 0.8,
+      delay: 0.2,
+      easing: "ease-in",
+    });
+    expect(
+      activeTransition([pointer, click], {
+        ...IDLE_RUNTIME_STATE,
+        toggled: true,
+      }),
+    ).toBe(
+      "transform 0s linear 0s, opacity 0.8s ease-in 0.2s, filter 0.8s ease-in 0.2s",
+    );
+  });
+
+  it("ignores disabled and separately rendered pointer effects for CSS transition ownership", () => {
+    const event = createDefaultInteraction({
+      trigger: "click-tap",
+      effect: "move",
+      motion: "direct",
+      duration: 0.7,
+      easing: "linear",
+    });
+    const disabled = createDefaultInteraction({
+      trigger: "pointer-move",
+      effect: "move",
+      enabled: false,
+      smoothing: 0,
+    });
+    const wave = createDefaultInteraction({
+      trigger: "pointer-move",
+      effect: "wave-deform",
+      smoothing: 0,
+    });
+    const state = { ...IDLE_RUNTIME_STATE, toggled: true };
+    expect(activeTransition([disabled, wave, event], state)).toBe(
+      activeTransition([event], state),
+    );
+    expect(activeTransition([disabled, wave], IDLE_RUNTIME_STATE)).toBe(
+      activeTransition(undefined, IDLE_RUNTIME_STATE),
+    );
+  });
+
+  it("retains authored spring response for continuous properties", () => {
+    const spring = createDefaultInteraction({
+      trigger: "pointer-move",
+      effect: "move",
+      motion: "spring",
+      smoothing: 0.2,
+      duration: 5,
+      springStrength: 100,
+      springMass: 4,
+      springDamping: 10,
+    });
+    expect(activeTransition([spring], IDLE_RUNTIME_STATE)).toContain(
+      "transform 0.4s cubic-bezier(0.2, 1.25, 0.3, 1) 0s",
+    );
+  });
+
+  it.each(["click-tap", "hover"])(
+    "preserves Direct %s event duration, easing, delay, and return behavior",
+    (trigger) => {
+      const event = createDefaultInteraction({
+        trigger,
+        effect: "move",
+        motion: "direct",
+        duration: 0.65,
+        delay: 0.15,
+        easing: "ease-in-out",
+        smoothing: 0,
+      });
+      expect(
+        activeTransition([event], {
+          ...IDLE_RUNTIME_STATE,
+          toggled: true,
+          hovering: true,
+        }),
+      ).toBe(
+        "transform 0.65s ease-in-out 0.15s, opacity 0.65s ease-in-out 0.15s, filter 0.65s ease-in-out 0.15s",
+      );
+      expect(activeTransition([event], IDLE_RUNTIME_STATE)).toBe(
+        "transform 0.3s ease-out 0s, opacity 0.3s ease-out 0s, filter 0.3s ease-out 0s",
+      );
+    },
+  );
+
   it("maps authored spring strength and damping into the active transition", () => {
     const spring = createDefaultInteraction({
       id: "spring-drop",

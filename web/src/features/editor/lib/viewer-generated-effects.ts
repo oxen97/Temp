@@ -1,4 +1,5 @@
 import type { InteractionDefinition } from "@/features/editor/lib/interaction-model";
+import type { RuntimeVisual } from "@/features/editor/lib/interaction-runtime";
 import { vectorPathsForElement } from "@/features/editor/lib/vector-path";
 import type {
   CanvasElement,
@@ -6,6 +7,29 @@ import type {
 } from "@/features/editor/store/editor-store";
 
 export type ViewerPoint = { x: number; y: number };
+
+/** Inverse object transform shared by wave and strand pointer deformation. */
+export function viewerPointToElementLocal(
+  point: ViewerPoint,
+  element: CanvasElement,
+  visual: RuntimeVisual,
+): ViewerPoint {
+  const centerX = element.width / 2;
+  const centerY = element.height / 2;
+  const x = point.x - element.x - visual.tx - centerX;
+  const y = point.y - element.y - visual.ty - centerY;
+  const angle = ((element.rotation + visual.rotate) * Math.PI) / 180;
+  return {
+    x:
+      centerX +
+      (x * Math.cos(angle) + y * Math.sin(angle)) /
+        (Math.max(0.0001, Math.abs(visual.scaleX)) * (element.flipX ? -1 : 1)),
+    y:
+      centerY +
+      (-x * Math.sin(angle) + y * Math.cos(angle)) /
+        (Math.max(0.0001, Math.abs(visual.scaleY)) * (element.flipY ? -1 : 1)),
+  };
+}
 
 export type ViewerTrailParticle = ViewerPoint & {
   id: number;
@@ -241,14 +265,33 @@ export function waveDeformedPaths(
   strength: number,
   elementIndex: number,
 ): VectorPath[] {
+  // A line's two endpoints are anchored and cannot express a wave by
+  // themselves. Add bounded cubic samples so the same UI works on Line as
+  // well as Pen, without converting or changing the authored source element.
+  const lineSegments = Math.min(
+    128,
+    Math.max(
+      16,
+      Math.ceil(element.width / Math.max(1, interaction.waveLength / 12)),
+    ),
+  );
+  const lineStep = element.width / lineSegments;
   const paths =
     element.type === "line"
       ? [
           {
-            points: [
-              { x: 0, y: element.height / 2 },
-              { x: element.width, y: element.height / 2 },
-            ],
+            points: Array.from({ length: lineSegments + 1 }, (_, index) => ({
+              x: lineStep * index,
+              y: element.height / 2,
+              handleIn:
+                index > 0
+                  ? { x: lineStep * (index - 1 / 3), y: element.height / 2 }
+                  : undefined,
+              handleOut:
+                index < lineSegments
+                  ? { x: lineStep * (index + 1 / 3), y: element.height / 2 }
+                  : undefined,
+            })),
           },
         ]
       : vectorPathsForElement(element);

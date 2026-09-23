@@ -46,6 +46,18 @@
     키보드 실행은 유지하며, NEXT FIELD 같은 일반 컨트롤에는 키보드 포커스를 표시한다.
   - TOPOGRAPHY: Pointer Move / Touch Move → Wave / Curve Deform.
     28개 펜 경로의 등고선을 포인터와 잔잔한 시간 파동으로 변형한다.
+    모든 Wave 요소는 Preview마다 공유하는 단일 애니메이션 루프에서 SVG 경로만
+    갱신한다. 정적인 UI·도형이나 ViewerPreview 전체를 매 프레임 다시 렌더하지 않으며,
+    포인터 밖의 잔잔한 파동, 추가 타깃 경로, 스트로크·색상, reduced-motion을 유지한다.
+    데모 ID에 종속되지 않아 일반 펜/선에 UI로 설정한 Wave에도 같은 런타임을 사용한다.
+    Pointer Move의 CSS 반응 속도는 이벤트 Duration/Delay가 아닌 TIMING의
+    Smoothing·Easing을 따른다. Direct + Smoothing 0은 즉시 반응하고, 0보다 크면
+    설정한 시간만큼 보간한다. 중앙 원에는 이 UI 값인 Smoothing 0을 저장했다.
+    Pointer Move와 Click/Hover가 다른 속성을 바꾸면 각각의 타이밍을 유지한다.
+    다른 효과와 상태를 공유하지 않는 Pointer Move의 이동·회전·크기·투명도·필터는
+    공통 시각값 계산을 그대로 사용하되 DOM에 직접 반영한다. 드래그·충돌·생성·3D와
+    함께 있는 복합 장면은 기존 공유 런타임 경로를 유지한다. Hover 효과가 없는 경로를
+    포인터가 지나갈 때는 불필요한 Hover 상태 갱신도 하지 않으며 사운드 감지는 유지한다.
   - 모든 효과는 `InteractionDefinition`과 공통 `ViewerPreview`를 사용한다.
     장면 데이터는 `field-notes-demo-elements.ts`, 이전 import 호환은
     `mon-demo-elements.ts`의 re-export만 담당한다.
