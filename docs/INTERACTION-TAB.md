@@ -45,8 +45,10 @@
   `?interactionDemo=classic`은 기존 2D 샘플을 생성한다. `?threeDemo=1`은
   3D 샘플을 생성한다. `?interactionDemo=night-post-office`는 별자리 샘플을
   생성하고 Preview를 연다. Preview를 닫으면 별을 선택해 INTERACTION 탭의
-  설정을 확인할 수 있다. 독립 경로 `/demos/night-post-office`의 세 별 완료
-  조건·동적 진행률은 해당 페이지 코드이며 에디터 seed의 Logic 연동은 아직 없다.
+  설정을 확인할 수 있다. `/demos/night-post-office/`도 이 편집기 데모로
+  이동한다. 기존 독립 작품은 `/demos/night-post-office/story/`에 보존한다.
+  독립 작품의 세 별 완료 조건·동적 진행률은 해당 페이지 코드이며 에디터
+  seed의 Logic 연동은 아직 없다.
 - **정밀 Keyframe 편집기 UI 추가**: 2D/3D Position·Rotation·Scale·Opacity,
   Material, Morph Target 트랙과 키프레임 추가·복제·삭제, 시간·값·Easing,
   재생 헤드와 확대/축소를 별도 전체 화면 편집기에서 조절한다.
@@ -908,7 +910,9 @@ group, Morph Target 이름을 import 시 메타데이터로 추출한다. 좌측
 데모 파라미터를 주지 않은 빈 Scene은 샘플 객체를 자동 생성하지 않는다.
 `?threeDemo=1`은 3D 샘플을, `?interactionDemo=1`은 MON 샘플을 만든다.
 `?interactionDemo=night-post-office`는 별자리 요소를 만들어 Preview를 열고,
-닫은 뒤 INTERACTION 탭에서 설정을 볼 수 있다. 좌측 ASSETS 3D 탭의 모델
+닫은 뒤 INTERACTION 탭에서 설정을 볼 수 있다. `/demos/night-post-office/`는
+이 편집기 데모로 이동하며, 기존 작품은 `/demos/night-post-office/story/`에
+있다. 좌측 ASSETS 3D 탭의 모델
 업로드는 연결되어 있지만 3D 기획 항목 전체의 Preview 실행은 아직 제한된다.
 
 기반을 검증할 때는 `interaction-model`, `interaction-runtime`,

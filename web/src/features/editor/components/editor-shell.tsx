@@ -277,6 +277,7 @@ export function EditorShell({
   const nightPostOfficeDemoSeededRef = useRef(false);
   const pinocchioDemoSeededRef = useRef(false);
   const monDemoFitRef = useRef(false);
+  const nightPostOfficeDemoFitRef = useRef(false);
 
   useEffect(() => {
     if (
@@ -731,6 +732,8 @@ export function EditorShell({
   const [viewMenuOpen, setViewMenuOpen] = useState(false);
   const [previewVisible, setPreviewVisible] = useState(false);
   const [monDemoMode, setMonDemoMode] = useState(false);
+  const [nightPostOfficeDemoMode, setNightPostOfficeDemoMode] =
+    useState(false);
   useEffect(() => {
     if (nightPostOfficeDemoSeededRef.current || typeof window === "undefined")
       return;
@@ -764,6 +767,7 @@ export function EditorShell({
       setSelectedElementIds([NIGHT_POST_OFFICE_FIRST_STAR_ID]);
       setPropertyTab("interaction");
       setPreviewVisible(true);
+      setNightPostOfficeDemoMode(true);
     });
   }, [
     addElement,
@@ -979,6 +983,16 @@ export function EditorShell({
     if (!monDemoMode || previewVisible || monDemoFitRef.current) return;
     monDemoFitRef.current = applyZoomToFit();
   }, [applyZoomToFit, monDemoMode, previewVisible]);
+
+  useEffect(() => {
+    if (
+      !nightPostOfficeDemoMode ||
+      previewVisible ||
+      nightPostOfficeDemoFitRef.current
+    )
+      return;
+    nightPostOfficeDemoFitRef.current = applyZoomToFit();
+  }, [applyZoomToFit, nightPostOfficeDemoMode, previewVisible]);
 
   useEffect(() => {
     if (!viewMenuOpen) return;

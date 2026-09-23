@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 
-import { NightPostOfficeExperience } from "./night-post-office-experience";
+import { NightPostOfficeEditorEntry } from "./night-post-office-editor-entry";
 
 export const metadata: Metadata = {
   title: "별을 배달하는 우체국 · AMOUS",
@@ -8,5 +8,5 @@ export const metadata: Metadata = {
 };
 
 export default function NightPostOfficePage() {
-  return <NightPostOfficeExperience />;
+  return <NightPostOfficeEditorEntry />;
 }

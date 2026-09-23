@@ -3,11 +3,9 @@ import { expect, test } from "@playwright/test";
 const firstStarId = "night-post-office-star-memory";
 const firstSlotId = "night-post-office-slot-1";
 
-test("the story link opens an authored editor preview and closing reveals its interactions", async ({ page }) => {
+test("the public demo opens an authored editor preview and closing reveals its artboard and interactions", async ({ page }) => {
   await page.goto("/demos/night-post-office/");
-  await page
-    .getByRole("link", { name: "AMOUS에서 인터랙션 설정 보기" })
-    .click();
+  await expect(page).toHaveURL(/\?interactionDemo=night-post-office$/);
 
   const preview = page.getByRole("dialog", { name: "Viewer preview" });
   await expect(preview).toBeVisible();
@@ -28,6 +26,25 @@ test("the story link opens an authored editor preview and closing reveals its in
     "그리움 → 별자리 2번 자리",
     "그리움 → 별자리 3번 자리",
   ]);
+
+  const canvas = page.getByRole("region", { name: "Exhibition canvas" });
+  const artboard = page.getByRole("application", { name: "Artboard" });
+  await expect(artboard).toBeVisible();
+  if ((page.viewportSize()?.width ?? 0) >= 1000) {
+    await expect.poll(async () => {
+      const canvasBox = await canvas.boundingBox();
+      const artboardBox = await artboard.boundingBox();
+      if (!canvasBox || !artboardBox) return false;
+      return (
+        artboardBox.x >= canvasBox.x - 2 &&
+        artboardBox.y >= canvasBox.y - 2 &&
+        artboardBox.x + artboardBox.width <=
+          canvasBox.x + canvasBox.width + 2 &&
+        artboardBox.y + artboardBox.height <=
+          canvasBox.y + canvasBox.height + 2
+      );
+    }).toBe(true);
+  }
 });
 
 test("stars snap to any vacant place and cannot occupy the same place", async ({ page }) => {
