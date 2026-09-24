@@ -154,3 +154,17 @@ export const pinocchioBackdropSvg = `data:image/svg+xml;charset=utf-8,${encodeUR
 )}`;
 
 export const pinocchioDemoArtSrc = pinocchioBackdropSvg;
+
+/** Ordinary transparent SVG asset: the bend renderer never knows its ID. */
+export const pinocchioNoseSvg = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(
+  `<svg xmlns="http://www.w3.org/2000/svg" width="210" height="52" viewBox="0 0 210 52">
+    <defs>
+      <linearGradient id="wood" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#ffe0aa"/><stop offset=".3" stop-color="#f4b57e"/>
+        <stop offset=".72" stop-color="#dc9164"/><stop offset="1" stop-color="#aa5e49"/>
+      </linearGradient>
+    </defs>
+    <path d="M0 6H185A20 20 0 0 1 185 46H0Z" fill="url(#wood)" stroke="#9b604b" stroke-width="3.5"/>
+    <path d="M0 6V46" stroke="#eeb07d" stroke-width="5"/>
+  </svg>`,
+).replace(/[!'()*]/g, (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`)}`;

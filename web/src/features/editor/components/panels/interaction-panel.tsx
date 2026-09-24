@@ -1,5 +1,5 @@
-/* Interaction authoring panel. The 2D fields are bound to the selected
-   element's persisted definitions; the remaining 3D planning UI is local. */
+/* Shared effect fields are persisted for both 2D and 3D objects.
+   The remaining specialized 3D planning UI is local. */
 
 import { ChevronDown } from "lucide-react";
 import Image from "next/image";
@@ -26,7 +26,7 @@ import {
   getMotionOptions,
   getResetPolicy,
   immediateEffects,
-  isLiquidMergeShape,
+  isLiquidMergeTarget,
   mediaInteractionTriggers,
   model3DTriggerOptions,
   modelInteractionTriggers,
@@ -859,14 +859,7 @@ export function InteractionPanel({
     sourceKind: sharedSourceKind,
   };
   const triggerGroups = [
-    ...(is3DSelection
-      ? baseTriggerGroups.map((group) => ({
-          ...group,
-          options: group.options.filter(
-            (option) => !targetDragTriggers.has(option.value),
-          ),
-        }))
-      : baseTriggerGroups),
+    ...baseTriggerGroups,
     ...(is3DSelection || isHybridCollisionAvailable ? threeDTriggerGroups : []),
     ...(is3DSelection && animationNames.length > 0 ? modelTriggerGroups : []),
   ];
@@ -944,6 +937,7 @@ export function InteractionPanel({
   const [skewY, setSkewY] = useInteractionField("skewY", 0, binding);
   const [opacityTo, setOpacityTo] = useInteractionField("opacityTo", 40, binding);
   const [blurAmount, setBlurAmount] = useInteractionField("blurAmount", 6, binding);
+  const [shadowColor, setShadowColor] = useInteractionField("shadowColor", "rgba(0, 0, 0, 0.35)", binding);
   const [shadowX, setShadowX] = useInteractionField("shadowX", 0, binding);
   const [shadowY, setShadowY] = useInteractionField("shadowY", 12, binding);
   const [shadowBlur, setShadowBlur] = useInteractionField("shadowBlur", 24, binding);
@@ -1168,7 +1162,6 @@ export function InteractionPanel({
   const spawnSourceChoices = [
     ...spawnGroupChoices,
     ...elements
-      .filter((element) => element.type !== "object3d")
       .map((element) => ({
         label: `${element.name} (${element.type})`,
         value: element.id,
@@ -1176,7 +1169,7 @@ export function InteractionPanel({
   ];
   const wavePathChoices = elements.filter(
     (element) =>
-      (element.type === "line" || element.type === "pen") &&
+      ["line", "pen", "image", "video"].includes(element.type) &&
       element.id !== selectedElementId,
   );
   const targetChoices = obstacleChoices
@@ -1190,8 +1183,7 @@ export function InteractionPanel({
       if (isPhysicalCollision && is2DSelection)
         return element.type === "object3d";
       if (isPhysicalCollision && is3DSelection) return true;
-      if (isLiquidMerge && is3DSelection) return element.type === "object3d";
-      return !isLiquidMerge || isLiquidMergeShape(element.type);
+      return !isLiquidMerge || isLiquidMergeTarget(selectedTypes[0] ?? "", element.type, trigger);
     })
     .map((element) => ({
       label: `${element.name} (${element.type})`,
@@ -1204,6 +1196,10 @@ export function InteractionPanel({
     : authoredInteraction
       ? ""
       : (targetChoices[0]?.value ?? "");
+  const isMediaLiquidPair = isLiquidMerge && [
+    ...selectedTypes,
+    obstacleChoices.find((element) => element.id === selectedCollisionTarget)?.type,
+  ].some((type) => type === "image" || type === "video");
   const matchObjectChoices = (selectedEntries.length
     ? selectedEntries
     : elements
@@ -2347,7 +2343,7 @@ export function InteractionPanel({
             className="interaction-dropdown interaction-effect-dropdown"
             onChange={(nextEffect) => {
               const firstMergeTarget = nextEffect === "liquid-merge"
-                ? obstacleChoices.find((item) => is3DSelection ? item.type === "object3d" : isLiquidMergeShape(item.type))?.id
+                ? obstacleChoices.find((item) => isLiquidMergeTarget(selectedTypes[0] ?? "", item.type, trigger))?.id
                 : undefined;
               const isNextPlacementEffect = [
                 "snap-to-target",
@@ -2364,7 +2360,7 @@ export function InteractionPanel({
                 : undefined;
               const currentMergeTargetIsValid = obstacleChoices.some((item) =>
                 item.id === collisionTarget &&
-                (is3DSelection ? item.type === "object3d" : isLiquidMergeShape(item.type)),
+                isLiquidMergeTarget(selectedTypes[0] ?? "", item.type, trigger),
               );
               const currentPlacementTargetIsValid = targetChoices.some(
                 (item) => item.value === collisionTarget,
@@ -2425,7 +2421,9 @@ export function InteractionPanel({
         {(trigger === "near-target" || trigger === "while-overlapping") &&
         !effectChoices.some((option) => option.value === "liquid-merge") ? (
           <p className="interaction-note">
-            Liquid Merge needs one selected 2D vector shape or strand.
+            {selectedTypes.some((type) => type === "image" || type === "video") && trigger === "while-overlapping"
+              ? "Media Liquid Merge uses Near Target to connect separated outlines; overlapping media retain their original appearance."
+              : "Liquid Merge needs one supported vector, media, or 3D object and a compatible target."}
           </p>
         ) : null}
         {trigger === "pointer-move" &&
@@ -2433,7 +2431,7 @@ export function InteractionPanel({
         !effectChoices.some((option) => option.value === "wave-deform") &&
         !is3DSelection ? (
           <p className="interaction-note">
-            Wave / Curve Deform is available when a Line or Pen path is selected first.
+            Wave / Curve Deform is available for lines, pen paths, images, videos, and 3D objects.
           </p>
         ) : null}
         {selectedEffect === "group-animation" ? (
@@ -2623,7 +2621,7 @@ export function InteractionPanel({
             />
           </Row>
         ) : null}
-        {activeEffect === "skew" && !is3DSelection ? (
+        {activeEffect === "skew" ? (
           <Row label="Skew">
             <div className="interaction-field-pair">
               <DesignNumberField ariaLabel="Skew X" label="X" onChange={setSkewX} unit="°" value={skewX} />
@@ -2652,9 +2650,9 @@ export function InteractionPanel({
                 <DesignNumberField
                   ariaLabel="Rotate Z"
                   label="Z"
-                  onChange={(value) => setThreeDValue("rotateZ", value)}
+                  onChange={setRotateTo}
                   unit="°"
-                  value={threeD.rotateZ}
+                  value={rotateTo}
                 />
               </div>
             </Row>
@@ -3188,11 +3186,11 @@ export function InteractionPanel({
               max={100}
               min={0}
               onBegin={noop}
-              onChange={(value) => is3DSelection ? setExtendedValue("blurAmount", value) : setBlurAmount(value)}
-              value={is3DSelection ? extended.blurAmount : blurAmount}
+              onChange={setBlurAmount}
+              value={blurAmount}
             />
             <span className="interaction-value-caption">
-              {is3DSelection ? extended.blurAmount : blurAmount} px
+              {blurAmount} px
             </span>
           </Row>
         ) : null}
@@ -3233,66 +3231,42 @@ export function InteractionPanel({
         {activeEffect === "shadow" ? (
           <>
             <Row label="Shadow offset">
-              <div
-                className={
-                  is3DSelection
-                    ? "interaction-field-pair is-triple"
-                    : "interaction-field-pair"
-                }
-              >
+              <div className="interaction-field-pair">
                 <DesignNumberField
                   ariaLabel="Shadow X"
                   label="X"
-                  onChange={(value) => is3DSelection ? setExtendedValue("shadowX", value) : setShadowX(value)}
-                  value={is3DSelection ? extended.shadowX : shadowX}
+                  onChange={setShadowX}
+                  value={shadowX}
                 />
                 <DesignNumberField
                   ariaLabel="Shadow Y"
                   label="Y"
-                  onChange={(value) => is3DSelection ? setExtendedValue("shadowY", value) : setShadowY(value)}
-                  value={is3DSelection ? extended.shadowY : shadowY}
-                />
-                {is3DSelection ? (
-                  <DesignNumberField
-                    ariaLabel="Shadow Z"
-                    label="Z"
-                    onChange={(value) => setExtendedValue("shadowZ", value)}
-                    value={extended.shadowZ}
-                  />
-                ) : null}
-              </div>
-            </Row>
-            <Row label="Blur / Spread">
-              <div className="interaction-field-pair">
-                <DesignNumberField
-                  ariaLabel="Shadow blur"
-                  label="B"
-                  min={0}
-                  onChange={(value) => is3DSelection ? setExtendedValue("shadowBlur", value) : setShadowBlur(value)}
-                  value={is3DSelection ? extended.shadowBlur : shadowBlur}
-                />
-                <DesignNumberField
-                  ariaLabel="Shadow spread"
-                  label="S"
-                  onChange={(value) => setExtendedValue("shadowSpread", value)}
-                  value={extended.shadowSpread}
+                  onChange={setShadowY}
+                  value={shadowY}
                 />
               </div>
             </Row>
-            <Row label="Opacity">
-              <DesignRange
-                ariaLabel="Shadow opacity"
-                className="sound-slider"
-                max={100}
+            <Row label="Shadow blur">
+              <DesignNumberField
+                ariaLabel="Shadow blur"
+                label=""
                 min={0}
-                onBegin={noop}
-                onChange={(value) => setExtendedValue("shadowOpacity", value)}
-                value={extended.shadowOpacity}
+                onChange={setShadowBlur}
+                value={shadowBlur}
               />
-              <span className="interaction-value-caption">
-                {extended.shadowOpacity} %
-              </span>
             </Row>
+            <Row label="Color / alpha">
+              <input
+                aria-label="Shadow color"
+                className="interaction-text-input"
+                onChange={(event) => setShadowColor(event.target.value)}
+                type="text"
+                value={shadowColor}
+              />
+            </Row>
+            {is3DSelection ? (
+              <p className="interaction-note">Shadow follows this object&apos;s screen silhouette. X / Y offsets and blur are in screen pixels.</p>
+            ) : null}
           </>
         ) : null}
         {activeEffect === "animate-lighting" ? (
@@ -3748,7 +3722,9 @@ export function InteractionPanel({
               </span>
             </Row>
             <p className="interaction-note">
-              Paired shapes or strands pull together inside Join / Release distance and visually merge; both source objects stay editable.
+              {isMediaLiquidPair
+                ? "A texture-preserving connector joins separated outlines inside Join / Release distance. It is not a Boolean union: overlapping media retain their original appearance."
+                : "Paired shapes or strands pull together inside Join / Release distance and visually merge; both source objects stay editable."}
             </p>
           </>
         ) : null}
@@ -3848,7 +3824,7 @@ export function InteractionPanel({
               <span className="interaction-value-caption">{strandNeighborStrength} %</span>
             </Row>
             <p className="interaction-note">
-              Nearby lines and open pen paths with Strand Bend follow the pointer during Drag or Pointer Move; each keeps its own anchor, stiffness, and damping.
+              Bend lines, open pen paths, images, videos, and 3D objects during Drag or Pointer Move. Each keeps its own anchor, stiffness, and damping.
             </p>
           </>
         ) : null}
@@ -4070,17 +4046,17 @@ export function InteractionPanel({
         {activeEffect === "wave-deform" ? (
           <>
             <p className="interaction-note">
-              Deform the source path and chosen line / pen paths together. Pointer X / Y bends the curves while ambient waves keep them moving.
+              Deform the selected object with pointer motion and ambient waves. Additional 2D targets can be lines, pen paths, images, or videos.
             </p>
             {wavePathChoices.length > 0 ? (
               <>
-                <p className="interaction-subheading">Additional paths</p>
+                <p className="interaction-subheading">Additional 2D targets</p>
                 <div className="interaction-wave-path-list">
                   {wavePathChoices.map((path) => {
                     const selected = waveTargetIds.includes(path.id);
                     return (
                       <button
-                        aria-label={`Wave path: ${path.name}`}
+                        aria-label={`Wave target: ${path.name}`}
                         aria-pressed={selected}
                         className="interaction-wave-path-option"
                         key={path.id}
@@ -4160,7 +4136,7 @@ export function InteractionPanel({
                 value={waveFalloff}
               />
             </Row>
-            <Row label="Phase between paths">
+            <Row label="Phase between targets">
               <DesignNumberField
                 ariaLabel="Wave phase spread"
                 label=""

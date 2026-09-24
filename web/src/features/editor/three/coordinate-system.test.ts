@@ -9,6 +9,7 @@ import {
 import { describe, expect, it } from "vitest";
 
 import {
+  artboardPointToEditorAtDepth,
   editorPointToWorld,
   projectObjectToScreen,
   projectEditorMoveToScreen,
@@ -18,6 +19,7 @@ import {
   screenOffsetToEditorMove,
   spatialTransformToWorld,
   worldPointToEditor,
+  worldPointToArtboard,
 } from "@/features/editor/three/coordinate-system";
 import { createDefaultSpatialTransform3D } from "@/features/editor/three/types";
 
@@ -31,6 +33,83 @@ function createCamera() {
 }
 
 describe("3D editor coordinate conversion", () => {
+  it("projects interaction hits into artboard pixels and unprojects at another object's depth", () => {
+    const viewport = { x: 0, y: 0, width: 800, height: 400 };
+    for (const camera of [
+      createCamera(),
+      new PerspectiveCamera(50, 2, 0.1, 2000),
+    ]) {
+      camera.position.set(35, 15, 300);
+      camera.lookAt(0, 0, 0);
+      camera.updateProjectionMatrix();
+      const hit = new Vector3(40, -25, 80);
+      const screen = worldPointToArtboard(hit, camera, viewport)!;
+      expect(screen.x).not.toBeCloseTo(hit.x);
+      expect(screen.y).not.toBeCloseTo(-hit.y);
+      const sameDepth = artboardPointToEditorAtDepth(
+        screen,
+        hit.z,
+        camera,
+        viewport,
+      )!;
+      expect(sameDepth.x).toBeCloseTo(hit.x, 6);
+      expect(sameDepth.y).toBeCloseTo(-hit.y, 6);
+      const spawnDepth = -60;
+      const spawned = artboardPointToEditorAtDepth(
+        screen,
+        spawnDepth,
+        camera,
+        viewport,
+      )!;
+      const rendered = worldPointToArtboard(
+        editorPointToWorld({ ...spawned, z: spawnDepth }),
+        camera,
+        viewport,
+      )!;
+      expect(rendered.x).toBeCloseTo(screen.x, 6);
+      expect(rendered.y).toBeCloseTo(screen.y, 6);
+      if (camera instanceof PerspectiveCamera)
+        expect(spawned.x).not.toBeCloseTo(hit.x);
+    }
+  });
+
+  it("keeps artboard event coordinates stable through shifted editor viewports", () => {
+    const camera = new PerspectiveCamera(50, 2, 0.1, 2000);
+    camera.position.set(10, -15, 400);
+    camera.lookAt(0, 0, 0);
+    const full = { x: 0, y: 0, width: 800, height: 400 };
+    const crop = { x: -120, y: 50, width: 1040, height: 350 };
+    const hit = new Vector3(35, -20, 50);
+    const before = worldPointToArtboard(hit, camera, full)!;
+    camera.setViewOffset(
+      full.width,
+      full.height,
+      crop.x,
+      crop.y,
+      crop.width,
+      crop.height,
+    );
+    const after = worldPointToArtboard(hit, camera, crop)!;
+    expect(after.x).toBeCloseTo(before.x, 6);
+    expect(after.y).toBeCloseTo(before.y, 6);
+    const editor = artboardPointToEditorAtDepth(after, hit.z, camera, crop)!;
+    expect(editor.x).toBeCloseTo(hit.x, 6);
+    expect(editor.y).toBeCloseTo(-hit.y, 6);
+  });
+
+  it("rejects invalid screen inputs and a ray parallel to the requested depth plane", () => {
+    const camera = createCamera();
+    const viewport = { x: 0, y: 0, width: 800, height: 400 };
+    expect(
+      artboardPointToEditorAtDepth({ x: NaN, y: 0 }, 0, camera, viewport),
+    ).toBeNull();
+    camera.position.set(100, 0, 0);
+    camera.lookAt(0, 0, 0);
+    expect(
+      artboardPointToEditorAtDepth({ x: 400, y: 200 }, 0, camera, viewport),
+    ).toBeNull();
+  });
+
   it("maps screen-down editor Y to world-up Y and round-trips points", () => {
     const editorPoint = { x: 12, y: 34, z: -8 };
     const worldPoint = editorPointToWorld(editorPoint);

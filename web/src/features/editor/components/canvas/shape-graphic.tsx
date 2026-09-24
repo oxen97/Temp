@@ -49,7 +49,6 @@ export function ShapeGraphic({
     : "none";
   const visibleStrokeWidth = strokeVisible ? element.strokeWidth : 0;
   const ribbonOpacity = Math.max(0, Math.min(1, (element.strokeOpacity ?? 100) / 100));
-  const pinocchioNose = element.id === "pinocchio-demo-nose";
   const swipeStrand = (element.interactions ?? []).some(
     (interaction) =>
       interaction.enabled !== false &&
@@ -61,33 +60,15 @@ export function ShapeGraphic({
       <linearGradient
         id={ribbonGradientId}
         x1="0%"
-        x2={pinocchioNose ? "0%" : "100%"}
+        x2="100%"
         y1="0%"
-        y2={pinocchioNose ? "100%" : "0%"}
+        y2="0%"
       >
-        {pinocchioNose ? (
-          <>
-            <stop offset="0%" stopColor="#ffe0aa" />
-            <stop offset="30%" stopColor="#f4b57e" />
-            <stop offset="72%" stopColor="#dc9164" />
-            <stop offset="100%" stopColor="#aa5e49" />
-          </>
-        ) : (
-          <>
             <stop offset="0%" stopColor={element.stroke} stopOpacity={ribbonOpacity * 0.84} />
             <stop offset="30%" stopColor={element.stroke} stopOpacity={ribbonOpacity} />
             <stop offset="70%" stopColor={element.stroke} stopOpacity={ribbonOpacity * 0.98} />
             <stop offset="100%" stopColor={element.stroke} stopOpacity={ribbonOpacity * 0.87} />
-          </>
-        )}
       </linearGradient>
-      {pinocchioNose ? (
-        <radialGradient id={`${ribbonGradientId}-root`}>
-          <stop offset="0%" stopColor="#f7c58f" />
-          <stop offset="58%" stopColor="#eeb07d" stopOpacity=".94" />
-          <stop offset="100%" stopColor="#e4a071" stopOpacity="0" />
-        </radialGradient>
-      ) : null}
     </defs>
   ) : null;
   const innerTransform: CSSProperties = {
@@ -398,19 +379,7 @@ export function ShapeGraphic({
               d={strandRibbonPathData}
               fill={`url(#${ribbonGradientId})`}
               pointerEvents="none"
-              stroke={pinocchioNose ? "#9b604b" : undefined}
-              strokeWidth={pinocchioNose ? 3.5 : undefined}
             />
-            {pinocchioNose ? (
-              <ellipse
-                cx={0}
-                cy={element.height / 2}
-                fill={`url(#${ribbonGradientId}-root)`}
-                pointerEvents="none"
-                rx={element.strokeWidth * 0.95}
-                ry={element.strokeWidth * 0.78}
-              />
-            ) : null}
           </>
         ) : null}
       </svg>

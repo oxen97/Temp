@@ -12,39 +12,146 @@ import {
   pointerRemainsOver3DObject,
   positionOnObjectDragPlane,
   sceneRenderViewport,
+  type ScreenPointToWorld3D,
 } from "./artboard-3d-scene";
 
-vi.mock("@react-three/fiber", () => ({
-  Canvas: ({
-    camera,
-    children,
-    dpr,
-  }: {
-    camera?: { manual?: boolean };
-    children: ReactNode;
-    dpr?: number | [number, number];
-  }) => (
-    <div
-      data-camera-manual={camera?.manual}
-      data-dpr={dpr}
-      data-testid="three-canvas"
-    >
-      {children}
-    </div>
-  ),
-  useFrame: vi.fn(),
-  useThree: () => ({
-    camera: {
-      lookAt: vi.fn(),
-      position: { set: vi.fn() },
-      updateProjectionMatrix: vi.fn(),
-    },
-    invalidate: vi.fn(),
-    size: { height: 679, width: 1208 },
-  }),
-}));
+vi.mock("@react-three/fiber", async () => {
+  const { OrthographicCamera } = await import("three");
+  const projectionCamera = new OrthographicCamera();
+  return {
+    Canvas: ({
+      camera,
+      children,
+      dpr,
+    }: {
+      camera?: { manual?: boolean };
+      children: ReactNode;
+      dpr?: number | [number, number];
+    }) => (
+      <div
+        data-camera-manual={camera?.manual}
+        data-dpr={dpr}
+        data-testid="three-canvas"
+      >
+        {children}
+      </div>
+    ),
+    useFrame: vi.fn(),
+    useThree: () => ({
+      camera: projectionCamera,
+      invalidate: vi.fn(),
+      size: { height: 679, width: 1208 },
+    }),
+  };
+});
 
 describe("Artboard3DScene selection", () => {
+  it("publishes the camera conversion bridge and clears it on unmount", () => {
+    const object = createPrimitiveObject3D({
+      dimensions: { depth: 20, height: 20, width: 20 },
+      id: "camera-bridge",
+      name: "Camera bridge",
+      position: { x: 240, y: 180, z: 15 },
+      primitive: "box",
+    });
+    const bridge = { current: null as ScreenPointToWorld3D | null };
+    const { unmount } = render(
+      <Artboard3DScene
+        artboardHeight={600}
+        artboardWidth={800}
+        objects={[object]}
+        screenPointToWorldRef={bridge}
+        scene={{ enabled: true }}
+      />,
+    );
+    expect(bridge.current).not.toBeNull();
+    const position = bridge.current!({ x: 240, y: 180 }, -40);
+    expect(position?.x).toBeCloseTo(240, 6);
+    expect(position?.y).toBeCloseTo(180, 6);
+    unmount();
+    expect(bridge.current).toBeNull();
+  });
+  it("bridges authored object events in artboard coordinates only during preview", () => {
+    const object = createPrimitiveObject3D({
+      dimensions: { depth: 20, height: 80, width: 20 },
+      id: "authored-event-object",
+      name: "Event object",
+      position: { x: 240, y: 180, z: 15 },
+      primitive: "cylinder",
+    });
+    const interaction = createDefaultInteraction({
+      effect: "emit-event",
+      trigger: "click-tap",
+    });
+    object.interactions = [interaction];
+    const onRuntimeInteraction = vi.fn();
+    const props = {
+      artboardHeight: 600,
+      artboardWidth: 800,
+      objects: [object],
+      onRuntimeInteraction,
+      scene: { enabled: true },
+    };
+    const { container, rerender, unmount } = render(
+      <Artboard3DScene {...props} />,
+    );
+    fireEvent.click(container.querySelector('group[name="Event object"]')!);
+    expect(onRuntimeInteraction).not.toHaveBeenCalled();
+    rerender(<Artboard3DScene {...props} interactive />);
+    fireEvent.click(container.querySelector('group[name="Event object"]')!);
+    expect(onRuntimeInteraction).toHaveBeenCalledWith(object.id, interaction, {
+      phase: "activate",
+      point: { x: 240, y: 180 },
+    });
+    unmount();
+  });
+
+  it("runs authored delay events once and clears timers on unmount", () => {
+    vi.useFakeTimers();
+    try {
+      const object = createPrimitiveObject3D({
+        dimensions: { depth: 20, height: 20, width: 20 },
+        id: "delayed",
+        name: "Delayed",
+        position: { x: 10, y: 20, z: 0 },
+        primitive: "box",
+      });
+      const interaction = createDefaultInteraction({
+        effect: "spawn-object",
+        trigger: "after-delay",
+        timeSeconds: 0.5,
+      });
+      object.interactions = [interaction];
+      const onRuntimeInteraction = vi.fn();
+      const { unmount } = render(
+        <Artboard3DScene
+          artboardHeight={600}
+          artboardWidth={800}
+          interactive
+          objects={[object]}
+          onRuntimeInteraction={onRuntimeInteraction}
+          scene={{ enabled: true }}
+        />,
+      );
+      vi.advanceTimersByTime(499);
+      expect(onRuntimeInteraction).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      expect(onRuntimeInteraction).toHaveBeenCalledWith(
+        object.id,
+        interaction,
+        {
+          phase: "activate",
+          point: { x: expect.closeTo(10, 6), y: expect.closeTo(20, 6) },
+        },
+      );
+      unmount();
+      vi.advanceTimersByTime(2000);
+      expect(onRuntimeInteraction).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps camera projection authored and uses the native display density", () => {
     const object = createPrimitiveObject3D({
       dimensions: { depth: 100, height: 100, width: 100 },

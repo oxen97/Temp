@@ -157,7 +157,7 @@ describe("InteractionPanel conditional UI", () => {
     expect(saved).toMatchObject({ effect: "wave-deform", waveAmplitude: 14, wavePhaseSpread: 42 });
     expect(screen.getByRole("spinbutton", { name: "Wave pointer X influence" })).toBeTruthy();
     expect(screen.getByRole("spinbutton", { name: "Wave speed" })).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Wave path: Path B" }));
+    fireEvent.click(screen.getByRole("button", { name: "Wave target: Path B" }));
     expect(saved.waveTargetIds).toEqual([]);
   });
 
@@ -240,10 +240,84 @@ describe("InteractionPanel conditional UI", () => {
     fireEvent.change(screen.getByRole("spinbutton", { name: "Strand neighbor radius" }), { target: { value: "180" } });
     fireEvent.change(screen.getByRole("slider", { name: "Strand neighbor pull" }), { target: { value: "65" } });
     expect(saved[0]).toMatchObject({ strandNeighborRadius: 180, strandNeighborStrength: 65 });
-    expect(screen.getByText(/Nearby lines and open pen paths with Strand Bend follow the pointer/i)).toBeTruthy();
+    expect(screen.getByText(/Bend lines, open pen paths, images, videos, and 3D objects/i)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Strand Bend options" }));
     fireEvent.click(screen.getByRole("button", { name: "Delete Strand Bend" }));
     expect(saved).toHaveLength(0);
+  });
+
+  it.each(["image", "video", "object3d"])("persists bend and wave controls for a selected %s", (type) => {
+    let saved = createDefaultInteraction({ id: "deform" });
+    function Harness() {
+      const [interaction, setInteraction] = useState(saved);
+      saved = interaction;
+      return (
+        <InteractionPanel
+          elements={[
+            { id: "source", name: "Source", type },
+            { id: "picture", name: "Picture", type: "image" },
+            { id: "movie", name: "Movie", type: "video" },
+            { id: "model", name: "Model", type: "object3d" },
+          ]}
+          interactionsByElement={{ source: [interaction] }}
+          onUpdateInteraction={(_, __, updates) => setInteraction((current) => ({ ...current, ...updates }))}
+          selectedElementIds={["source"]}
+          selectedName="Source"
+          selectedTypes={[type]}
+        />
+      );
+    }
+    render(<Harness />);
+    choose("Trigger", "Drag");
+    choose("Effect", "Strand Bend");
+    choose("Strand anchor", "Bottom");
+    fireEvent.change(screen.getByRole("spinbutton", { name: "Strand max displacement" }), { target: { value: "88" } });
+    expect(saved).toMatchObject({ effect: "strand-bend", strandAnchor: "bottom", strandMaxDisplacement: 88 });
+    choose("Trigger", "Pointer Move / Touch Move");
+    choose("Effect", "Wave / Curve Deform");
+    fireEvent.click(screen.getByRole("button", { name: "Wave target: Picture" }));
+    fireEvent.click(screen.getByRole("button", { name: "Wave target: Movie" }));
+    expect(screen.queryByRole("button", { name: "Wave target: Model" })).toBeNull();
+    expect(screen.getByText("Additional 2D targets")).toBeTruthy();
+    expect(saved).toMatchObject({ effect: "wave-deform", waveTargetIds: ["picture", "movie"] });
+  });
+
+  it("persists 3D rotation, skew, blur, and shadow in shared interaction fields", () => {
+    let saved = createDefaultInteraction({ id: "rotate", effect: "rotate", rotateTo: 35 });
+    function Harness() {
+      const [interaction, setInteraction] = useState(saved);
+      saved = interaction;
+      return (
+        <InteractionPanel
+          elements={[{ id: "cube", name: "Cube", type: "object3d" }]}
+          interactionsByElement={{ cube: [interaction] }}
+          onUpdateInteraction={(_, __, updates) => setInteraction((current) => ({ ...current, ...updates }))}
+          selectedElementIds={["cube"]}
+          selectedName="Cube"
+          selectedTypes={["object3d"]}
+        />
+      );
+    }
+    render(<Harness />);
+    const z = screen.getByRole("spinbutton", { name: "Rotate Z" });
+    expect(z).toHaveValue(35);
+    fireEvent.change(z, { target: { value: "70" } });
+    expect(saved.rotateTo).toBe(70);
+    choose("Effect", "Skew");
+    fireEvent.change(screen.getByRole("spinbutton", { name: "Skew X" }), { target: { value: "16" } });
+    expect(saved.skewX).toBe(16);
+    choose("Effect", "Blur");
+    fireEvent.change(screen.getByRole("slider", { name: "Blur amount" }), { target: { value: "12" } });
+    expect(saved.blurAmount).toBe(12);
+    choose("Effect", "Shadow");
+    fireEvent.change(screen.getByRole("spinbutton", { name: "Shadow X" }), { target: { value: "24" } });
+    fireEvent.change(screen.getByRole("spinbutton", { name: "Shadow Y" }), { target: { value: "36" } });
+    fireEvent.change(screen.getByRole("spinbutton", { name: "Shadow blur" }), { target: { value: "10" } });
+    expect(saved).toMatchObject({ shadowX: 24, shadowY: 36, shadowBlur: 10 });
+    fireEvent.change(screen.getByRole("textbox", { name: "Shadow color" }), { target: { value: "rgba(20, 40, 60, 0.7)" } });
+    expect(saved.shadowColor).toBe("rgba(20, 40, 60, 0.7)");
+    expect(screen.queryByRole("spinbutton", { name: "Shadow Z" })).toBeNull();
+    expect(screen.queryByRole("spinbutton", { name: "Shadow spread" })).toBeNull();
   });
 
   it("hydrates and saves Liquid Merge settings from the selected shape", () => {
@@ -556,8 +630,8 @@ describe("InteractionPanel conditional UI", () => {
       screen.getByRole("button", { name: "Collision target element" }),
     );
     expect(
-      screen.queryByRole("option", { name: "Image 3 (image)" }),
-    ).toBeNull();
+      screen.getByRole("option", { name: "Image 3 (image)" }),
+    ).toBeTruthy();
   });
 
   it("configures physical collision bounce without animation duration", () => {
@@ -594,6 +668,47 @@ describe("InteractionPanel conditional UI", () => {
     );
   });
 
+  it.each(["image", "video"])("offers %s Liquid Merge only for separated near-target outlines", (type) => {
+    render(
+      <InteractionPanel
+        elements={[
+          { id: "media", name: "Media", type },
+          { id: "target", name: "Target", type: "rectangle" },
+        ]}
+        selectedElementIds={["media"]}
+        selectedName="Media"
+        selectedTypes={[type]}
+      />,
+    );
+    choose("Trigger", "Near Target");
+    choose("Effect", "Liquid Merge");
+    expect(screen.getByText(/It is not a Boolean union/)).toBeTruthy();
+    choose("Trigger", "While Overlapping");
+    fireEvent.click(screen.getByRole("button", { name: "Effect" }));
+    expect(screen.queryByRole("option", { name: /^Liquid Merge$/ })).toBeNull();
+    expect(screen.getByText(/Media Liquid Merge uses Near Target/)).toBeTruthy();
+  });
+
+  it("excludes media targets from a vector's overlap liquid effect", () => {
+    render(
+      <InteractionPanel
+        elements={[
+          { id: "source", name: "Source", type: "rectangle" },
+          { id: "vector", name: "Vector target", type: "circle" },
+          { id: "media", name: "Media target", type: "image" },
+        ]}
+        selectedElementIds={["source"]}
+        selectedName="Source"
+        selectedTypes={["rectangle"]}
+      />,
+    );
+    choose("Trigger", "While Overlapping");
+    choose("Effect", "Liquid Merge");
+    fireEvent.click(screen.getByRole("button", { name: "Collision target element" }));
+    expect(screen.getByRole("option", { name: "Vector target (circle)" })).toBeTruthy();
+    expect(screen.queryByRole("option", { name: "Media target (image)" })).toBeNull();
+  });
+
   it("explains why Liquid Merge is unavailable for a multiple selection", () => {
     render(
       <InteractionPanel
@@ -603,7 +718,7 @@ describe("InteractionPanel conditional UI", () => {
     );
     choose("Trigger", "Near Target");
     expect(
-      screen.getByText(/Liquid Merge needs one selected 2D vector shape or strand/i),
+      screen.getByText(/Liquid Merge needs one supported vector, media, or 3D object/i),
     ).toBeTruthy();
   });
 
@@ -717,11 +832,11 @@ describe("InteractionPanel conditional UI", () => {
       screen.getByRole("option", { name: "Collision Enter" }),
     ).toBeTruthy();
     expect(
-      screen.queryByRole("option", { name: "Drop On Target" }),
-    ).toBeNull();
+      screen.getByRole("option", { name: "Drop On Target" }),
+    ).toBeTruthy();
     expect(
-      screen.queryByRole("option", { name: "Drag Enter Target" }),
-    ).toBeNull();
+      screen.getByRole("option", { name: "Drag Enter Target" }),
+    ).toBeTruthy();
     openDropdown("Trigger");
 
     openDropdown("Effect");
@@ -729,11 +844,11 @@ describe("InteractionPanel conditional UI", () => {
       screen.getByRole("option", { name: "Attach To Target" }),
     ).toBeTruthy();
     expect(
-      screen.queryByRole("option", { name: "Snap to Target" }),
-    ).toBeNull();
+      screen.getByRole("option", { name: "Snap to Target" }),
+    ).toBeTruthy();
     expect(
-      screen.queryByRole("option", { name: "Open Modal" }),
-    ).toBeNull();
+      screen.getByRole("option", { name: "Open Modal" }),
+    ).toBeTruthy();
     openDropdown("Effect");
 
     expect(screen.getByRole("spinbutton", { name: "Move Z" })).toBeTruthy();

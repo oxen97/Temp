@@ -522,6 +522,39 @@ function updateActivePageObjects3D(
   );
 }
 
+function updateObjectInteractions(
+  state: EditorState,
+  objectId: string,
+  updater: (interactions: InteractionDefinition[]) => InteractionDefinition[],
+  interactionId?: string,
+) {
+  const page = state.pages.find((item) => item.id === state.activePageId);
+  const target =
+    page?.elements.find((element) => element.id === objectId) ??
+    page?.objects3d?.find((object) => object.id === objectId);
+  if (
+    !target ||
+    (interactionId !== undefined &&
+      !target.interactions?.some((interaction) => interaction.id === interactionId))
+  ) return state;
+  const interactions = updater(target.interactions ?? []);
+  return {
+    pages: target.type === "object3d"
+      ? updateActivePageObjects3D(state, (objects) =>
+          objects.map((object) =>
+            object.id === objectId ? { ...object, interactions } : object,
+          ),
+        )
+      : updateActivePage(state, (elements) =>
+          elements.map((element) =>
+            element.id === objectId ? { ...element, interactions } : element,
+          ),
+        ),
+    past: pushHistory(state),
+    future: [],
+  };
+}
+
 function toggleLayerProperty(
   state: EditorState,
   targetId: string,
@@ -847,74 +880,23 @@ export const useEditorStore = create<EditorState>((set) => ({
       ),
     })),
   addInteraction: (elementId, interaction) =>
-    set((state) => ({
-      pages: updateActivePage(state, (elements) =>
-        elements.map((element) =>
-          element.id === elementId
-            ? {
-                ...element,
-                interactions: [...(element.interactions ?? []), interaction],
-              }
-            : element,
-        ),
-      ),
-      past: pushHistory(state),
-      future: [],
-    })),
+    set((state) => updateObjectInteractions(state, elementId, (interactions) =>
+      [...interactions, interaction],
+    )),
   updateInteraction: (elementId, interactionId, updates) =>
-    set((state) => {
-      const page = state.pages.find((item) => item.id === state.activePageId);
-      const target = page?.elements.find((element) => element.id === elementId);
-      if (!target?.interactions?.some((item) => item.id === interactionId)) {
-        return state;
-      }
-      return {
-        pages: updateActivePage(state, (elements) =>
-          elements.map((element) =>
-            element.id === elementId
-              ? {
-                  ...element,
-                  interactions: (element.interactions ?? []).map(
-                    (interaction) =>
-                      interaction.id === interactionId
-                        ? { ...interaction, ...updates }
-                        : interaction,
-                  ),
-                }
-              : element,
-          ),
-        ),
-        past: pushHistory(state),
-        future: [],
-      };
-    }),
+    set((state) => updateObjectInteractions(state, elementId, (interactions) =>
+      interactions.map((interaction) => interaction.id === interactionId
+        ? { ...interaction, ...updates }
+        : interaction,
+      ), interactionId,
+    )),
   removeInteraction: (elementId, interactionId) =>
-    set((state) => ({
-      pages: updateActivePage(state, (elements) =>
-        elements.map((element) =>
-          element.id === elementId
-            ? {
-                ...element,
-                interactions: (element.interactions ?? []).filter(
-                  (interaction) => interaction.id !== interactionId,
-                ),
-              }
-            : element,
-        ),
-      ),
-      past: pushHistory(state),
-      future: [],
-    })),
+    set((state) => updateObjectInteractions(state, elementId, (interactions) =>
+      interactions.filter((interaction) => interaction.id !== interactionId),
+      interactionId,
+    )),
   setInteractions: (elementId, interactions) =>
-    set((state) => ({
-      pages: updateActivePage(state, (elements) =>
-        elements.map((element) =>
-          element.id === elementId ? { ...element, interactions } : element,
-        ),
-      ),
-      past: pushHistory(state),
-      future: [],
-    })),
+    set((state) => updateObjectInteractions(state, elementId, () => interactions)),
   setPageLogicRules: (pageId, rules) =>
     set((state) => {
       if (!state.pages.some((page) => page.id === pageId)) return state;

@@ -6,6 +6,7 @@ import {
   getMappingOptions,
   getMotionOptions,
   getResetPolicy,
+  isLiquidMergeTarget,
   model3DTriggerOptions,
   modelInteractionTriggers,
   threeDCollisionTriggerOptions,
@@ -104,11 +105,14 @@ describe("effect options by selected element", () => {
     ).not.toContain("liquid-merge");
   });
 
-  it("offers Strand Bend to vector strands on pointer input", () => {
-    expect(values(getEffectOptions(["line"], "drag"))).toContain("strand-bend");
-    expect(values(getEffectOptions(["pen"], "pointer-move"))).toContain("strand-bend");
-    expect(values(getEffectOptions(["image"], "drag"))).not.toContain("strand-bend");
-    expect(values(getEffectOptions(["line"], "click-tap"))).not.toContain("strand-bend");
+  it.each(["line", "pen", "image", "video", "object3d"])("offers bend and wave to %s only on their supported triggers", (type) => {
+    expect(values(getEffectOptions([type], "drag"))).toContain("strand-bend");
+    expect(values(getEffectOptions([type], "pointer-move"))).toEqual(
+      expect.arrayContaining(["strand-bend", "wave-deform"]),
+    );
+    expect(values(getEffectOptions([type], "drag"))).not.toContain("wave-deform");
+    expect(values(getEffectOptions([type], "click-tap"))).not.toContain("strand-bend");
+    expect(values(getEffectOptions([type], "click-tap"))).not.toContain("wave-deform");
     expect(values(getMotionOptions("drag", "drag-progress", "strand-bend"))).toEqual(["direct", "spring"]);
   });
 
@@ -121,15 +125,53 @@ describe("effect options by selected element", () => {
     );
     expect(values(getEffectOptions(["pen"], "pointer-move"))).toContain("wave-deform");
     expect(values(getEffectOptions(["line", "pen"], "pointer-move"))).toContain("wave-deform");
-    expect(values(getEffectOptions(["pen", "rectangle"], "pointer-move"))).toContain("wave-deform");
+    expect(values(getEffectOptions(["pen", "rectangle"], "pointer-move"))).not.toContain("wave-deform");
     expect(values(getEffectOptions(["rectangle", "pen"], "pointer-move"))).not.toContain("wave-deform");
     expect(values(getEffectOptions(["pen"], "drag"))).not.toContain("wave-deform");
-    expect(values(getEffectOptions(["image"], "pointer-move"))).not.toContain("wave-deform");
-    expect(values(getEffectOptions(["video"], "click-tap"))).not.toContain("spawn-instance");
-    expect(values(getEffectOptions(["object3d"], "click-tap", { is3D: true }))).not.toContain("spawn-instance");
+    expect(values(getEffectOptions(["image"], "pointer-move"))).toContain("wave-deform");
+    expect(values(getEffectOptions(["video"], "click-tap"))).toEqual(
+      expect.arrayContaining(["spawn-instance", "emit-event"]),
+    );
+    expect(values(getEffectOptions(["video"], "drag"))).toContain("pointer-trail");
+    expect(values(getEffectOptions(["object3d"], "click-tap", { is3D: true }))).toEqual(
+      expect.arrayContaining(["spawn-instance", "emit-event", "open-modal", "close-modal"]),
+    );
     expect(getMotionOptions("drag", "drag-progress", "pointer-trail")).toEqual([]);
     expect(getMotionOptions("click-tap", "", "spawn-instance")).toEqual([]);
     expect(values(getMotionOptions("pointer-move", "pointer-position", "wave-deform"))).toEqual(["direct"]);
+  });
+
+  it("intersects mixed selections independently of selection order", () => {
+    const types = ["image", "video", "object3d"];
+    const effects = values(getEffectOptions(types, "pointer-move"));
+    expect(effects).toEqual(expect.arrayContaining(["strand-bend", "wave-deform", "move"]));
+    expect(effects).not.toContain("particle");
+    expect(effects).not.toContain("play");
+    expect(effects).not.toContain("look-at-target");
+    expect(new Set(effects)).toEqual(new Set(values(getEffectOptions([...types].reverse(), "pointer-move"))));
+    expect(values(getEffectOptions(["image", "video"], "drag"))).toContain("pointer-trail");
+    expect(values(getEffectOptions(types, "drag"))).toContain("pointer-trail");
+  });
+
+  it("exposes media liquid merge only with compatible textured or filled targets", () => {
+    for (const type of ["image", "video"]) {
+      expect(values(getEffectOptions([type], "near-target"))).toContain("liquid-merge");
+      expect(values(getEffectOptions([type], "while-overlapping"))).not.toContain("liquid-merge");
+      expect(values(getEffectOptions([type], "click-tap"))).not.toContain("liquid-merge");
+      expect(isLiquidMergeTarget(type, "rectangle")).toBe(true);
+      expect(isLiquidMergeTarget("rectangle", type)).toBe(true);
+      expect(isLiquidMergeTarget("rectangle", type, "while-overlapping")).toBe(false);
+      expect(isLiquidMergeTarget(type, "rectangle", "while-overlapping")).toBe(false);
+      expect(isLiquidMergeTarget(type, "image")).toBe(true);
+      expect(isLiquidMergeTarget(type, "video")).toBe(true);
+      expect(isLiquidMergeTarget(type, "line")).toBe(false);
+      expect(isLiquidMergeTarget("pen", type)).toBe(false);
+      expect(isLiquidMergeTarget(type, "object3d")).toBe(false);
+      expect(isLiquidMergeTarget("object3d", type)).toBe(false);
+    }
+    expect(isLiquidMergeTarget("object3d", "object3d")).toBe(true);
+    expect(isLiquidMergeTarget("rectangle", "circle", "while-overlapping")).toBe(true);
+    expect(isLiquidMergeTarget("object3d", "object3d", "while-overlapping")).toBe(true);
   });
 });
 
@@ -362,10 +404,10 @@ describe("3D interaction policy", () => {
         "material-parameter",
       ]),
     );
-    expect(threeD).not.toContain("snap-to-target");
-    expect(threeD).not.toContain("return-to-origin");
-    expect(threeD).not.toContain("open-modal");
-    expect(threeD).not.toContain("close-modal");
+    expect(threeD).toContain("snap-to-target");
+    expect(threeD).toContain("return-to-origin");
+    expect(threeD).toContain("open-modal");
+    expect(threeD).toContain("close-modal");
     expect(threeD).not.toContain("play-model-animation");
   });
 
@@ -421,7 +463,7 @@ describe("3D interaction policy", () => {
           sourceKind: "asset",
         }),
       ),
-    ).not.toContain("liquid-merge");
+    ).toContain("liquid-merge");
 
     const collisionEffects = values(
       getEffectOptions(["object3d"], "collision-enter", {

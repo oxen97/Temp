@@ -182,11 +182,11 @@ test("TOPOGRAPHY settings keep contour names and additional paths in separate ro
   );
 
   const firstPath = panel.getByRole("button", {
-    name: "Wave path: Contour path 2",
+    name: "Wave target: Contour path 2",
     exact: true,
   });
   const secondPath = panel.getByRole("button", {
-    name: "Wave path: Contour path 3",
+    name: "Wave target: Contour path 3",
     exact: true,
   });
   await firstPath.scrollIntoViewIfNeeded();

@@ -19,7 +19,21 @@ async function nosePoint(path: Locator, fraction: number): Promise<NosePoint> {
     const pageRect = page.getBoundingClientRect();
     const scaleX = pageRect.width / page.clientWidth;
     const scaleY = pageRect.height / page.clientHeight;
-    const local = svgPath.getPointAtLength(svgPath.getTotalLength() * at);
+    // The texture's hit path is its perimeter, so path-length 0/1 both point
+    // at the same corner. The midpoint of each short edge is the bone anchor
+    // or tip, including when those edges rotate with the material.
+    const viewport = svgPath.ownerSVGElement!.viewBox.baseVal;
+    const columns = Math.min(48, Math.max(8, Math.ceil(viewport.width / 14)));
+    const rows = Math.min(48, Math.max(8, Math.ceil(viewport.height / 14)));
+    const coordinates = (
+      svgPath.getAttribute("d")!.match(/-?\d+(?:\.\d+)?/g) ?? []
+    ).map(Number);
+    const top = at === 0 ? 0 : columns;
+    const bottom = at === 0 ? 2 * columns + rows : columns + rows;
+    const local = new DOMPoint(
+      (coordinates[top * 2] + coordinates[bottom * 2]) / 2,
+      (coordinates[top * 2 + 1] + coordinates[bottom * 2 + 1]) / 2,
+    );
     const screen = local.matrixTransform(matrix);
     return {
       artX: (screen.x - pageRect.left) / scaleX,
@@ -42,9 +56,22 @@ test("Pinocchio and his nose appear in the separate native viewer demo", async (
     preview.locator('[data-element-id="pinocchio-demo-backdrop"]'),
   ).toBeVisible();
   const nose = preview.locator(
-    '[data-element-id="pinocchio-demo-nose"] .pen-visible-path',
+    '[data-element-id="pinocchio-demo-nose"] .media-deform-hit-area',
   );
   await expect(nose).toHaveCount(1);
+  await expect(
+    preview.locator('[data-media-deform-id="pinocchio-demo-nose"]'),
+  ).toHaveAttribute("data-media-deform-status", "ready");
+  await expect(
+    preview.locator(
+      '[data-element-id="pinocchio-demo-nose"] .media-deform-canvas',
+    ),
+  ).toBeVisible();
+  await expect(
+    preview.locator(
+      '[data-element-id="pinocchio-demo-nose"] .pen-visible-path',
+    ),
+  ).toHaveCount(0);
   const base = await nosePoint(nose, 0);
   const tip = await nosePoint(nose, 1);
   expect(tip.artX).toBeGreaterThan(base.artX + 50);
@@ -61,9 +88,12 @@ test("pulling the nose lengthens it, then it springs back and briefly overshoots
   const preview = page.getByRole("dialog", { name: "Viewer preview" });
   await expect(preview).toBeVisible();
   const nose = preview.locator(
-    '[data-element-id="pinocchio-demo-nose"] .pen-visible-path',
+    '[data-element-id="pinocchio-demo-nose"] .media-deform-hit-area',
   );
   await expect(nose).toHaveCount(1);
+  await expect(
+    preview.locator('[data-media-deform-id="pinocchio-demo-nose"]'),
+  ).toHaveAttribute("data-media-deform-status", "ready");
   const base = await nosePoint(nose, 0);
   const rest = await nosePoint(nose, 1);
   const restLength = rest.artX - base.artX;
@@ -93,7 +123,17 @@ test("pulling the nose lengthens it, then it springs back and briefly overshoots
       if (!matrix) throw new Error("Nose path detached while springing");
       const rect = page.getBoundingClientRect();
       const scaleX = rect.width / page.clientWidth;
-      const localTip = svgPath.getPointAtLength(svgPath.getTotalLength());
+      const viewport = svgPath.ownerSVGElement!.viewBox.baseVal;
+      const columns = Math.min(48, Math.max(8, Math.ceil(viewport.width / 14)));
+      const rows = Math.min(48, Math.max(8, Math.ceil(viewport.height / 14)));
+      const coordinates = (
+        svgPath.getAttribute("d")!.match(/-?\d+(?:\.\d+)?/g) ?? []
+      ).map(Number);
+      const localTip = new DOMPoint(
+        (coordinates[columns * 2] + coordinates[(columns + rows) * 2]) / 2,
+        (coordinates[columns * 2 + 1] + coordinates[(columns + rows) * 2 + 1]) /
+          2,
+      );
       const screenTip = localTip.matrixTransform(matrix);
       positions.push((screenTip.x - rect.left) / scaleX - restX);
     }
@@ -116,8 +156,11 @@ test("pulling the nose upward and downward moves its tip while the root stays at
   await page.goto("/?interactionDemo=pinocchio-native");
   const nose = page
     .getByRole("dialog", { name: "Viewer preview" })
-    .locator('[data-element-id="pinocchio-demo-nose"] .pen-visible-path');
+    .locator('[data-element-id="pinocchio-demo-nose"] .media-deform-hit-area');
   await expect(nose).toHaveCount(1);
+  await expect(
+    page.locator('[data-media-deform-id="pinocchio-demo-nose"]'),
+  ).toHaveAttribute("data-media-deform-status", "ready");
   const restRoot = await nosePoint(nose, 0);
   const restTip = await nosePoint(nose, 1);
 

@@ -1,12 +1,13 @@
 import { createDefaultInteraction } from "@/features/editor/lib/interaction-model";
 import {
   pinocchioBackdropSvg,
+  pinocchioNoseSvg,
   PINOCCHIO_NOSE_BASE,
   PINOCCHIO_NOSE_REST_TIP,
 } from "@/features/editor/lib/pinocchio-demo-art";
 import type { CanvasElement } from "@/features/editor/store/editor-store";
 
-/** A second native preview demo: the nose is an editable strand-bend path. */
+/** Native preview demo: an ordinary transparent image with authored bending. */
 export function createPinocchioDemoElements(
   width: number,
   height: number,
@@ -41,28 +42,21 @@ export function createPinocchioDemoElements(
     {
       id: "pinocchio-demo-nose",
       name: "Pinocchio · springy nose",
-      type: "pen",
+      type: "image",
       x: noseBaseX,
       y: noseCenterY - noseHeight / 2,
       width: noseLength,
       height: noseHeight,
       rotation: 0,
       opacity: 100,
-      fill: "none",
-      stroke: "#d48d60",
-      strokeWidth: 42 * sx,
-      strokeStyle: "solid",
+      fill: "transparent",
+      stroke: "transparent",
+      strokeWidth: 0,
+      strokeStyle: "none",
       cornerRadius: 0,
       visible: true,
       locked: false,
-      vectorPaths: [
-        {
-          points: [
-            { x: 0, y: noseHeight / 2 },
-            { x: noseLength, y: noseHeight / 2 },
-          ],
-        },
-      ],
+      src: pinocchioNoseSvg,
       interactions: [
         createDefaultInteraction({
           id: "pinocchio-demo-nose-spring",

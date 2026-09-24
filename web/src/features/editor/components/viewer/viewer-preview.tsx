@@ -12,16 +12,28 @@ import {
 } from "react";
 
 import { ArtboardBackground } from "@/features/editor/components/canvas/artboard-background";
-import { Artboard3DScene } from "@/features/editor/components/canvas/artboard-3d-scene";
+import {
+  Artboard3DScene,
+  type ScreenPointToWorld3D,
+} from "@/features/editor/components/canvas/artboard-3d-scene";
 import { ShapeGraphic } from "@/features/editor/components/canvas/shape-graphic";
 import { MetaballLayer } from "@/features/editor/components/viewer/metaball-layer";
 import { ViewerBackgroundMusic } from "@/features/editor/components/viewer/viewer-background-music";
 import { ViewerWaveGraphic } from "@/features/editor/components/viewer/viewer-wave-graphic";
+import { ViewerMediaLiquidBridge } from "@/features/editor/components/viewer/viewer-media-liquid-bridge";
+import {
+  ViewerMediaDeform,
+  type ViewerMediaDeformHandle,
+} from "@/features/editor/components/viewer/viewer-media-deform";
 import {
   ViewerPointerVisual,
   isolatedPointerVisualIds,
 } from "@/features/editor/components/viewer/viewer-pointer-visual";
 import { ViewerWaveClock } from "@/features/editor/lib/viewer-wave-clock";
+import {
+  createSpawn3DInstance,
+  type ViewerSpawn3DInstance,
+} from "@/features/editor/lib/viewer-generated-3d-effects";
 import {
   ViewerPointerTrails,
   type ViewerPointerTrailsHandle,
@@ -244,7 +256,8 @@ function liquidSourceForElement(
 function strandInteractionForElement(
   element: CanvasElement,
 ): InteractionDefinition | undefined {
-  if (element.type !== "pen" && element.type !== "line") return undefined;
+  if (!["pen", "line", "image", "video"].includes(element.type))
+    return undefined;
   return (element.interactions ?? []).find(
     (interaction) =>
       interaction.enabled !== false &&
@@ -255,6 +268,21 @@ function strandInteractionForElement(
 }
 
 function strandPathForElement(element: CanvasElement) {
+  if (element.type === "image" || element.type === "video") {
+    const anchor = strandInteractionForElement(element)?.strandAnchor ?? "top";
+    return {
+      points:
+        anchor === "left" || anchor === "right"
+          ? [
+              { x: 0, y: element.height / 2 },
+              { x: element.width, y: element.height / 2 },
+            ]
+          : [
+              { x: element.width / 2, y: 0 },
+              { x: element.width / 2, y: element.height },
+            ],
+    };
+  }
   return element.type === "line"
     ? {
         points: [
@@ -266,6 +294,11 @@ function strandPathForElement(element: CanvasElement) {
 }
 
 function strandSampleSpacing(element: CanvasElement) {
+  if (element.type === "image" || element.type === "video")
+    return Math.max(
+      12,
+      Math.min(48, Math.max(element.width, element.height) / 32),
+    );
   // A modest number of connected bones bends like a strand rather than a
   // chain of tiny independent vertices. Thin authored paths remain precise.
   return Math.max(10, Math.min(26, element.strokeWidth * 0.65));
@@ -560,6 +593,7 @@ export function ViewerPreview({
   const scrollStopTimersRef = useRef(new Map<string, number>());
   const lastPointerRef = useRef<{ x: number; y: number } | null>(null);
   const pageRef = useRef<HTMLDivElement>(null);
+  const screenPointToWorld3DRef = useRef<ScreenPointToWorld3D | null>(null);
   const trailSessionsRef = useRef(new Map<number, Map<string, ViewerPoint>>());
   const nextParticleIdRef = useRef(1);
   const trailLayerRef = useRef<ViewerPointerTrailsHandle>(null);
@@ -567,6 +601,17 @@ export function ViewerPreview({
   const [spawnInstances, setSpawnInstances] = useState<ViewerSpawnInstance[]>(
     [],
   );
+  const [spawn3DInstances, setSpawn3DInstances] = useState<
+    ViewerSpawn3DInstance[]
+  >([]);
+  const renderObjects3D = useMemo(
+    () => [
+      ...objects3d,
+      ...spawn3DInstances.flatMap((instance) => instance.objects),
+    ],
+    [objects3d, spawn3DInstances],
+  );
+  const trail3DSessionsRef = useRef(new Map<string, ViewerPoint>());
   const [waveClock] = useState(() => new ViewerWaveClock());
   const [pagePointer, setPagePointer] = useState<{
     x: number;
@@ -581,6 +626,30 @@ export function ViewerPreview({
   const [strandPoses, setStrandPoses] = useState(
     () => new Map<string, StrandPose>(),
   );
+  const mediaDeformHandlesRef = useRef(
+    new Map<string, ViewerMediaDeformHandle>(),
+  );
+  const mediaElementIdsRef = useRef(new Set<string>());
+  const renderedStrandPosesRef = useRef(new Map<string, StrandPose>());
+  const publishStrandPoses = useCallback((next: Map<string, StrandPose>) => {
+    strandPosesRef.current = next;
+    for (const [id, handle] of mediaDeformHandlesRef.current)
+      handle.updatePose(next.get(id) ?? null);
+    // Media geometry is imperative. Existing vector/merge paths still receive
+    // their authored simulation state, but media-only frames never rerender
+    // the entire preview or reset the live video element.
+    const vectorPoses = new Map(
+      [...next].filter(([id]) => !mediaElementIdsRef.current.has(id)),
+    );
+    const previous = renderedStrandPosesRef.current;
+    if (
+      previous.size === vectorPoses.size &&
+      [...vectorPoses].every(([id, pose]) => previous.get(id) === pose)
+    )
+      return;
+    renderedStrandPosesRef.current = vectorPoses;
+    setStrandPoses(vectorPoses);
+  }, []);
   const activeStrandPointerRef = useRef<{
     elementId: string;
     x: number;
@@ -705,7 +774,8 @@ export function ViewerPreview({
           (interaction) =>
             interaction.enabled !== false && interaction.trigger === "hover",
         )
-      ) return;
+      )
+        return;
       mutateRuntimeState(element.id, (state) => ({ ...state, hovering }));
     },
     [mutateRuntimeState],
@@ -1335,6 +1405,11 @@ export function ViewerPreview({
     ],
     [elements, spawnInstances],
   );
+  mediaElementIdsRef.current = new Set(
+    renderElements
+      .filter((element) => element.type === "image" || element.type === "video")
+      .map((element) => element.id),
+  );
   useEffect(() => {
     const liveIds = new Set(renderElements.map((element) => element.id));
     const current = runtimeStateRef.current;
@@ -1359,17 +1434,23 @@ export function ViewerPreview({
       instance.elements.map((element) => [element.id, instance.id] as const),
     ),
   );
-  const sourceIdBySpawnElementId = new Map(
-    spawnInstances.flatMap((instance) =>
+  const sourceIdBySpawnElementId = new Map([
+    ...spawnInstances.flatMap((instance) =>
       instance.elements.map(
         (element) =>
           [element.id, element.id.slice(instance.id.length + 1)] as const,
       ),
     ),
-  );
+    ...spawn3DInstances.flatMap((instance) =>
+      instance.objects.map(
+        (object) =>
+          [object.id, object.id.slice(instance.id.length + 1)] as const,
+      ),
+    ),
+  ]);
   const trailRows = useMemo(
     () =>
-      elements.flatMap((source) =>
+      [...elements, ...renderObjects3D].flatMap((source) =>
         source.visible
           ? (source.interactions ?? [])
               .filter(
@@ -1381,21 +1462,33 @@ export function ViewerPreview({
               .map((interaction) => ({ source, interaction }))
           : [],
       ),
-    [elements],
+    [elements, renderObjects3D],
   );
   const trailLimits = useMemo(
     () =>
-      new Map(
-        trailRows.map(({ interaction }) => [
-          interaction.id,
-          interaction.trailMaxCount,
-        ]),
-      ),
-    [trailRows],
+      new Map([
+        ...trailRows.map(
+          ({ interaction }) =>
+            [interaction.id, interaction.trailMaxCount] as const,
+        ),
+        ...renderObjects3D.flatMap((object) =>
+          (object.interactions ?? [])
+            .filter(
+              (interaction) =>
+                interaction.enabled !== false &&
+                interaction.effect === "pointer-trail",
+            )
+            .map(
+              (interaction) =>
+                [interaction.id, interaction.trailMaxCount] as const,
+            ),
+        ),
+      ]),
+    [trailRows, renderObjects3D],
   );
   const waveInteractionsByElementId = useMemo(() => {
     const interactions = new Map<string, InteractionDefinition>();
-    for (const source of renderElements) {
+    for (const source of [...renderElements, ...renderObjects3D]) {
       for (const interaction of source.interactions ?? []) {
         if (
           interaction.enabled === false ||
@@ -1409,7 +1502,7 @@ export function ViewerPreview({
       }
     }
     return interactions;
-  }, [renderElements]);
+  }, [renderElements, renderObjects3D]);
   useLayoutEffect(() => {
     waveClock.setReducedMotion(prefersReducedMotion);
   }, [waveClock, prefersReducedMotion]);
@@ -1430,18 +1523,25 @@ export function ViewerPreview({
         })),
     [renderElements],
   );
-  const usesPointerMove = renderElements.some((element) =>
-    (element.interactions ?? []).some(
-      (interaction) =>
-        interaction.enabled !== false && interaction.trigger === "pointer-move",
-    ),
+  const usesPointerMove = [...renderElements, ...renderObjects3D].some(
+    (element) =>
+      (element.interactions ?? []).some(
+        (interaction) =>
+          interaction.enabled !== false &&
+          interaction.trigger === "pointer-move",
+      ),
   );
   const isolatedPointerIds = useMemo(
     () =>
       objects3d.length || dropPlacements.size || spawnInstances.length
         ? new Set<string>()
         : isolatedPointerVisualIds(renderElements),
-    [renderElements, objects3d.length, dropPlacements.size, spawnInstances.length],
+    [
+      renderElements,
+      objects3d.length,
+      dropPlacements.size,
+      spawnInstances.length,
+    ],
   );
   const usesReactPointerMove = renderElements.some(
     (element) =>
@@ -1450,7 +1550,8 @@ export function ViewerPreview({
         (interaction) =>
           interaction.enabled !== false &&
           interaction.trigger === "pointer-move" &&
-          interaction.effect !== "wave-deform",
+          interaction.effect !== "wave-deform" &&
+          interaction.effect !== "strand-bend",
       ),
   );
   const visibleElements = renderElements.filter((element) => element.visible);
@@ -1468,7 +1569,10 @@ export function ViewerPreview({
     );
   };
   const referencedModalElementIds = new Set<string>();
-  for (const element of visibleElements) {
+  for (const element of [
+    ...visibleElements,
+    ...renderObjects3D.filter((object) => object.visible),
+  ]) {
     for (const interaction of element.interactions ?? []) {
       if (
         interaction.enabled === false ||
@@ -1701,11 +1805,47 @@ export function ViewerPreview({
     };
   };
   const spawnInstanceAt = (
-    source: CanvasElement,
+    source: Pick<CanvasElement, "id">,
     interaction: InteractionDefinition,
     point: ViewerPoint,
   ) => {
     const interactionKey = `${source.id}:${interaction.id}`;
+    const template3D = objects3d.find(
+      (object) => object.id === interaction.spawnSourceId,
+    );
+    if (template3D) {
+      const placement = screenPointToWorld3DRef.current?.(
+        point,
+        template3D.transform.position.z,
+      );
+      if (!placement) return false;
+      const count = spawn3DInstances.filter(
+        (instance) => instance.interactionId === interactionKey,
+      ).length;
+      const maxCount = Math.max(1, interaction.spawnMaxCount);
+      if (count >= maxCount && interaction.spawnOverflow === "stop")
+        return false;
+      const instance = createSpawn3DInstance(
+        objects3d,
+        interaction,
+        placement,
+        `viewer-spawn-${nextSpawnIdRef.current++}`,
+      );
+      if (!instance) return false;
+      setSpawn3DInstances((current) => {
+        const next = [
+          ...current,
+          { ...instance, interactionId: interactionKey },
+        ];
+        const matching = next.filter(
+          (entry) => entry.interactionId === interactionKey,
+        );
+        return matching.length > maxCount
+          ? next.filter((entry) => entry.id !== matching[0].id)
+          : next;
+      });
+      return true;
+    }
     const count = spawnInstances.filter(
       (instance) => instance.interactionId === interactionKey,
     ).length;
@@ -2039,7 +2179,13 @@ export function ViewerPreview({
         : [];
     }),
   );
-  strandPagePointerRef.current = pagePointer;
+  useLayoutEffect(
+    () =>
+      waveClock.subscribePointer((pointer) => {
+        strandPagePointerRef.current = pointer;
+      }),
+    [waveClock],
+  );
   useEffect(() => {
     let frame = 0;
     const animate = (now: number) => {
@@ -2146,9 +2292,26 @@ export function ViewerPreview({
                 },
                 { index: -1, distance: Infinity },
               );
+              const halfThickness = (input: typeof activeInput) => {
+                const media =
+                  input.element.type === "image" ||
+                  input.element.type === "video";
+                if (!media) return input.element.strokeWidth / 2;
+                const horizontal =
+                  input.interaction.strandAnchor === "left" ||
+                  input.interaction.strandAnchor === "right";
+                return (
+                  Math.abs(
+                    horizontal
+                      ? input.element.height * input.visual.scaleY
+                      : input.element.width * input.visual.scaleX,
+                  ) / 2
+                );
+              };
               const contactDistance =
                 merge.joinDistance +
-                (element.strokeWidth + activeInput.element.strokeWidth) / 2;
+                halfThickness(activeInput) +
+                halfThickness({ element, interaction, visual });
               if (nearest.index >= 0 && nearest.distance <= contactDistance) {
                 const targetWorld = strandWorldPoint(
                   pose.points[nearest.index],
@@ -2271,8 +2434,7 @@ export function ViewerPreview({
         }
       }
       if (changed) {
-        strandPosesRef.current = next;
-        setStrandPoses(next);
+        publishStrandPoses(next);
       }
       frame = requestAnimationFrame(animate);
     };
@@ -2281,9 +2443,15 @@ export function ViewerPreview({
       cancelAnimationFrame(frame);
       lastStrandFrameRef.current = null;
     };
-  }, []);
+  }, [publishStrandPoses]);
   const nextActiveLiquidPairs = new Set<string>();
   const mergedElementIds = new Set<string>();
+  const mediaLiquidPairs: {
+    source: CanvasElement;
+    target: CanvasElement;
+    interaction: InteractionDefinition;
+  }[] = [];
+  const mediaLiquidMemberIds = new Set<string>();
   const activeLiquidPairs: {
     id: string;
     sourceId: string;
@@ -2308,6 +2476,19 @@ export function ViewerPreview({
       const targetVisual = runtimeVisuals.get(target?.id ?? "");
       if (!target || !sourceVisual || !targetVisual || target.id === element.id)
         continue;
+      if (
+        [element.type, target.type].some(
+          (type) => type === "image" || type === "video",
+        )
+      ) {
+        // Texture-bearing objects retain their normal renderer. Only the new
+        // connecting surface is blended; the vector flood filter must never
+        // replace an uploaded image or video with a solid-color silhouette.
+        mediaLiquidPairs.push({ source: element, target, interaction });
+        mediaLiquidMemberIds.add(element.id);
+        mediaLiquidMemberIds.add(target.id);
+        continue;
+      }
       const pairId = `${interaction.id}:${element.id}:${target.id}`;
       const source = liquidSourceForElement(
         element,
@@ -2447,7 +2628,7 @@ export function ViewerPreview({
     trailLayerRef.current?.append(particles, now);
   };
   const emitClickInteractionEvents = (
-    element: CanvasElement,
+    element: Pick<CanvasElement, "id" | "interactions">,
     interactions = (element.interactions ?? []).filter(
       (interaction) =>
         interaction.enabled !== false && interaction.trigger === "click-tap",
@@ -2472,6 +2653,31 @@ export function ViewerPreview({
       }, duration * 1000);
       targetCommandTimersRef.current.add(timer);
     }
+  };
+  const dispatch3DCommand = (
+    object: Object3DElement,
+    interaction: InteractionDefinition,
+    point: ViewerPoint,
+  ) => {
+    emitClickInteractionEvents(object, [interaction]);
+    const run = () => {
+      if (interaction.effect === "spawn-instance")
+        spawnInstanceAt(object, interaction, point);
+      else if (
+        interaction.effect === "open-modal" &&
+        elementsById.has(interaction.modalTarget)
+      )
+        openRuntimeModal(interaction);
+      else if (interaction.effect === "close-modal")
+        closeRuntimeModal(interaction.modalTarget || undefined);
+    };
+    if (interaction.delay > 0) {
+      const timer = window.setTimeout(() => {
+        targetCommandTimersRef.current.delete(timer);
+        run();
+      }, interaction.delay * 1000);
+      targetCommandTimersRef.current.add(timer);
+    } else run();
   };
   return (
     <section
@@ -2501,7 +2707,7 @@ export function ViewerPreview({
       {advancedSound.preloadSounds !== "on-demand"
         ? Array.from(
             new Map(
-              [...elements, ...objects3d].flatMap((element) =>
+              [...renderElements, ...renderObjects3D].flatMap((element) =>
                 (element.interactionSounds ?? []).flatMap((setting) =>
                   setting.assets.map((asset) => [asset.src, asset] as const),
                 ),
@@ -2557,7 +2763,7 @@ export function ViewerPreview({
                   (event.target as Element)
                     .closest?.("[data-element-id]")
                     ?.getAttribute("data-element-id") ?? null;
-                for (const source of elements) {
+                for (const source of [...elements, ...renderObjects3D]) {
                   if (!source.visible || source.id === clickedElementId)
                     continue;
                   for (const interaction of source.interactions ?? []) {
@@ -2568,6 +2774,10 @@ export function ViewerPreview({
                       interaction.effect !== "spawn-instance"
                     )
                       continue;
+                    if (source.type === "object3d") {
+                      dispatch3DCommand(source, interaction, point);
+                      continue;
+                    }
                     dispatchTargetEffect(
                       source.id,
                       interaction,
@@ -2672,18 +2882,83 @@ export function ViewerPreview({
             >
               <ArtboardBackground artboard={artboard} />
               <div
-                aria-hidden={activeModal ? true : undefined}
+                aria-hidden={activeModal?.backdrop ? true : undefined}
                 data-viewer-3d-layer
-                inert={activeModal ? true : undefined}
+                inert={activeModal?.backdrop ? true : undefined}
               >
                 <Artboard3DScene
                   artboardHeight={artboard.height}
                   artboardWidth={artboard.width}
                   collisionProxies={collision3DProxies}
-                  interactive={!activeModal}
-                  objects={objects3d}
+                  getDropTargets={() =>
+                    visibleElements
+                      .filter(
+                        (element) =>
+                          !referencedModalElementIds.has(element.id) ||
+                          activeModalElementIds.has(element.id),
+                      )
+                      .map((element) => ({
+                        id: element.id,
+                        type: element.type,
+                        bounds: runtimeRectForElement(
+                          element,
+                          visualForCurrentGesture(element),
+                        ),
+                      }))
+                  }
+                  interactive={!activeModal || !activeModal.backdrop}
+                  objects={renderObjects3D}
+                  onRuntimeInteraction={(objectId, interaction, event) => {
+                    const object = renderObjects3D.find(
+                      (item) => item.id === objectId,
+                    );
+                    if (!object) return;
+                    if (interaction.effect === "pointer-trail") {
+                      if (interaction.triggerArea === "entire-artwork") return;
+                      const key = `${objectId}:${interaction.id}`;
+                      if (event.phase === "end") {
+                        trail3DSessionsRef.current.delete(key);
+                        return;
+                      }
+                      if (event.phase !== "start" && event.phase !== "move")
+                        return;
+                      const previous = trail3DSessionsRef.current.get(key);
+                      const points = previous
+                        ? sampleTrailSegment(
+                            previous,
+                            event.point,
+                            interaction.trailSpacing,
+                          )
+                        : [event.point];
+                      if (points.length) {
+                        trail3DSessionsRef.current.set(
+                          key,
+                          points[points.length - 1],
+                        );
+                        appendTrailPoints([{ interaction, points }]);
+                      }
+                      return;
+                    }
+                    if (
+                      interaction.triggerArea === "entire-artwork" &&
+                      interaction.trigger === "click-tap" &&
+                      interaction.effect === "spawn-instance"
+                    )
+                      return;
+                    if (activeModal && interaction.effect !== "close-modal")
+                      return;
+                    if (
+                      event.phase !== "activate" &&
+                      !(
+                        event.phase === "start" &&
+                        interaction.trigger === "hover"
+                      )
+                    )
+                      return;
+                    dispatch3DCommand(object, interaction, event.point);
+                  }}
                   onSoundEvent={(objectId, trigger, event, continuous) => {
-                    const object = objects3d.find(
+                    const object = renderObjects3D.find(
                       (item) => item.id === objectId,
                     );
                     if (object)
@@ -2693,7 +2968,9 @@ export function ViewerPreview({
                     stopContinuousInteraction(objectId, trigger)
                   }
                   projectId={projectId}
+                  reducedMotion={prefersReducedMotion}
                   scene={scene3d}
+                  screenPointToWorldRef={screenPointToWorld3DRef}
                 />
               </div>
               {activeModal?.backdrop ? (
@@ -2734,6 +3011,25 @@ export function ViewerPreview({
                 const waveInteraction = waveInteractionsByElementId.get(
                   element.id,
                 );
+                const isMedia =
+                  element.type === "image" || element.type === "video";
+                const mediaDeformed =
+                  isMedia &&
+                  Boolean(
+                    waveInteraction ||
+                    strandInteractionForElement(element) ||
+                    mediaLiquidMemberIds.has(element.id),
+                  );
+                const mediaOnlyStrandDrag =
+                  mediaDeformed &&
+                  !(element.interactions ?? []).some(
+                    (interaction) =>
+                      interaction.enabled !== false &&
+                      (interaction.trigger === "drag" ||
+                        isTargetDragTrigger(interaction.trigger)) &&
+                      interaction.effect !== "strand-bend" &&
+                      interaction.effect !== "pointer-trail",
+                  );
                 const strandBend = strandPose
                   ? undefined
                   : strandBendForElement(
@@ -2948,8 +3244,7 @@ export function ViewerPreview({
                       ) {
                         const next = new Map(strandPosesRef.current);
                         next.set(element.id, pose);
-                        strandPosesRef.current = next;
-                        setStrandPoses(next);
+                        publishStrandPoses(next);
                       }
                       const strandGrab =
                         worldPointer && pose?.points.length
@@ -3101,7 +3396,7 @@ export function ViewerPreview({
                               isTargetDragTrigger(interaction.trigger)) &&
                             interaction.effect !== "strand-bend",
                         );
-                      if (!swipeOnlyStrand)
+                      if (!swipeOnlyStrand && !mediaOnlyStrandDrag)
                         setInteractionDrag(element, {
                           dx: constrainedDrag.x,
                           dy: constrainedDrag.y,
@@ -3161,8 +3456,7 @@ export function ViewerPreview({
                             changed = true;
                           }
                           if (changed) {
-                            strandPosesRef.current = next;
-                            setStrandPoses(next);
+                            publishStrandPoses(next);
                           }
                         }
                       } else if (
@@ -3229,8 +3523,7 @@ export function ViewerPreview({
                                 damping: interaction.strandDamping,
                               }),
                             );
-                            strandPosesRef.current = next;
-                            setStrandPoses(next);
+                            publishStrandPoses(next);
                           }
                         }
                       }
@@ -3313,6 +3606,7 @@ export function ViewerPreview({
                       }
                     }}
                     style={{
+                      pointerEvents: mediaDeformed ? "none" : undefined,
                       animation:
                         runtimeVisual.shake && !prefersReducedMotion
                           ? "interaction-shake 0.35s ease-in-out infinite"
@@ -3348,7 +3642,10 @@ export function ViewerPreview({
                     }}
                   >
                     {isolatedPointerIds.has(element.id) ? (
-                      <ViewerPointerVisual element={element} clock={waveClock} />
+                      <ViewerPointerVisual
+                        element={element}
+                        clock={waveClock}
+                      />
                     ) : null}
                     {element.type === "text" ? (
                       <div
@@ -3370,6 +3667,28 @@ export function ViewerPreview({
                       >
                         <ShapeGraphic element={element} />
                       </span>
+                    ) : mediaDeformed ? (
+                      <ViewerMediaDeform
+                        ref={(handle) => {
+                          if (handle) {
+                            mediaDeformHandlesRef.current.set(
+                              element.id,
+                              handle,
+                            );
+                            handle.updatePose(
+                              strandPosesRef.current.get(element.id) ?? null,
+                            );
+                          } else
+                            mediaDeformHandlesRef.current.delete(element.id);
+                        }}
+                        element={element}
+                        waveClock={waveClock}
+                        waveInteraction={waveInteraction}
+                        visual={runtimeVisual}
+                        artboardWidth={artboard.width}
+                        artboardHeight={artboard.height}
+                        elementIndex={elementIndex}
+                      />
                     ) : waveInteraction &&
                       (element.type === "pen" || element.type === "line") ? (
                       <ViewerWaveGraphic
@@ -3386,7 +3705,10 @@ export function ViewerPreview({
                         }
                         strandRibbonPathData={
                           strandPose && element.strokeStyle !== "none"
-                            ? strandPoseRibbonPath(strandPose, element.strokeWidth)
+                            ? strandPoseRibbonPath(
+                                strandPose,
+                                element.strokeWidth,
+                              )
                             : undefined
                         }
                       />
@@ -3395,9 +3717,7 @@ export function ViewerPreview({
                         element={element}
                         strandBend={strandBend}
                         strandPathData={
-                          strandPose
-                            ? strandPosePath(strandPose)
-                            : undefined
+                          strandPose ? strandPosePath(strandPose) : undefined
                         }
                         strandRibbonPathData={
                           strandPose && element.strokeStyle !== "none"
@@ -3426,7 +3746,23 @@ export function ViewerPreview({
                   width={artboard.width}
                 />
               ))}
-              {trailRows.length ? (
+              {mediaLiquidPairs.map(({ source, target, interaction }) => (
+                <ViewerMediaLiquidBridge
+                  key={`${source.id}:${interaction.id}:${target.id}`}
+                  source={source}
+                  target={target}
+                  sourceVisual={runtimeVisuals.get(source.id)!}
+                  targetVisual={runtimeVisuals.get(target.id)!}
+                  sourcePose={strandPoses.get(source.id)}
+                  targetPose={strandPoses.get(target.id)}
+                  interaction={interaction}
+                  waveClock={waveClock}
+                  getMediaHandle={(id) => mediaDeformHandlesRef.current.get(id)}
+                  artboardWidth={artboard.width}
+                  artboardHeight={artboard.height}
+                />
+              ))}
+              {trailLimits.size ? (
                 <ViewerPointerTrails limits={trailLimits} ref={trailLayerRef} />
               ) : null}
             </div>

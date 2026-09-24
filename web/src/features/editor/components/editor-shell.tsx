@@ -6447,7 +6447,7 @@ export function EditorShell({
           <InteractionPanel
             elements={interactionElements}
             interactionsByElement={Object.fromEntries(
-              elements.map((element) => [
+              [...elements, ...objects3d].map((element) => [
                 element.id,
                 element.interactions ?? [],
               ]),

@@ -24,6 +24,8 @@ import {
   Plane,
   PerspectiveCamera,
   type Ray,
+  Raycaster,
+  Vector2,
   Vector3,
 } from "three";
 import {
@@ -47,24 +49,61 @@ import {
 } from "@/features/editor/lib/interaction-physics-3d";
 import {
   IDLE_RUNTIME_STATE,
+  IDENTITY_VISUAL,
+  interactionIntensity,
   isRuntimeInteractionActive,
   runtimeVisualForElement,
+  type ElementRuntimeState,
 } from "@/features/editor/lib/interaction-runtime";
+import type { InteractionDefinition } from "@/features/editor/lib/interaction-model";
+import {
+  hasTargetDragGesture,
+  isDropTargetHit,
+  isTargetDragTrigger,
+  matchesDropRule,
+  snapOffsetForTarget,
+} from "@/features/editor/lib/interaction-drop-runtime";
 import type {
   InteractionSoundEvent,
   InteractionSoundTrigger,
 } from "@/features/editor/store/editor-store";
 import { orthographicCameraPlacement } from "@/features/editor/three/camera-clearance";
 import {
+  artboardPointToEditorAtDepth,
   projectEditorMoveToScreen,
   projectObjectToScreen,
   screenOffsetToEditorMove,
   screenPointToNdc,
   spatialTransformToWorld,
+  worldPointToArtboard,
   type ProjectedBounds,
 } from "@/features/editor/three/coordinate-system";
 import { createGeometry3D } from "@/features/editor/three/geometry-factory";
+import { createDeformableGeometry3D } from "@/features/editor/three/deformable-geometry";
+import {
+  DropTargets3D,
+  type Object3DDropTarget,
+} from "@/features/editor/three/drop-targets";
+import {
+  applyInteractionVisual3D,
+  InteractionOpacity3D,
+} from "@/features/editor/three/interaction-visual";
+import {
+  bendPoint3D,
+  createStrandPose3D,
+  MeshDeformation3D,
+  stepStrandPose3D,
+  wavePoint3D,
+} from "@/features/editor/three/mesh-deformation";
 import { cloneModelAssetScene } from "@/features/editor/three/model-assets";
+import {
+  LiquidMerge3D,
+  readLiquidPull3D,
+} from "@/features/editor/three/liquid-merge";
+import {
+  Object3DVisualCompositorProvider,
+  useObject3DCompositor,
+} from "@/features/editor/three/object-visual-compositor";
 import { disposeObject3D } from "@/features/editor/three/resource-disposal";
 import {
   resolveScene3DSettings,
@@ -79,6 +118,96 @@ import {
  * inside the Canvas so it crosses the R3F reconciler boundary to ObjectGroup.
  */
 const Interactive3DContext = createContext(false);
+const ReducedMotion3DContext = createContext(false);
+export type ScreenPointToWorld3D = (
+  point: { x: number; y: number },
+  z: number,
+) => { x: number; y: number } | null;
+
+function ScreenPointToWorldBridge({
+  bridgeRef,
+  viewport,
+}: {
+  bridgeRef: MutableRefObject<ScreenPointToWorld3D | null>;
+  viewport: ProjectedBounds;
+}) {
+  const { camera } = useThree();
+  useLayoutEffect(() => {
+    const convert: ScreenPointToWorld3D = (point, z) =>
+      artboardPointToEditorAtDepth(point, z, camera, viewport);
+    bridgeRef.current = convert;
+    return () => {
+      if (bridgeRef.current === convert) bridgeRef.current = null;
+    };
+  }, [bridgeRef, camera, viewport]);
+  return null;
+}
+export type { Object3DDropTarget } from "@/features/editor/three/drop-targets";
+const DropTargets3DContext = createContext<DropTargets3D | null>(null);
+
+function DropTargets3DProvider({
+  children,
+  getDropTargets,
+}: {
+  children: ReactNode;
+  getDropTargets?: () => readonly Object3DDropTarget[];
+}) {
+  const [registry] = useState(() => new DropTargets3D());
+  useLayoutEffect(() => {
+    registry.setExternal(getDropTargets);
+  }, [getDropTargets, registry]);
+  return (
+    <DropTargets3DContext.Provider value={registry}>
+      {children}
+    </DropTargets3DContext.Provider>
+  );
+}
+
+export type Object3DRuntimeEvent = {
+  phase: "start" | "move" | "end" | "activate";
+  /** Artboard coordinates, independent of preview CSS zoom and camera depth. */
+  point: { x: number; y: number };
+};
+export type Object3DRuntimeInteractionHandler = (
+  objectId: string,
+  interaction: InteractionDefinition,
+  event: Object3DRuntimeEvent,
+) => void;
+const Runtime3DEventsContext = createContext<
+  Object3DRuntimeInteractionHandler | undefined
+>(undefined);
+const Runtime3DPointerContext = createContext<
+  MutableRefObject<{ x: number; y: number } | null>
+>({ current: null });
+
+/** One canvas listener serves all pointer-following objects without React state. */
+function Runtime3DPointerProvider({ children }: { children: ReactNode }) {
+  const { gl, invalidate } = useThree();
+  const pointer = useRef<{ x: number; y: number } | null>(null);
+  useEffect(() => {
+    const canvas = gl?.domElement;
+    if (!canvas) return;
+    const move = (event: PointerEvent) => {
+      pointer.current = { x: event.clientX, y: event.clientY };
+      invalidate();
+    };
+    const leave = () => {
+      pointer.current = null;
+      invalidate();
+    };
+    canvas.addEventListener("pointermove", move);
+    canvas.addEventListener("pointerleave", leave);
+    return () => {
+      canvas.removeEventListener("pointermove", move);
+      canvas.removeEventListener("pointerleave", leave);
+    };
+  }, [gl, invalidate]);
+  return (
+    <Runtime3DPointerContext.Provider value={pointer}>
+      {children}
+    </Runtime3DPointerContext.Provider>
+  );
+}
 
 type Object3DSoundEvents = {
   play: (
@@ -389,6 +518,8 @@ type Artboard3DSceneProps = {
   editable?: boolean;
   /** When true (viewer preview), objects play their authored interactions. */
   interactive?: boolean;
+  /** Freezes ambient motion while keeping direct pointer manipulation usable. */
+  reducedMotion?: boolean;
   /** Populated with an imperative controller for gesture-time mesh updates. */
   gestureBridgeRef?: MutableRefObject<Object3DGestureApi | null>;
   /** Ref flag; while true, BoundsReporter stays quiet (gesture drives the
@@ -402,6 +533,11 @@ type Artboard3DSceneProps = {
   onObjectDragStart?: (objectId: string) => void;
   onSoundEvent?: Object3DSoundEvents["play"];
   onSoundStop?: Object3DSoundEvents["stop"];
+  onRuntimeInteraction?: Object3DRuntimeInteractionHandler;
+  /** Converts artboard pixels to authoring XY on a requested world-Z plane. */
+  screenPointToWorldRef?: MutableRefObject<ScreenPointToWorld3D | null>;
+  /** Live artboard bounds of 2D targets or objects in another 3D canvas layer. */
+  getDropTargets?: () => readonly Object3DDropTarget[];
   onProjectedBoundsChange?: (
     objectId: string,
     bounds: ProjectedBounds | null,
@@ -602,8 +738,383 @@ function ObjectGroup({
   onSelectObject: Artboard3DSceneProps["onSelectObject"];
 }) {
   const interactive = useContext(Interactive3DContext);
+  const reducedMotion = useContext(ReducedMotion3DContext);
   const soundEvents = useContext(Object3DSoundContext);
+  const runtimeEvents = useContext(Runtime3DEventsContext);
+  const runtimeEventsRef = useRef(runtimeEvents);
+  useLayoutEffect(() => {
+    runtimeEventsRef.current = runtimeEvents;
+  }, [runtimeEvents]);
+  const stagePointer = useContext(Runtime3DPointerContext);
+  const dropTargets = useContext(DropTargets3DContext);
+  const runtimeViewport = useContext(Viewport3DContext);
+  const { camera, gl, invalidate } = useThree();
   const [group, setGroup] = useState<Group | null>(null);
+  const visualRef = useRef(IDENTITY_VISUAL);
+  useObject3DCompositor({
+    root: group,
+    visual: visualRef,
+    enabled: interactive,
+  });
+  const contentRef = useRef<Group>(null);
+  const deformRef = useRef<MeshDeformation3D | null>(null);
+  const opacityRef = useRef<InteractionOpacity3D | null>(null);
+  const strandPose = useRef(createStrandPose3D());
+  const runtimeRef = useRef<ElementRuntimeState>({
+    ...IDLE_RUNTIME_STATE,
+    dragOffset: { x: 0, y: 0 },
+  });
+  const timedIds = useRef(new Set<string>());
+  const dropHits = useRef(new Set<string>());
+  const placementRef = useRef<{
+    targetId: string;
+    targetX: number;
+    targetY: number;
+    offsetX: number;
+    offsetY: number;
+  } | null>(null);
+  const placementResetRef = useRef<number | null>(null);
+  const targetCommandRef = useRef<
+    (interaction: InteractionDefinition) => boolean
+  >(() => false);
+  const previewDragRef = useRef<{
+    pointerId: number;
+    start: Vector3;
+    last: Vector3;
+    plane: Plane;
+    startOffset: { x: number; y: number };
+  } | null>(null);
+  const activeInteractions = useMemo(
+    () =>
+      interactive
+        ? (object.interactions ?? []).filter((entry) => entry.enabled !== false)
+        : [],
+    [interactive, object.interactions],
+  );
+  const strand = activeInteractions.find(
+    (entry) =>
+      entry.effect === "strand-bend" &&
+      (entry.trigger === "drag" || entry.trigger === "pointer-move"),
+  );
+  const wave = activeInteractions.find(
+    (entry) => entry.effect === "wave-deform",
+  );
+  const pointerMath = useMemo(
+    () => ({
+      raycaster: new Raycaster(),
+      ndc: new Vector2(),
+      plane: new Plane(),
+      origin: new Vector3(),
+      normal: new Vector3(),
+      hit: new Vector3(),
+      local: new Vector3(),
+      delta: new Vector3(),
+      center: new Vector3(),
+      liquid: new Vector3(),
+      bend: new Vector3(),
+    }),
+    [],
+  );
+  const readTarget = (): Object3DDropTarget | null => {
+    if (!group?.isObject3D) return null;
+    const bounds = projectObjectToScreen(
+      group,
+      camera,
+      runtimeViewport.width,
+      runtimeViewport.height,
+    );
+    return bounds
+      ? {
+          id: object.id,
+          type: "object3d",
+          bounds: {
+            ...bounds,
+            x: bounds.x + runtimeViewport.x,
+            y: bounds.y + runtimeViewport.y,
+          },
+        }
+      : null;
+  };
+  const resetPlacement = () => {
+    runtimeRef.current.dragOffset = { x: 0, y: 0 };
+    runtimeRef.current.drag = null;
+    runtimeRef.current.triggeredInteractionIds = [];
+    placementRef.current = null;
+    dropTargets?.release(object.id);
+    if (placementResetRef.current !== null)
+      window.clearTimeout(placementResetRef.current);
+    placementResetRef.current = null;
+    invalidate();
+  };
+  const screenDelta = (delta: { x: number; y: number }) =>
+    screenOffsetToEditorMove(
+      {
+        x: object.transform.position.x + runtimeRef.current.dragOffset.x,
+        y: object.transform.position.y + runtimeRef.current.dragOffset.y,
+        z: object.transform.position.z,
+      },
+      delta,
+      camera,
+      runtimeViewport.width,
+      runtimeViewport.height,
+    ) ?? delta;
+  const applyTargetCommand = (interaction: InteractionDefinition): boolean => {
+    if (interaction.effect === "return-to-origin") {
+      resetPlacement();
+      return true;
+    }
+    if (
+      interaction.effect !== "snap-to-target" &&
+      interaction.effect !== "attach-to-target"
+    )
+      return false;
+    const target = dropTargets?.read(interaction.collisionTarget);
+    const source = readTarget();
+    if (!target || !source || target.id === source.id) return false;
+    if (!dropTargets?.reserve(object.id, target.id, interaction)) return false;
+    if (
+      interaction.effect === "attach-to-target" &&
+      !dropTargets.attach(object.id, target.id)
+    )
+      return false;
+    const state = runtimeRef.current;
+    const adjustment =
+      interaction.effect === "attach-to-target" &&
+      interaction.attachPreserveOffset
+        ? { x: 0, y: 0 }
+        : screenDelta(
+            snapOffsetForTarget({
+              anchor: interaction.snapAnchor,
+              authoredSource: source.bounds,
+              offsetX: interaction.snapOffsetX,
+              offsetY: interaction.snapOffsetY,
+              target: target.bounds,
+            }),
+          );
+    state.dragOffset = {
+      x: state.dragOffset.x + (state.drag?.dx ?? 0) + adjustment.x,
+      y: state.dragOffset.y + (state.drag?.dy ?? 0) + adjustment.y,
+    };
+    const session = previewDragRef.current;
+    if (session) session.start.copy(session.last);
+    state.drag = session ? { dx: 0, dy: 0 } : null;
+    placementRef.current =
+      interaction.effect === "attach-to-target"
+        ? {
+            targetId: target.id,
+            targetX: target.bounds.x,
+            targetY: target.bounds.y,
+            offsetX: state.dragOffset.x,
+            offsetY: state.dragOffset.y,
+          }
+        : null;
+    if (interaction.resetMode === "return-to-origin") {
+      if (placementResetRef.current !== null)
+        window.clearTimeout(placementResetRef.current);
+      placementResetRef.current = window.setTimeout(
+        resetPlacement,
+        Math.max(0, interaction.duration + interaction.hold) * 1000,
+      );
+    }
+    invalidate();
+    return true;
+  };
+  useLayoutEffect(() => {
+    targetCommandRef.current = applyTargetCommand;
+  });
+  const dispatchTarget = (
+    interaction: InteractionDefinition,
+    point: Vector3,
+  ) => {
+    applyTargetCommand(interaction);
+    runtimeRef.current.triggeredInteractionIds = [
+      ...new Set([
+        ...runtimeRef.current.triggeredInteractionIds,
+        interaction.id,
+      ]),
+    ];
+    const eventPoint = worldPointToArtboard(point, camera, runtimeViewport);
+    if (eventPoint)
+      runtimeEvents?.(object.id, interaction, {
+        phase: "activate",
+        point: eventPoint,
+      });
+    invalidate();
+  };
+  const updateTargetEvents = (ending: boolean, point: Vector3) => {
+    const source = readTarget();
+    if (!source) return false;
+    let applied = false;
+    for (const interaction of activeInteractions) {
+      if (!isTargetDragTrigger(interaction.trigger)) continue;
+      const target = dropTargets?.read(interaction.collisionTarget);
+      if (!target || target.id === source.id) continue;
+      const hit =
+        matchesDropRule(interaction, source) &&
+        isDropTargetHit(
+          source.bounds,
+          target.bounds,
+          interaction.dropTolerance,
+        );
+      const previous = dropHits.current.has(interaction.id);
+      if (hit) dropHits.current.add(interaction.id);
+      else dropHits.current.delete(interaction.id);
+      const fire = ending
+        ? (interaction.trigger === "drop-on-target" && hit) ||
+          (interaction.trigger === "drop-outside-target" && !hit)
+        : (interaction.trigger === "drag-enter-target" && hit && !previous) ||
+          (interaction.trigger === "drag-leave-target" && !hit && previous);
+      if (
+        !fire ||
+        (interaction.trigger === "drop-on-target" &&
+          !dropTargets?.reserve(object.id, target.id, interaction))
+      )
+        continue;
+      dispatchTarget(interaction, point);
+      applied = true;
+    }
+    return applied;
+  };
+  useEffect(() => {
+    if (!interactive || !group?.isObject3D || !dropTargets) return;
+    return dropTargets.register(
+      object.id,
+      () => {
+        const bounds = projectObjectToScreen(
+          group,
+          camera,
+          runtimeViewport.width,
+          runtimeViewport.height,
+        );
+        return bounds
+          ? {
+              id: object.id,
+              type: "object3d",
+              bounds: {
+                ...bounds,
+                x: bounds.x + runtimeViewport.x,
+                y: bounds.y + runtimeViewport.y,
+              },
+            }
+          : null;
+      },
+      () => {
+        runtimeRef.current.dragOffset = { x: 0, y: 0 };
+        runtimeRef.current.drag = null;
+        placementRef.current = null;
+        invalidate();
+      },
+    );
+  }, [
+    camera,
+    dropTargets,
+    group,
+    interactive,
+    invalidate,
+    object.id,
+    runtimeViewport,
+  ]);
+  useEffect(
+    () => () => {
+      if (placementResetRef.current !== null)
+        window.clearTimeout(placementResetRef.current);
+    },
+    [],
+  );
+  const emitRuntime = (
+    trigger: string,
+    phase: Object3DRuntimeEvent["phase"],
+    point: Vector3,
+  ) => {
+    const eventPoint = worldPointToArtboard(point, camera, runtimeViewport);
+    for (const interaction of activeInteractions) {
+      if (interaction.trigger === trigger) {
+        if (phase === "activate" || phase === "start")
+          applyTargetCommand(interaction);
+        if (eventPoint)
+          runtimeEvents?.(object.id, interaction, {
+            phase,
+            point: eventPoint,
+          });
+      }
+    }
+  };
+  useLayoutEffect(() => {
+    const content = contentRef.current;
+    // Non-R3F component tests render intrinsic groups as DOM elements.
+    if (!interactive || !content?.isObject3D) return;
+    const deform = strand || wave ? new MeshDeformation3D(content) : null;
+    const opacity = new InteractionOpacity3D(
+      content,
+      object.source.kind !== "asset" || !object.material.useSourceMaterial
+        ? object.material.opacity / 100
+        : undefined,
+    );
+    deformRef.current = deform;
+    opacityRef.current = opacity;
+    invalidate();
+    return () => {
+      deform?.dispose();
+      opacity.dispose();
+      deformRef.current = null;
+      opacityRef.current = null;
+    };
+  }, [
+    group,
+    interactive,
+    invalidate,
+    object.dimensions,
+    object.material,
+    object.source,
+    strand,
+    wave,
+  ]);
+  useEffect(() => {
+    timedIds.current.clear();
+    const timers = activeInteractions
+      .filter((entry) => entry.trigger === "after-delay")
+      .map((interaction) =>
+        window.setTimeout(
+          () => {
+            timedIds.current.add(interaction.id);
+            targetCommandRef.current(interaction);
+            const center = new Vector3(
+              object.transform.position.x,
+              -object.transform.position.y,
+              object.transform.position.z,
+            );
+            const content = contentRef.current;
+            if (content?.isObject3D) {
+              content.updateWorldMatrix(true, true);
+              const bounds = new Box3().setFromObject(content, true);
+              if (!bounds.isEmpty()) bounds.getCenter(center);
+            }
+            const eventPoint = worldPointToArtboard(
+              center,
+              camera,
+              runtimeViewport,
+            );
+            if (eventPoint)
+              runtimeEventsRef.current?.(object.id, interaction, {
+                phase: "activate",
+                point: eventPoint,
+              });
+            invalidate();
+          },
+          Math.max(0, interaction.timeSeconds) * 1000,
+        ),
+      );
+    return () => timers.forEach((timer) => window.clearTimeout(timer));
+  }, [
+    activeInteractions,
+    camera,
+    invalidate,
+    object.id,
+    object.transform.position.x,
+    object.transform.position.y,
+    object.transform.position.z,
+    runtimeViewport,
+  ]);
   const [toggled, setToggled] = useState(false);
   const [hovering, setHovering] = useState(false);
   const world = spatialTransformToWorld(object.transform);
@@ -640,9 +1151,36 @@ function ObjectGroup({
   );
   const handlePointerDown = (event: ThreeEvent<PointerEvent>) => {
     if (!editable) {
-      if (!hasSound) return;
+      const canDrag =
+        activeInteractions.some((entry) => entry.trigger === "drag") ||
+        hasTargetDragGesture(activeInteractions);
+      if (!hasSound && !canDrag) return;
       event.stopPropagation();
       suppressSoundClickRef.current = false;
+      if (canDrag && group?.isObject3D) {
+        group.getWorldPosition(pointerMath.origin);
+        camera.getWorldDirection(pointerMath.normal);
+        const plane = new Plane().setFromNormalAndCoplanarPoint(
+          pointerMath.normal,
+          pointerMath.origin,
+        );
+        const hit = event.ray.intersectPlane(plane, new Vector3());
+        if (hit) {
+          previewDragRef.current = {
+            pointerId: event.pointerId,
+            start: hit.clone(),
+            last: hit,
+            plane,
+            startOffset: { ...runtimeRef.current.dragOffset },
+          };
+          placementRef.current = null;
+          dropTargets?.release(object.id);
+          dropHits.current.clear();
+          runtimeRef.current.drag = { dx: 0, dy: 0 };
+          emitRuntime("drag", "start", hit);
+          invalidate();
+        }
+      }
       soundPointerRef.current = {
         dragging: false,
         pointerId: event.pointerId,
@@ -690,6 +1228,55 @@ function ObjectGroup({
   };
   const handlePointerMove = (event: ThreeEvent<PointerEvent>) => {
     if (!editable) {
+      const drag = previewDragRef.current;
+      if (drag && drag.pointerId === event.pointerId) {
+        const hit = event.ray.intersectPlane(drag.plane, pointerMath.hit);
+        if (hit) {
+          runtimeRef.current.drag = {
+            dx: hit.x - drag.start.x,
+            dy: drag.start.y - hit.y,
+          };
+          const dragInteraction = activeInteractions.find(
+            (entry) =>
+              entry.trigger === "drag" || isTargetDragTrigger(entry.trigger),
+          );
+          if (dragInteraction?.dragAxis === "x") runtimeRef.current.drag.dy = 0;
+          if (dragInteraction?.dragAxis === "y") runtimeRef.current.drag.dx = 0;
+          if (strand && contentRef.current?.isObject3D) {
+            const content = contentRef.current;
+            pointerMath.delta
+              .copy(hit)
+              .sub(
+                strand.strandDragMode === "swipe" && !reducedMotion
+                  ? drag.last
+                  : drag.start,
+              );
+            if (strand.dragAxis === "x") pointerMath.delta.setY(0);
+            if (strand.dragAxis === "y") pointerMath.delta.setX(0);
+            content.updateWorldMatrix(true, false);
+            pointerMath.local.copy(hit);
+            content.worldToLocal(pointerMath.local);
+            pointerMath.origin.copy(hit).sub(pointerMath.delta);
+            content.worldToLocal(pointerMath.origin);
+            pointerMath.delta.copy(pointerMath.local).sub(pointerMath.origin);
+            if (
+              strand.strandDragMode === "swipe" &&
+              strand.motion === "spring" &&
+              !reducedMotion
+            ) {
+              strandPose.current.velocity.addScaledVector(
+                pointerMath.delta,
+                18,
+              );
+            } else {
+              strandPose.current.target.copy(pointerMath.delta);
+            }
+          }
+          drag.last.copy(hit);
+          emitRuntime("drag", "move", hit);
+          invalidate();
+        }
+      }
       const session = soundPointerRef.current;
       if (!session || session.pointerId !== event.pointerId) return;
       if (!session.dragging) {
@@ -730,6 +1317,32 @@ function ObjectGroup({
     canceled = false,
   ) => {
     if (!editable) {
+      const drag = previewDragRef.current;
+      if (drag && drag.pointerId === event.pointerId) {
+        const offset = runtimeRef.current.drag;
+        const targetDrag = hasTargetDragGesture(activeInteractions);
+        if (offset && !canceled) {
+          const move = activeInteractions.find(
+            (entry) => entry.trigger === "drag" && entry.effect === "move",
+          );
+          if (targetDrag || (move && move.resetMode !== "return-to-origin")) {
+            runtimeRef.current.dragOffset.x += offset.dx;
+            runtimeRef.current.dragOffset.y += offset.dy;
+          }
+          if (Math.hypot(offset.dx, offset.dy) > 2)
+            suppressSoundClickRef.current = true;
+        }
+        runtimeRef.current.drag = null;
+        previewDragRef.current = null;
+        if (!canceled && targetDrag) {
+          const applied = updateTargetEvents(true, drag.last);
+          if (!applied) runtimeRef.current.dragOffset = drag.startOffset;
+        } else if (canceled && targetDrag)
+          runtimeRef.current.dragOffset = drag.startOffset;
+        strandPose.current.target.set(0, 0, 0);
+        emitRuntime("drag", "end", drag.last);
+        invalidate();
+      }
       const session = soundPointerRef.current;
       if (!session || session.pointerId !== event.pointerId) return;
       soundPointerRef.current = null;
@@ -763,19 +1376,196 @@ function ObjectGroup({
 
   const interactions =
     interactive && object.interactions?.length ? object.interactions : null;
-  // Reuses the shared runtime; screen-plane deltas map to 3D: tx/ty -> x/-y,
-  // rotate -> Z spin, scale -> uniform-ish. Applied on an inner group so the
-  // rotation pivots at the object's own center, not the world origin.
-  const visual = interactions
-    ? runtimeVisualForElement(interactions, {
-        ...IDLE_RUNTIME_STATE,
-        hovering,
-        toggled,
-      })
-    : null;
-
+  const initialVisual = runtimeVisualForElement(interactions ?? undefined, {
+    ...IDLE_RUNTIME_STATE,
+    hovering,
+    toggled,
+  });
   const physics = useContext(Physics3DContext);
   const readout = physics?.readouts.get(object.id) ?? null;
+  const lastPointerRef = useRef<{ x: number; y: number } | null>(null);
+
+  useFrame(({ clock }, dt) => {
+    const content = contentRef.current;
+    if (!interactive || !content?.isObject3D || !group?.isObject3D) return;
+    const state = runtimeRef.current;
+    state.hovering = hovering;
+    state.toggled = toggled;
+    state.timed = true;
+    const placement = placementRef.current;
+    if (placement && !previewDragRef.current) {
+      const target = dropTargets?.read(placement.targetId);
+      if (target) {
+        const delta = screenDelta({
+          x: target.bounds.x - placement.targetX,
+          y: target.bounds.y - placement.targetY,
+        });
+        state.dragOffset = {
+          x: placement.offsetX + delta.x,
+          y: placement.offsetY + delta.y,
+        };
+      } else {
+        placementRef.current = null;
+        dropTargets?.release(object.id);
+      }
+    }
+    group.getWorldPosition(pointerMath.center);
+    let pointerWorld: Vector3 | null = null;
+    let pointerLocal: Vector3 | null = null;
+    const pointer = stagePointer.current;
+    if (pointer && gl?.domElement) {
+      const ndc = screenPointToNdc(
+        pointer.x,
+        pointer.y,
+        gl.domElement.getBoundingClientRect(),
+      );
+      pointerMath.ndc.set(ndc.x, ndc.y);
+      pointerMath.raycaster.setFromCamera(pointerMath.ndc, camera);
+      camera.getWorldDirection(pointerMath.normal);
+      pointerMath.plane.setFromNormalAndCoplanarPoint(
+        pointerMath.normal,
+        pointerMath.center,
+      );
+      pointerWorld = pointerMath.raycaster.ray.intersectPlane(
+        pointerMath.plane,
+        pointerMath.hit,
+      );
+      if (pointerWorld) {
+        content.updateWorldMatrix(true, false);
+        pointerLocal = content.worldToLocal(
+          pointerMath.local.copy(pointerWorld),
+        );
+        if (pointer !== lastPointerRef.current)
+          emitRuntime("pointer-move", "move", pointerWorld);
+      }
+    }
+    lastPointerRef.current = pointer;
+    const eligible = activeInteractions.filter(
+      (entry) =>
+        entry.trigger !== "after-delay" || timedIds.current.has(entry.id),
+    );
+    const visual = {
+      ...(readout
+        ? IDENTITY_VISUAL
+        : runtimeVisualForElement(eligible, state, {
+            center: { x: pointerMath.center.x, y: -pointerMath.center.y },
+            pointer: pointerWorld
+              ? { x: pointerWorld.x, y: -pointerWorld.y }
+              : null,
+          })),
+    };
+    visualRef.current = visual;
+    if (reducedMotion) visual.shake = false;
+    readLiquidPull3D(group, pointerMath.liquid);
+    if (!strand && !readout) {
+      visual.tx += pointerMath.liquid.x;
+      visual.ty -= pointerMath.liquid.y;
+    }
+    if (
+      !readout &&
+      !hasTargetDragGesture(activeInteractions) &&
+      !activeInteractions.some(
+        (entry) => entry.trigger === "drag" && entry.effect === "move",
+      )
+    ) {
+      visual.tx += state.dragOffset.x;
+      visual.ty += state.dragOffset.y;
+    }
+    // Screen-plane movement must remain under the pointer even when the object
+    // already has a rotated/non-uniformly scaled authored parent transform.
+    pointerMath.delta.set(
+      pointerMath.center.x + visual.tx,
+      pointerMath.center.y - visual.ty,
+      pointerMath.center.z + (!strand && !readout ? pointerMath.liquid.z : 0),
+    );
+    group.worldToLocal(pointerMath.delta);
+    applyInteractionVisual3D(
+      content,
+      visual,
+      clock.elapsedTime,
+      pointerMath.delta,
+    );
+    opacityRef.current?.apply(visual.opacity);
+    if (previewDragRef.current)
+      updateTargetEvents(false, previewDragRef.current.last);
+    if (
+      eligible.some(
+        (entry) =>
+          entry.motion === "gravity" &&
+          isRuntimeInteractionActive(entry, state),
+      )
+    )
+      physics?.release(object);
+
+    const deform = deformRef.current;
+    let springMoving = false;
+    if (strand) {
+      if (strand.trigger === "pointer-move" && !previewDragRef.current) {
+        const target = strandPose.current.target;
+        target.set(0, 0, 0);
+        if (pointerLocal && deform) {
+          deform.bounds.getCenter(pointerMath.origin);
+          const distance = deform.bounds.distanceToPoint(pointerLocal);
+          target
+            .copy(pointerLocal)
+            .sub(pointerMath.origin)
+            .multiplyScalar(
+              Math.max(0, 1 - distance / Math.max(1, strand.trackDistance)),
+            );
+          if (strand.pointerAxis === "x") target.y = target.z = 0;
+          if (strand.pointerAxis === "y") target.x = target.z = 0;
+        }
+      }
+      springMoving = stepStrandPose3D(
+        strandPose.current,
+        reducedMotion ? { ...strand, motion: "direct" } : strand,
+        dt,
+      );
+    }
+    const waveStrength = wave
+      ? wave.trigger === "pointer-move"
+        ? 1
+        : interactionIntensity(wave, {
+            ...state,
+            timed: timedIds.current.has(wave.id),
+          })
+      : 0;
+    pointerMath.bend.copy(strandPose.current.displacement);
+    if (strand && pointerMath.liquid.lengthSq() > 0) {
+      pointerMath.origin.copy(pointerMath.center);
+      content.worldToLocal(pointerMath.origin);
+      pointerMath.delta.copy(pointerMath.center).add(pointerMath.liquid);
+      content.worldToLocal(pointerMath.delta).sub(pointerMath.origin);
+      pointerMath.bend
+        .add(pointerMath.delta)
+        .clampLength(0, strand.strandMaxDisplacement);
+    }
+    const bending = !!strand && pointerMath.bend.lengthSq() > 0.000001;
+    if (deform) {
+      if (bending || (wave && waveStrength > 0)) {
+        deform.apply((point, bounds) => {
+          if (strand && bending)
+            bendPoint3D(point, bounds, pointerMath.bend, strand);
+          if (wave && waveStrength > 0)
+            wavePoint3D(
+              point,
+              bounds,
+              wave,
+              reducedMotion ? 0 : clock.elapsedTime,
+              pointerLocal,
+              waveStrength,
+            );
+        });
+      } else deform.restore();
+    }
+    if (
+      (placementRef.current && !reducedMotion) ||
+      springMoving ||
+      visual.shake ||
+      (!reducedMotion && wave && waveStrength > 0 && wave.waveSpeed !== 0)
+    )
+      invalidate();
+  });
 
   // Release into the physics sim once a gravity-motion trigger is active; from
   // then on the simulation drives the object's world transform.
@@ -808,6 +1598,12 @@ function ObjectGroup({
                 }
                 if (hasSound) soundEvents?.play(object.id, "click", "click");
                 if (interactions) setToggled((current) => !current);
+                emitRuntime(
+                  "click-tap",
+                  "activate",
+                  event.point ?? new Vector3(...world.position),
+                );
+                invalidate();
               }
             : undefined
         }
@@ -823,6 +1619,7 @@ function ObjectGroup({
         onPointerMove={handlePointerMove}
         onPointerUp={(event) => handlePointerEnd(event)}
         onPointerCancel={(event) => handlePointerEnd(event, true)}
+        onLostPointerCapture={(event) => handlePointerEnd(event, true)}
         onPointerOut={
           interactions || hasSound
             ? (event: ThreeEvent<PointerEvent>) => {
@@ -834,6 +1631,12 @@ function ObjectGroup({
                 )
                   return;
                 if (interactions) setHovering(false);
+                emitRuntime(
+                  "hover",
+                  "end",
+                  event.point ?? new Vector3(...world.position),
+                );
+                invalidate();
                 if (!soundHoverRef.current) return;
                 soundHoverRef.current = false;
                 soundEvents?.stop(object.id, "hover");
@@ -846,6 +1649,12 @@ function ObjectGroup({
             ? (event: ThreeEvent<PointerEvent>) => {
                 event.stopPropagation();
                 if (interactions) setHovering(true);
+                emitRuntime(
+                  "hover",
+                  "start",
+                  event.point ?? new Vector3(...world.position),
+                );
+                invalidate();
                 if (!hasSound || soundHoverRef.current) return;
                 soundHoverRef.current = true;
                 soundEvents?.play(object.id, "hover", "enter");
@@ -854,8 +1663,18 @@ function ObjectGroup({
             : undefined
         }
         onWheel={
-          hasSound
-            ? () => {
+          hasSound || interactions
+            ? (event: ThreeEvent<WheelEvent>) => {
+                runtimeRef.current.scroll = Math.max(
+                  0,
+                  runtimeRef.current.scroll + event.deltaY,
+                );
+                emitRuntime(
+                  "scroll-swipe",
+                  "move",
+                  event.point ?? new Vector3(...world.position),
+                );
+                invalidate();
                 soundEvents?.play(object.id, "scroll", "while-scrolling", true);
                 if (scrollStopTimerRef.current !== null) {
                   window.clearTimeout(scrollStopTimerRef.current);
@@ -875,17 +1694,16 @@ function ObjectGroup({
           ? { quaternion: readout.quaternion }
           : { rotation: world.rotation })}
       >
-        {readout ? (
-          children
-        ) : visual ? (
+        {interactive ? (
           <group
-            position={[visual.tx, -visual.ty, 0]}
-            rotation={[0, 0, (visual.rotate * Math.PI) / 180]}
+            position={[initialVisual.tx, -initialVisual.ty, 0]}
+            rotation={[0, 0, (initialVisual.rotate * Math.PI) / 180]}
             scale={[
-              visual.scaleX,
-              visual.scaleY,
-              (visual.scaleX + visual.scaleY) / 2,
+              initialVisual.scaleX,
+              initialVisual.scaleY,
+              (initialVisual.scaleX + initialVisual.scaleY) / 2,
             ]}
+            ref={contentRef}
           >
             {children}
           </group>
@@ -924,11 +1742,18 @@ function GeneratedObject({
   onSelectObject: Artboard3DSceneProps["onSelectObject"];
 }) {
   const { dimensions, source } = object;
+  const deformable = (object.interactions ?? []).some(
+    (entry) =>
+      entry.enabled !== false &&
+      (entry.effect === "strand-bend" || entry.effect === "wave-deform"),
+  );
   const result = useMemo(() => {
     try {
       return {
         error: null,
-        geometry: createGeometry3D({ dimensions, source }),
+        geometry: deformable
+          ? createDeformableGeometry3D({ dimensions, source })
+          : createGeometry3D({ dimensions, source }),
       };
     } catch (cause: unknown) {
       return {
@@ -936,7 +1761,7 @@ function GeneratedObject({
         geometry: null,
       };
     }
-  }, [dimensions, source]);
+  }, [deformable, dimensions, source]);
   useEffect(() => {
     if (result.error) onLoadError?.(object.id, result.error);
   }, [object.id, onLoadError, result.error]);
@@ -1099,11 +1924,9 @@ function AssetObject({
       onProjectedBoundsChange={onProjectedBoundsChange}
       onSelectObject={onSelectObject}
     >
-      <primitive
-        object={model}
-        position={normalization.position}
-        scale={normalization.scale}
-      />
+      <group position={normalization.position} scale={normalization.scale}>
+        <primitive object={model} />
+      </group>
     </ObjectGroup>
   );
 }
@@ -1116,6 +1939,7 @@ export function Artboard3DScene({
   editable = false,
   gestureBridgeRef,
   interactive = false,
+  reducedMotion = false,
   manipulatingRef,
   objects,
   onClearSelection,
@@ -1125,6 +1949,9 @@ export function Artboard3DScene({
   onObjectDragStart,
   onSoundEvent,
   onSoundStop,
+  onRuntimeInteraction,
+  screenPointToWorldRef,
+  getDropTargets,
   onProjectedBoundsChange,
   onSelectObject,
   projectId = "local-project",
@@ -1192,6 +2019,12 @@ export function Artboard3DScene({
             scene={settings}
             viewport={renderViewport}
           />
+          {screenPointToWorldRef ? (
+            <ScreenPointToWorldBridge
+              bridgeRef={screenPointToWorldRef}
+              viewport={renderViewport}
+            />
+          ) : null}
           <ambientLight intensity={settings.ambientLight} />
           <directionalLight
             castShadow
@@ -1218,54 +2051,79 @@ export function Artboard3DScene({
           <Manipulating3DContext.Provider
             value={manipulatingRef ?? NEVER_MANIPULATING}
           >
-            <Interactive3DContext.Provider value={interactive}>
-              <Object3DSoundContext.Provider
-                value={
-                  onSoundEvent && onSoundStop
-                    ? { play: onSoundEvent, stop: onSoundStop }
-                    : null
-                }
-              >
-                <Physics3DProvider
-                  artboardHeight={artboardHeight}
-                  artboardWidth={artboardWidth}
-                  proxies={collisionProxies}
-                >
-                  {visibleObjects.map((object) =>
-                    object.source.kind === "asset" ? (
-                      <AssetObject
-                        editable={editable}
-                        key={`${object.id}:${object.source.assetId}:${object.material.useSourceMaterial}`}
-                        object={
-                          object as Object3DElement & {
-                            source: { assetId: string; kind: "asset" };
+            <ReducedMotion3DContext.Provider value={reducedMotion}>
+              <Interactive3DContext.Provider value={interactive}>
+                <Runtime3DEventsContext.Provider value={onRuntimeInteraction}>
+                  <DropTargets3DProvider getDropTargets={getDropTargets}>
+                    <Runtime3DPointerProvider>
+                      <Object3DVisualCompositorProvider
+                        enabled={interactive}
+                        artboardWidth={artboardWidth}
+                        artboardHeight={artboardHeight}
+                      >
+                        <Object3DSoundContext.Provider
+                          value={
+                            onSoundEvent && onSoundStop
+                              ? { play: onSoundEvent, stop: onSoundStop }
+                              : null
                           }
-                        }
-                        onLoadError={onLoadError}
-                        onObjectDrag={onObjectDrag}
-                        onObjectDragEnd={onObjectDragEnd}
-                        onObjectDragStart={onObjectDragStart}
-                        onProjectedBoundsChange={onProjectedBoundsChange}
-                        onSelectObject={onSelectObject}
-                        projectId={projectId}
-                      />
-                    ) : (
-                      <GeneratedObject
-                        editable={editable}
-                        key={object.id}
-                        object={object}
-                        onLoadError={onLoadError}
-                        onObjectDrag={onObjectDrag}
-                        onObjectDragEnd={onObjectDragEnd}
-                        onObjectDragStart={onObjectDragStart}
-                        onProjectedBoundsChange={onProjectedBoundsChange}
-                        onSelectObject={onSelectObject}
-                      />
-                    ),
-                  )}
-                </Physics3DProvider>
-              </Object3DSoundContext.Provider>
-            </Interactive3DContext.Provider>
+                        >
+                          <Physics3DProvider
+                            artboardHeight={artboardHeight}
+                            artboardWidth={artboardWidth}
+                            proxies={collisionProxies}
+                          >
+                            {visibleObjects.map((object) =>
+                              object.source.kind === "asset" ? (
+                                <AssetObject
+                                  editable={editable}
+                                  key={`${object.id}:${object.source.assetId}:${object.material.useSourceMaterial}`}
+                                  object={
+                                    object as Object3DElement & {
+                                      source: {
+                                        assetId: string;
+                                        kind: "asset";
+                                      };
+                                    }
+                                  }
+                                  onLoadError={onLoadError}
+                                  onObjectDrag={onObjectDrag}
+                                  onObjectDragEnd={onObjectDragEnd}
+                                  onObjectDragStart={onObjectDragStart}
+                                  onProjectedBoundsChange={
+                                    onProjectedBoundsChange
+                                  }
+                                  onSelectObject={onSelectObject}
+                                  projectId={projectId}
+                                />
+                              ) : (
+                                <GeneratedObject
+                                  editable={editable}
+                                  key={object.id}
+                                  object={object}
+                                  onLoadError={onLoadError}
+                                  onObjectDrag={onObjectDrag}
+                                  onObjectDragEnd={onObjectDragEnd}
+                                  onObjectDragStart={onObjectDragStart}
+                                  onProjectedBoundsChange={
+                                    onProjectedBoundsChange
+                                  }
+                                  onSelectObject={onSelectObject}
+                                />
+                              ),
+                            )}
+                            <LiquidMerge3D
+                              objects={visibleObjects}
+                              enabled={interactive}
+                            />
+                          </Physics3DProvider>
+                        </Object3DSoundContext.Provider>
+                      </Object3DVisualCompositorProvider>
+                    </Runtime3DPointerProvider>
+                  </DropTargets3DProvider>
+                </Runtime3DEventsContext.Provider>
+              </Interactive3DContext.Provider>
+            </ReducedMotion3DContext.Provider>
           </Manipulating3DContext.Provider>
         </Viewport3DContext.Provider>
       </Canvas>

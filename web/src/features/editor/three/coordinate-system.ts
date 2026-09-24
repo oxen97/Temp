@@ -48,6 +48,45 @@ export function screenPointToNdc(
   };
 }
 
+/** Projects a world hit to authored artboard pixels, including viewport offsets. */
+export function worldPointToArtboard(
+  point: Vector3,
+  camera: Camera,
+  viewport: ProjectedBounds,
+): { x: number; y: number } | null {
+  camera.updateWorldMatrix(true, false);
+  const projected = point.clone().project(camera);
+  if (![projected.x, projected.y, projected.z].every(Number.isFinite))
+    return null;
+  return {
+    x: viewport.x + ((projected.x + 1) * viewport.width) / 2,
+    y: viewport.y + ((1 - projected.y) * viewport.height) / 2,
+  };
+}
+
+/**
+ * Places an artboard pixel at the spawned object's own Z depth. The result is
+ * authoring coordinates (Y-down), not the source hit's world XY coordinates.
+ */
+export function artboardPointToEditorAtDepth(
+  point: { x: number; y: number },
+  depth: number,
+  camera: Camera,
+  viewport: ProjectedBounds,
+): { x: number; y: number } | null {
+  if (![point.x, point.y, depth].every(Number.isFinite)) return null;
+  camera.updateWorldMatrix(true, false);
+  const x = ((point.x - viewport.x) / Math.max(1, viewport.width)) * 2 - 1;
+  const y = 1 - ((point.y - viewport.y) / Math.max(1, viewport.height)) * 2;
+  const near = new Vector3(x, y, -1).unproject(camera);
+  const direction = new Vector3(x, y, 1).unproject(camera).sub(near);
+  if (Math.abs(direction.z) < 1e-8) return null;
+  const world = near.addScaledVector(direction, (depth - near.z) / direction.z);
+  return Number.isFinite(world.x) && Number.isFinite(world.y)
+    ? { x: world.x, y: -world.y }
+    : null;
+}
+
 /** Screen-space movement of an authored point at its actual 3D depth. */
 export function projectEditorMoveToScreen(
   from: Vector3Value,

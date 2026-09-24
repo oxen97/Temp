@@ -114,13 +114,22 @@ const liquidMergeTriggers = new Set(["near-target", "while-overlapping"]);
 const strandBendTriggers = new Set(["drag", "pointer-move"]);
 const pointerTrailTriggers = new Set(["drag"]);
 const waveDeformTriggers = new Set(["pointer-move"]);
+const deformableTypes = new Set(["line", "pen", "image", "video", "object3d"]);
 const collisionBounceTriggers = new Set(["overlap-start", "drop-on-target"]);
 const mergeable2DTypes = new Set([
-  "rectangle", "circle", "triangle", "star", "line", "pen",
+  "rectangle", "circle", "triangle", "star", "line", "pen", "image", "video",
 ]);
 
 export function isLiquidMergeShape(type: string): boolean {
   return mergeable2DTypes.has(type);
+}
+
+export function isLiquidMergeTarget(sourceType: string, targetType: string, trigger = "near-target"): boolean {
+  if (sourceType === "object3d") return targetType === "object3d";
+  if (!isLiquidMergeShape(sourceType) || !isLiquidMergeShape(targetType)) return false;
+  const hasMedia = [sourceType, targetType].some((type) => type === "image" || type === "video");
+  if (hasMedia && trigger !== "near-target") return false;
+  return !hasMedia || ![sourceType, targetType].some((type) => type === "line" || type === "pen");
 }
 
 const commonEffects: InteractionOption[] = [
@@ -252,19 +261,33 @@ function is3DSelection(
   return context.is3D ?? selectedTypes.some((type) => type === "object3d");
 }
 
-function supports3DLiquidMerge(context: Interaction3DContext) {
-  return context.sourceKind === "primitive" || context.sourceKind === "vector";
-}
-
 export function getEffectOptions(
   selectedTypes: readonly string[],
   trigger = "",
   context: Interaction3DContext = {},
 ): InteractionOption[] {
+  if (selectedTypes.length > 1) {
+    const optionsByType = selectedTypes.map((type) =>
+      getEffectOptions([type], trigger, {
+        ...context,
+        is3D: type === "object3d",
+      }),
+    );
+    const singleTargetEffects = new Set([
+      "liquid-merge", "collision-bounce", "stack-on-target",
+    ]);
+    return [
+      ...optionsByType[0].filter(
+        (option) =>
+          !singleTargetEffects.has(option.value) &&
+          optionsByType.every((options) =>
+            options.some((candidate) => candidate.value === option.value),
+          ),
+      ),
+      { label: "Group Animation", value: "group-animation" },
+    ];
+  }
   const is3D = is3DSelection(selectedTypes, context);
-  const isPure2D =
-    selectedTypes.length === 0 ||
-    selectedTypes.every((type) => type !== "object3d");
   const hybridCollisionEffects =
     selectedTypes.length === 1 && context.isHybridCollision
       ? [
@@ -276,35 +299,28 @@ export function getEffectOptions(
             : []),
         ]
       : [];
-  const authoredPointerEffects: InteractionOption[] = isPure2D
+  const authoredPointerEffects: InteractionOption[] = [
+    ...(trigger === "click-tap"
+      ? [{ label: "Emit Event (Logic Only)", value: "emit-event" }]
+      : []),
+    ...(pointerTrailTriggers.has(trigger)
+      ? [{ label: "Emit Pointer Trail", value: "pointer-trail" }]
+      : []),
+    ...(trigger === "click-tap"
+      ? [{ label: "Spawn Instance", value: "spawn-instance" }]
+      : []),
+  ];
+  const type = selectedTypes[0];
+  const deformationEffects: InteractionOption[] = deformableTypes.has(type)
     ? [
-        ...(trigger === "click-tap"
-          ? [{ label: "Emit Event (Logic Only)", value: "emit-event" }]
+        ...(strandBendTriggers.has(trigger)
+          ? [{ label: "Strand Bend", value: "strand-bend" }]
           : []),
-        ...(pointerTrailTriggers.has(trigger)
-          ? [{ label: "Emit Pointer Trail", value: "pointer-trail" }]
-          : []),
-        ...(trigger === "click-tap"
-          ? [{ label: "Spawn Instance", value: "spawn-instance" }]
-          : []),
-        ...(waveDeformTriggers.has(trigger) &&
-        (selectedTypes[0] === "pen" || selectedTypes[0] === "line")
+        ...(waveDeformTriggers.has(trigger)
           ? [{ label: "Wave / Curve Deform", value: "wave-deform" }]
           : []),
       ]
     : [];
-  if (selectedTypes.length > 1) {
-    return [
-      ...commonEffects,
-      ...cameraEffects,
-      ...visualPipelineEffects,
-      ...(is3D ? spatial3DEffects : []),
-      ...(isPure2D ? twoDTargetEffects : []),
-      ...authoredPointerEffects,
-      { label: "Group Animation", value: "group-animation" },
-    ];
-  }
-  const type = selectedTypes[0];
   if (type === "image") {
     return [
       ...commonEffects,
@@ -313,6 +329,10 @@ export function getEffectOptions(
       ...twoDTargetEffects,
       ...imageEffects,
       ...authoredPointerEffects,
+      ...deformationEffects,
+      ...(trigger === "near-target"
+        ? [{ label: "Liquid Merge", value: "liquid-merge" }]
+        : []),
       ...(collisionBounceTriggers.has(trigger)
         ? [{ label: "Bounce Off Target", value: "collision-bounce" }]
         : []),
@@ -336,6 +356,11 @@ export function getEffectOptions(
       ...visualPipelineEffects,
       ...twoDTargetEffects,
       ...videoEffects,
+      ...authoredPointerEffects,
+      ...deformationEffects,
+      ...(trigger === "near-target"
+        ? [{ label: "Liquid Merge", value: "liquid-merge" }]
+        : []),
       ...hybridCollisionEffects,
     ];
   if (is3D) {
@@ -345,6 +370,9 @@ export function getEffectOptions(
       ...cameraEffects,
       ...visualPipelineEffects,
       ...spatial3DEffects,
+      ...deformationEffects,
+      ...authoredPointerEffects,
+      ...twoDTargetEffects.filter((option) => option.value !== "attach-to-target"),
       { label: "Change Material", value: "change-material" },
       { label: "Material Parameter", value: "material-parameter" },
       ...(context.sourceKind === "asset" && hasAnimations
@@ -371,7 +399,7 @@ export function getEffectOptions(
       ...(context.sourceKind === "asset" && context.hasMeshFaceGroups
         ? [{ label: "Mesh Face Material", value: "mesh-face-material" }]
         : []),
-      ...(supports3DLiquidMerge(context) && liquidMergeTriggers.has(trigger)
+      ...(liquidMergeTriggers.has(trigger)
         ? [{ label: "Liquid Merge", value: "liquid-merge" }]
         : []),
       ...(collisionBounceTriggers.has(trigger) || trigger === "collision-enter"
@@ -388,11 +416,7 @@ export function getEffectOptions(
     ...visualPipelineEffects,
     ...twoDTargetEffects,
     ...authoredPointerEffects,
-    ...(type !== undefined &&
-    (type === "line" || type === "pen") &&
-    strandBendTriggers.has(trigger)
-      ? [{ label: "Strand Bend", value: "strand-bend" }]
-      : []),
+    ...deformationEffects,
     ...(type !== undefined &&
     isLiquidMergeShape(type) &&
     liquidMergeTriggers.has(trigger)

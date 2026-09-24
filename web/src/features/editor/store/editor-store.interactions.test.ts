@@ -6,6 +6,7 @@ import {
 } from "@/core/project/editor-document";
 import { createDefaultInteraction } from "@/features/editor/lib/interaction-model";
 import { createSceneLogicRule } from "@/features/editor/lib/scene-logic";
+import { createVectorObject3DFromElement } from "@/features/editor/three/object-factory";
 import {
   type CanvasElement,
   useEditorStore,
@@ -48,6 +49,36 @@ beforeEach(() => {
 });
 
 describe("editor store interactions", () => {
+  it("authors 3D interactions with undo, redo, document persistence, and removal", () => {
+    const object = createVectorObject3DFromElement({ element: shape("template"), id: "model" });
+    useEditorStore.setState((state) => ({
+      pages: state.pages.map((page) => ({ ...page, objects3d: [object] })),
+    }));
+    const interactions = () => useEditorStore.getState().pages[0].objects3d?.[0].interactions;
+    useEditorStore.getState().addInteraction("model", createDefaultInteraction({ id: "bend", effect: "strand-bend", trigger: "drag" }));
+    useEditorStore.getState().updateInteraction("model", "bend", { strandMaxDisplacement: 85, strandAnchor: "bottom" });
+    expect(interactions()?.[0]).toMatchObject({ strandMaxDisplacement: 85, strandAnchor: "bottom" });
+    useEditorStore.getState().undo();
+    expect(interactions()?.[0].strandMaxDisplacement).not.toBe(85);
+    useEditorStore.getState().redo();
+    expect(interactions()?.[0].strandMaxDisplacement).toBe(85);
+    const state = useEditorStore.getState();
+    const restored = hydrateEditorDocument(serializeEditorDocument({
+      artboard: state.artboard,
+      id: "3d-project",
+      name: "3D project",
+      pages: state.pages,
+    }));
+    expect(restored.pages[0].objects3d?.[0].interactions?.[0]).toMatchObject({ id: "bend", strandMaxDisplacement: 85, strandAnchor: "bottom" });
+    expect(elementInteractions("shape-1")).toBeUndefined();
+    useEditorStore.getState().setInteractions("model", [createDefaultInteraction({ id: "wave", effect: "wave-deform" })]);
+    expect(interactions()?.map((interaction) => interaction.id)).toEqual(["wave"]);
+    useEditorStore.getState().removeInteraction("model", "wave");
+    expect(interactions()).toEqual([]);
+    useEditorStore.getState().undo();
+    expect(interactions()?.[0].id).toBe("wave");
+  });
+
   it("stores page routes in undo history", () => {
     const rule = createSceneLogicRule({
       id: "intro-next",
