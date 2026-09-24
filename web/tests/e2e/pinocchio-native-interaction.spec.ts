@@ -194,3 +194,51 @@ test("pulling the nose upward and downward moves its tip while the root stays at
       .toBeLessThan(18);
   }
 });
+
+test("the stretched nose keeps a rounded cap instead of a magnified pointed tip", async ({
+  page,
+}, testInfo) => {
+  test.skip(
+    (page.viewportSize()?.width ?? 0) < 1000,
+    "Desktop pointer precision required",
+  );
+  await page.goto("/?interactionDemo=pinocchio-native");
+  const preview = page.getByRole("dialog", { name: "Viewer preview" });
+  const media = preview.locator('[data-media-deform-id="pinocchio-demo-nose"]');
+  await expect(media).toHaveAttribute("data-media-deform-status", "ready");
+  const nose = media.locator(".media-deform-hit-area");
+  const rest = await nosePoint(nose, 1);
+  await page.mouse.move(rest.screenX - 5 * rest.scaleX, rest.screenY);
+  await page.mouse.down();
+  await page.mouse.move(rest.screenX + 570 * rest.scaleX, rest.screenY, {
+    steps: 20,
+  });
+  await expect
+    .poll(async () => (await nosePoint(nose, 1)).artX - rest.artX)
+    .toBeGreaterThan(450);
+
+  const canvas = media.locator(".media-deform-canvas");
+  const capDepth = await canvas.evaluate((node) => {
+    const canvas = node as HTMLCanvasElement;
+    const pixels = canvas
+      .getContext("2d")!
+      .getImageData(0, 0, canvas.width, canvas.height).data;
+    const scaleX = canvas.width / parseFloat(canvas.style.width);
+    const scaleY = canvas.height / parseFloat(canvas.style.height);
+    const top = parseFloat(canvas.style.top);
+    const rightEdge = (localY: number) => {
+      const row = Math.round((localY - top) * scaleY);
+      for (let x = canvas.width - 1; x >= 0; x -= 1)
+        if (pixels[(row * canvas.width + x) * 4 + 3] > 150) return x;
+      throw new Error("Missing opaque nose pixels");
+    };
+    return (rightEdge(26) - rightEdge(9)) / scaleX;
+  });
+  expect(capDepth).toBeGreaterThan(3);
+  expect(capDepth).toBeLessThan(16);
+  await testInfo.attach("rounded-nose-at-maximum-extension", {
+    body: await canvas.screenshot({ path: testInfo.outputPath("rounded-nose.png") }),
+    contentType: "image/png",
+  });
+  await page.mouse.up();
+});

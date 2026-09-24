@@ -1,6 +1,10 @@
 import { imageCropForElement } from "./image-crop";
 import type { InteractionDefinition } from "./interaction-model";
-import type { StrandBonePoint, StrandPose } from "./strand-bone-runtime";
+import type {
+  StrandAnchor,
+  StrandBonePoint,
+  StrandPose,
+} from "./strand-bone-runtime";
 import type { CanvasElement } from "../store/editor-store";
 
 export const MEDIA_DEFORM_MAX_SEGMENTS = 48;
@@ -23,6 +27,7 @@ type SkinBinding = {
   offsetY: number;
   tangentX: number;
   tangentY: number;
+  restDistance: number;
 };
 
 export type MediaDeformMesh = {
@@ -39,6 +44,8 @@ export type MediaDeformMesh = {
   flipY: boolean;
   bindings: SkinBinding[];
   boundRest: StrandBonePoint[] | null;
+  restLength: number;
+  tipLength: number;
 };
 
 export type MediaDeformBounds = {
@@ -51,8 +58,32 @@ export type MediaDeformBounds = {
 const clamp = (value: number, min: number, max: number) =>
   Math.min(max, Math.max(min, value));
 
+type MediaDeformOptions = { tipLength?: number; anchor?: StrandAnchor };
+
+/** Keep a vertex on the tip/shaft boundary, so a triangle cannot stretch across
+ * the protected cap. Vertex counts and UVs remain fixed during the gesture. */
+function axisCoordinate(
+  index: number,
+  segments: number,
+  extent: number,
+  boundary?: number,
+) {
+  if (boundary === undefined) return (index / segments) * extent;
+  const split = clamp(
+    Math.round((boundary / extent) * segments),
+    1,
+    segments - 1,
+  );
+  return index <= split
+    ? (index / split) * boundary
+    : boundary + ((index - split) / (segments - split)) * (extent - boundary);
+}
+
 /** A fixed topology and UV buffer survive every animation frame. */
-export function createMediaDeformMesh(element: CanvasElement): MediaDeformMesh {
+export function createMediaDeformMesh(
+  element: CanvasElement,
+  options: MediaDeformOptions = {},
+): MediaDeformMesh {
   const width = Math.max(1, element.width);
   const height = Math.max(1, element.height);
   const columns = clamp(Math.ceil(width / 14), 8, MEDIA_DEFORM_MAX_SEGMENTS);
@@ -63,11 +94,31 @@ export function createMediaDeformMesh(element: CanvasElement): MediaDeformMesh {
   const uv = new Float32Array(count * 2);
   const indices = new Uint16Array(columns * rows * 6);
   const crop = imageCropForElement(element);
+  const tipLength = Number.isFinite(options.tipLength)
+    ? Math.max(0, options.tipLength!)
+    : 0;
+  const horizontal = options.anchor === "left" || options.anchor === "right";
+  const axisLength = horizontal ? width : height;
+  const cap = Math.min(tipLength, axisLength / 2);
+  const boundaryAt =
+    options.anchor === "right" || options.anchor === "bottom"
+      ? cap
+      : axisLength - cap;
   for (let row = 0; row <= rows; row += 1) {
     for (let column = 0; column <= columns; column += 1) {
       const index = row * (columns + 1) + column;
-      const x = (column / columns) * width;
-      const y = (row / rows) * height;
+      const x = axisCoordinate(
+        column,
+        columns,
+        width,
+        cap > 0 && horizontal ? boundaryAt : undefined,
+      );
+      const y = axisCoordinate(
+        row,
+        rows,
+        height,
+        cap > 0 && !horizontal ? boundaryAt : undefined,
+      );
       local[index * 2] = x;
       local[index * 2 + 1] = y;
       // CSS image crop: move the scaled source left/top inside the viewport.
@@ -106,6 +157,8 @@ export function createMediaDeformMesh(element: CanvasElement): MediaDeformMesh {
     flipY: element.flipY === true,
     bindings: [],
     boundRest: null,
+    restLength: 0,
+    tipLength,
   };
   updateMediaDeformMesh(mesh, null);
   return mesh;
@@ -136,6 +189,8 @@ function blendedTangent(
 function bind(mesh: MediaDeformMesh, rest: StrandBonePoint[]) {
   mesh.boundRest = rest;
   mesh.bindings = [];
+  const distances = cumulativeDistances(rest);
+  mesh.restLength = distances[distances.length - 1];
   for (let index = 0; index < mesh.local.length; index += 2) {
     const x = mesh.local[index];
     const y = mesh.local[index + 1];
@@ -147,6 +202,7 @@ function bind(mesh: MediaDeformMesh, rest: StrandBonePoint[]) {
       offsetY: 0,
       tangentX: 0,
       tangentY: 1,
+      restDistance: 0,
     };
     for (let segment = 0; segment < rest.length - 1; segment += 1) {
       const a = rest[segment];
@@ -172,11 +228,68 @@ function bind(mesh: MediaDeformMesh, rest: StrandBonePoint[]) {
           offsetY,
           tangentX: direction.x,
           tangentY: direction.y,
+          restDistance:
+            distances[segment] +
+            (distances[segment + 1] - distances[segment]) * amount,
         };
       }
     }
     mesh.bindings.push(binding);
   }
+}
+
+function cumulativeDistances(points: StrandBonePoint[]) {
+  const distances = [0];
+  for (let index = 1; index < points.length; index += 1) {
+    distances.push(
+      distances[index - 1] +
+        Math.hypot(
+          points[index].x - points[index - 1].x,
+          points[index].y - points[index - 1].y,
+        ),
+    );
+  }
+  return distances;
+}
+
+/** Nine-slice-like longitudinal mapping: only the shaft stretches, while the
+ * free cap retains its authored depth and rotates with the deformed centerline.
+ * Under extreme compression shrink the cap safely instead of folding it. */
+function tipPreservingBinding(
+  mesh: MediaDeformMesh,
+  pose: StrandPose,
+  binding: SkinBinding,
+  distances: number[],
+) {
+  const length = distances[distances.length - 1];
+  const reverse = pose.anchorIndex !== 0;
+  const fromAnchor = reverse
+    ? mesh.restLength - binding.restDistance
+    : binding.restDistance;
+  const restCap = Math.min(mesh.tipLength, mesh.restLength / 2);
+  const cap = Math.min(restCap, length / 2);
+  const shaft = mesh.restLength - restCap;
+  const mapped =
+    fromAnchor <= shaft
+      ? (fromAnchor / shaft) * (length - cap)
+      : length - ((mesh.restLength - fromAnchor) / restCap) * cap;
+  const target = reverse ? length - mapped : mapped;
+  let low = 0;
+  let high = distances.length - 1;
+  while (high - low > 1) {
+    const middle = (low + high) >> 1;
+    if (distances[middle] <= target) low = middle;
+    else high = middle;
+  }
+  return {
+    segment: low,
+    amount: clamp(
+      (target - distances[low]) /
+        Math.max(0.00001, distances[high] - distances[low]),
+      0,
+      1,
+    ),
+  };
 }
 
 /** Bind a rectangular texture to the same centerline the strand solver moves.
@@ -201,6 +314,14 @@ export function updateMediaDeformMesh(
   const directions = usablePose
     ? usablePose.points.map((_, index) => tangent(usablePose.points, index))
     : [];
+  const tipDistances =
+    usablePose &&
+    mesh.tipLength > 0 &&
+    mesh.restLength > 0.00001 &&
+    (usablePose.anchorIndex === 0 ||
+      usablePose.anchorIndex === usablePose.rest.length - 1)
+      ? cumulativeDistances(usablePose.points)
+      : null;
   let minX = Infinity;
   let minY = Infinity;
   let maxX = -Infinity;
@@ -212,7 +333,9 @@ export function updateMediaDeformMesh(
     let y = restY;
     if (usablePose) {
       const binding = mesh.bindings[index];
-      const { segment, amount } = binding;
+      const { segment, amount } = tipDistances
+        ? tipPreservingBinding(mesh, usablePose, binding, tipDistances)
+        : binding;
       const a = usablePose.points[segment];
       const b = usablePose.points[segment + 1];
       const ta = directions[segment];

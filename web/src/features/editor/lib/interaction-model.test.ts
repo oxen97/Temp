@@ -18,6 +18,7 @@ describe("interaction model", () => {
     expect(interaction.strandAnchor).toBe("top");
     expect(interaction.strandStiffness).toBe(0.45);
     expect(interaction.strandDamping).toBe(0.82);
+    expect(interaction.strandTipLength).toBe(0);
     expect(interaction.strandNeighborRadius).toBe(0);
     expect(interaction.strandNeighborStrength).toBe(0);
     expect(interaction.liquidAttraction).toBe(0);
@@ -100,6 +101,7 @@ describe("interaction model", () => {
       strandDamping: 0.7,
       strandInfluenceRadius: 120,
       strandMaxDisplacement: 80,
+      strandTipLength: 26,
       strandNeighborRadius: 160,
       strandNeighborStrength: 55,
       strandDragMode: "swipe",
@@ -107,9 +109,20 @@ describe("interaction model", () => {
     expect(normalizeInteraction(JSON.parse(JSON.stringify(interaction)))).toEqual(interaction);
     expect(normalizeInteraction({ effect: "strand-bend" })).toMatchObject({
       strandDragMode: "grab",
+      strandTipLength: 0,
       strandNeighborRadius: 0,
       strandNeighborStrength: 0,
     });
+  });
+
+  it("keeps strand tip preservation opt-in and its pixel length nonnegative", () => {
+    expect(normalizeInteraction({ effect: "strand-bend" }).strandTipLength).toBe(0);
+    for (const value of [-24, Number.NaN, Infinity, "24", null]) {
+      expect(normalizeInteraction({ strandTipLength: value }).strandTipLength).toBe(0);
+    }
+    expect(normalizeInteraction({ strandTipLength: 24.5 }).strandTipLength).toBe(24.5);
+    const authored = createDefaultInteraction({ effect: "strand-bend", strandTipLength: 0 });
+    expect(normalizeInteraction(JSON.parse(JSON.stringify(authored)))).toEqual(authored);
   });
 
   it("keeps magnetic pairing opt-in for old projects and round-trips its strength", () => {

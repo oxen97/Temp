@@ -157,7 +157,9 @@ export const pinocchioDemoArtSrc = pinocchioBackdropSvg;
 
 /** Ordinary transparent SVG asset: the bend renderer never knows its ID. */
 export const pinocchioNoseSvg = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(
-  `<svg xmlns="http://www.w3.org/2000/svg" width="210" height="52" viewBox="0 0 210 52">
+  // Higher intrinsic resolution keeps the rasterized texture clean when the
+  // shaft stretches; the authored viewBox and on-board dimensions stay intact.
+  `<svg xmlns="http://www.w3.org/2000/svg" width="840" height="208" viewBox="0 0 210 52">
     <defs>
       <linearGradient id="wood" x1="0" y1="0" x2="0" y2="1">
         <stop offset="0" stop-color="#ffe0aa"/><stop offset=".3" stop-color="#f4b57e"/>

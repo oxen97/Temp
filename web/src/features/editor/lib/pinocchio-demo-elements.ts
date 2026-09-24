@@ -70,6 +70,7 @@ export function createPinocchioDemoElements(
           strandDamping: 0.32,
           strandInfluenceRadius: 180 * sx,
           strandMaxDisplacement: 610 * sx,
+          strandTipLength: 28 * sx,
           strandNeighborRadius: 0,
           strandNeighborStrength: 0,
         }),

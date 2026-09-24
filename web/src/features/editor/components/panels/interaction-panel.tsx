@@ -49,6 +49,7 @@ import {
 } from "@/features/editor/lib/scene-logic";
 import type { Model3DAssetMetadata } from "@/features/editor/three/types";
 import { assetPath } from "@/lib/asset-path";
+import { interactionPanelCopy } from "./interaction-panel-copy";
 
 export type InteractionPanelElement = {
   animationNames?: readonly string[];
@@ -711,6 +712,9 @@ export function InteractionPanel({
   const is3DSelection =
     selectedTypes.length > 0 &&
     selectedTypes.every((type) => type === "object3d");
+  const isMediaDeformSelection =
+    selectedTypes.length > 0 &&
+    selectedTypes.every((type) => type === "image" || type === "video");
   const sharedSourceKind = is3DSelection
     ? selectedEntries[0]?.sourceKind
     : undefined;
@@ -950,6 +954,7 @@ export function InteractionPanel({
   const [strandDamping, setStrandDamping] = useInteractionField("strandDamping", 0.82, binding);
   const [strandInfluenceRadius, setStrandInfluenceRadius] = useInteractionField("strandInfluenceRadius", 90, binding);
   const [strandMaxDisplacement, setStrandMaxDisplacement] = useInteractionField("strandMaxDisplacement", 140, binding);
+  const [strandTipLength, setStrandTipLength] = useInteractionField("strandTipLength", 0, binding);
   const [strandNeighborRadius, setStrandNeighborRadius] = useInteractionField("strandNeighborRadius", 0, binding);
   const [strandNeighborStrength, setStrandNeighborStrength] = useInteractionField("strandNeighborStrength", 0, binding);
   const [trailSpacing, setTrailSpacing] = useInteractionField("trailSpacing", 12, binding);
@@ -3802,6 +3807,23 @@ export function InteractionPanel({
                 value={strandMaxDisplacement}
               />
             </Row>
+            {isMediaDeformSelection ? (
+              <>
+                <Row label={interactionPanelCopy.strandTipLength.label}>
+                  <DesignNumberField
+                    ariaLabel={interactionPanelCopy.strandTipLength.ariaLabel}
+                    label=""
+                    min={0}
+                    onChange={(value) => setStrandTipLength(Math.max(0, value))}
+                    unit="px"
+                    value={strandTipLength}
+                  />
+                </Row>
+                <p className="interaction-note">
+                  {interactionPanelCopy.strandTipLength.help}
+                </p>
+              </>
+            ) : null}
             <Row label="Neighbor radius">
               <DesignNumberField
                 ariaLabel="Strand neighbor radius"

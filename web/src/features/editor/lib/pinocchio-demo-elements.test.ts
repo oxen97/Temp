@@ -22,6 +22,7 @@ describe("ordinary authored Pinocchio media", () => {
       effect: "strand-bend",
       strandAnchor: "left",
       motion: "spring",
+      strandTipLength: 28,
     });
   });
 
@@ -52,7 +53,10 @@ describe("ordinary authored Pinocchio media", () => {
       damping: settings.strandDamping,
       maxDisplacement: settings.strandMaxDisplacement,
     });
-    const mesh = createMediaDeformMesh(nose);
+    const mesh = createMediaDeformMesh(nose, {
+      tipLength: settings.strandTipLength,
+      anchor: settings.strandAnchor,
+    });
     updateMediaDeformMesh(mesh, bent);
     const bottomLeft = mesh.rows * (mesh.columns + 1) * 3;
     expect((mesh.positions[0] + mesh.positions[bottomLeft]) / 2).toBeCloseTo(

@@ -48,6 +48,7 @@ export type ViewerMediaDeformProps = {
   element: CanvasElement;
   waveClock: ViewerWaveClock;
   waveInteraction?: InteractionDefinition;
+  strandInteraction?: InteractionDefinition;
   visual: RuntimeVisual;
   artboardWidth: number;
   artboardHeight: number;
@@ -59,7 +60,7 @@ export type ViewerMediaDeformProps = {
 export const ViewerMediaDeform = memo(
   forwardRef<ViewerMediaDeformHandle, ViewerMediaDeformProps>(
     function ViewerMediaDeform(props, ref) {
-      const { element, waveClock, waveInteraction } = props;
+      const { element, waveClock, waveInteraction, strandInteraction } = props;
       const rootRef = useRef<HTMLSpanElement>(null);
       const canvasRef = useRef<HTMLCanvasElement>(null);
       const fallbackRef = useRef<HTMLSpanElement>(null);
@@ -103,7 +104,10 @@ export const ViewerMediaDeform = memo(
         const hit = hitRef.current;
         const stroke = strokeRef.current;
         if (!root || !canvas || !fallback || !hit) return;
-        const mesh = createMediaDeformMesh(element);
+        const mesh = createMediaDeformMesh(element, {
+          tipLength: strandInteraction?.strandTipLength,
+          anchor: strandInteraction?.strandAnchor,
+        });
         let renderer: MediaDeformRenderer | null = null;
         let stopped = false;
         let failed = false;
@@ -280,7 +284,7 @@ export const ViewerMediaDeform = memo(
           }
           renderer?.dispose();
         };
-      }, [element, waveClock, waveInteraction]);
+      }, [element, waveClock, waveInteraction, strandInteraction]);
 
       const initialPath = `M0 0 H${element.width} V${element.height} H0 Z`;
       return (

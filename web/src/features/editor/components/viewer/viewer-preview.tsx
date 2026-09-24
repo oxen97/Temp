@@ -3684,6 +3684,7 @@ export function ViewerPreview({
                         element={element}
                         waveClock={waveClock}
                         waveInteraction={waveInteraction}
+                        strandInteraction={strandInteractionForElement(element)}
                         visual={runtimeVisual}
                         artboardWidth={artboard.width}
                         artboardHeight={artboard.height}

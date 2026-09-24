@@ -84,6 +84,8 @@ export type InteractionDefinition = {
   strandDamping: number;
   strandInfluenceRadius: number;
   strandMaxDisplacement: number;
+  /** Image/video free-tip length in element-local pixels; zero stretches the whole asset. */
+  strandTipLength: number;
   /** Artboard-pixel radius within which neighboring strands follow the pointer. */
   strandNeighborRadius: number;
   /** Neighbor response as a percent of the directly touched strand (0..100). */
@@ -257,6 +259,7 @@ export function createDefaultInteraction(
     strandDamping: 0.82,
     strandInfluenceRadius: 90,
     strandMaxDisplacement: 140,
+    strandTipLength: 0,
     strandNeighborRadius: 0,
     strandNeighborStrength: 0,
     trailSpacing: 12,
@@ -377,6 +380,7 @@ export function normalizeInteraction(raw: unknown): InteractionDefinition {
     }
   }
   result.trailFadeOutDuration = Math.max(0, result.trailFadeOutDuration as number);
+  result.strandTipLength = Math.max(0, result.strandTipLength as number);
   return result as InteractionDefinition;
 }
 

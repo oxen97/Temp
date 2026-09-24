@@ -11,7 +11,7 @@ import {
   mediaDeformHitPath,
   updateMediaDeformMesh,
 } from "./media-deform";
-import type { StrandPose } from "./strand-bone-runtime";
+import type { StrandAnchor, StrandPose } from "./strand-bone-runtime";
 
 const media = (overrides: Partial<CanvasElement> = {}): CanvasElement => ({
   id: "uploaded-media",
@@ -48,6 +48,129 @@ function pose(): StrandPose {
 }
 
 describe("media deformation mesh", () => {
+  it.each<StrandAnchor>(["left", "right", "top", "bottom"])(
+    "preserves the free tip's depth and width for a %s anchor through stretch, rotation and compression",
+    (anchor) => {
+      const horizontal = anchor === "left" || anchor === "right";
+      const reverse = anchor === "right" || anchor === "bottom";
+      const element = media({
+        width: horizontal ? 210 : 52,
+        height: horizontal ? 52 : 210,
+      });
+      const mesh = createMediaDeformMesh(element, { tipLength: 28, anchor });
+      const rest = horizontal
+        ? [
+            { x: 0, y: 26 },
+            { x: 210, y: 26 },
+          ]
+        : [
+            { x: 26, y: 0 },
+            { x: 26, y: 210 },
+          ];
+      const anchorIndex = reverse ? 1 : 0;
+      const root = rest[anchorIndex];
+      const free = rest[1 - anchorIndex];
+      const skeleton: StrandPose = {
+        rest,
+        points: rest,
+        velocities: rest.map(() => ({ x: 0, y: 0 })),
+        anchorIndex,
+      };
+      const original = [...mesh.positions];
+      const uv = [...mesh.uv];
+      // No visual change at rest despite the non-uniform, cap-aligned topology.
+      updateMediaDeformMesh(mesh, skeleton);
+      expect([...mesh.positions]).toEqual(original);
+
+      const capIndices = Array.from(
+        { length: mesh.local.length / 2 },
+        (_, index) => index,
+      ).filter((index) => {
+        const axial = mesh.local[index * 2 + (horizontal ? 0 : 1)];
+        return reverse ? axial <= 28 : axial >= 210 - 28;
+      });
+      for (const scale of [4, 0.5, 1]) {
+        const angle = Math.PI / 5;
+        skeleton.points = rest.map((point) => ({
+          x:
+            root.x +
+            scale *
+              ((point.x - root.x) * Math.cos(angle) -
+                (point.y - root.y) * Math.sin(angle)),
+          y:
+            root.y +
+            scale *
+              ((point.x - root.x) * Math.sin(angle) +
+                (point.y - root.y) * Math.cos(angle)),
+        }));
+        updateMediaDeformMesh(mesh, skeleton);
+        const tip = skeleton.points[1 - anchorIndex];
+        for (const index of capIndices) {
+          const dx = mesh.local[index * 2] - free.x;
+          const dy = mesh.local[index * 2 + 1] - free.y;
+          expect(mesh.positions[index * 3]).toBeCloseTo(
+            tip.x + dx * Math.cos(angle) - dy * Math.sin(angle),
+            3,
+          );
+          expect(mesh.positions[index * 3 + 1]).toBeCloseTo(
+            tip.y + dx * Math.sin(angle) + dy * Math.cos(angle),
+            3,
+          );
+        }
+        expect([...mesh.uv]).toEqual(uv);
+      }
+      // A very short shaft cannot invert even when shorter than the chosen tip.
+      skeleton.points = rest.map((point) => ({
+        x: root.x + (point.x - root.x) * 0.05,
+        y: root.y + (point.y - root.y) * 0.05,
+      }));
+      updateMediaDeformMesh(mesh, skeleton);
+      expect([...mesh.positions].every(Number.isFinite)).toBe(true);
+      for (let row = 0; row <= mesh.rows; row += 1) {
+        for (let column = 0; column <= mesh.columns; column += 1) {
+          const index = row * (mesh.columns + 1) + column;
+          if (horizontal && column > 0)
+            expect(mesh.positions[index * 3]).toBeGreaterThan(
+              mesh.positions[(index - 1) * 3],
+            );
+          if (!horizontal && row > 0)
+            expect(mesh.positions[index * 3 + 1]).toBeGreaterThan(
+              mesh.positions[(index - mesh.columns - 1) * 3 + 1],
+            );
+        }
+      }
+      updateMediaDeformMesh(mesh, null);
+      expect([...mesh.positions]).toEqual(original);
+    },
+  );
+
+  it("retains the original full-texture stretch when tip preservation is not authored", () => {
+    const mesh = createMediaDeformMesh(
+      media({ width: 210, height: 52, type: "video" }),
+    );
+    updateMediaDeformMesh(mesh, {
+      rest: [
+        { x: 0, y: 26 },
+        { x: 210, y: 26 },
+      ],
+      points: [
+        { x: 0, y: 26 },
+        { x: 840, y: 26 },
+      ],
+      velocities: [
+        { x: 0, y: 0 },
+        { x: 0, y: 0 },
+      ],
+      anchorIndex: 0,
+    });
+    for (let index = 0; index < mesh.local.length / 2; index += 1) {
+      expect(mesh.positions[index * 3]).toBeCloseTo(mesh.local[index * 2] * 4);
+      expect(mesh.positions[index * 3 + 1]).toBeCloseTo(
+        mesh.local[index * 2 + 1],
+      );
+    }
+  });
+
   it("bounds geometry and raster budgets even for a huge imported source", () => {
     const mesh = createMediaDeformMesh(
       media({ width: 200_000, height: 100_000 }),

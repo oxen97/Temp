@@ -233,6 +233,7 @@ describe("InteractionPanel conditional UI", () => {
     choose("Trigger", "Drag");
     choose("Effect", "Strand Bend");
     choose("Strand drag response", "Swipe & sway");
+    expect(screen.queryByRole("spinbutton", { name: "Strand tip length" })).toBeNull();
     expect(saved[0].strandDragMode).toBe("swipe");
     expect(saved[0]).toMatchObject({ trigger: "drag", effect: "strand-bend", name: "Strand Bend" });
     fireEvent.change(screen.getByRole("spinbutton", { name: "Strand max displacement" }), { target: { value: "75" } });
@@ -273,13 +274,39 @@ describe("InteractionPanel conditional UI", () => {
     choose("Strand anchor", "Bottom");
     fireEvent.change(screen.getByRole("spinbutton", { name: "Strand max displacement" }), { target: { value: "88" } });
     expect(saved).toMatchObject({ effect: "strand-bend", strandAnchor: "bottom", strandMaxDisplacement: 88 });
+    if (type === "image" || type === "video") {
+      const tipLength = screen.getByRole("spinbutton", { name: "Strand tip length" });
+      expect(tipLength).toHaveValue(0);
+      expect(tipLength).toHaveAttribute("min", "0");
+      expect(screen.getByText(/0 stretches the whole asset/)).toBeTruthy();
+      fireEvent.change(tipLength, { target: { value: "26" } });
+      expect(saved.strandTipLength).toBe(26);
+      fireEvent.change(tipLength, { target: { value: "-10" } });
+      expect(saved.strandTipLength).toBe(0);
+      fireEvent.change(tipLength, { target: { value: "26" } });
+    } else {
+      expect(screen.queryByRole("spinbutton", { name: "Strand tip length" })).toBeNull();
+    }
     choose("Trigger", "Pointer Move / Touch Move");
     choose("Effect", "Wave / Curve Deform");
+    expect(screen.queryByRole("spinbutton", { name: "Strand tip length" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Wave target: Picture" }));
     fireEvent.click(screen.getByRole("button", { name: "Wave target: Movie" }));
     expect(screen.queryByRole("button", { name: "Wave target: Model" })).toBeNull();
     expect(screen.getByText("Additional 2D targets")).toBeTruthy();
     expect(saved).toMatchObject({ effect: "wave-deform", waveTargetIds: ["picture", "movie"] });
+    if (type === "image" || type === "video") {
+      choose("Effect", "Strand Bend");
+      expect(screen.getByRole("spinbutton", { name: "Strand tip length" })).toHaveValue(26);
+    }
+  });
+
+  it("hides media tip preservation for an open pen path", () => {
+    render(<InteractionPanel selectedName="Path" selectedTypes={["pen"]} />);
+    choose("Trigger", "Drag");
+    choose("Effect", "Strand Bend");
+    expect(screen.getByRole("spinbutton", { name: "Strand max displacement" })).toBeTruthy();
+    expect(screen.queryByRole("spinbutton", { name: "Strand tip length" })).toBeNull();
   });
 
   it("persists 3D rotation, skew, blur, and shadow in shared interaction fields", () => {
