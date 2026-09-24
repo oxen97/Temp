@@ -1,4 +1,4 @@
-import { useId, type CSSProperties } from "react";
+import { memo, useId, type CSSProperties } from "react";
 
 import {
   colorWithOpacity,
@@ -24,7 +24,11 @@ import {
 } from "@/features/editor/lib/vector-path";
 import { type CanvasElement } from "@/features/editor/store/editor-store";
 
-export function ShapeGraphic({
+// Memoized: the canvas, the navigator, every scene thumbnail and the viewer all
+// render a ShapeGraphic per element. The store keeps unchanged elements as the
+// same objects, so an element whose props did not change is skipped when its
+// parent re-renders. The output depends only on the props.
+export const ShapeGraphic = memo(function ShapeGraphic({
   element,
   imageScale = 1,
   mediaSrc,
@@ -570,4 +574,4 @@ export function ShapeGraphic({
       )}
     </svg>
   );
-}
+});

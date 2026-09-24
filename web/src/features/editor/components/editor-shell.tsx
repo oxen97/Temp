@@ -4,29 +4,22 @@
 /* eslint-disable react-hooks/refs */
 
 import {
-  Box,
   Check,
   ChevronDown,
   Eye,
-  EyeOff,
-  Lock,
-  Minus,
   Monitor,
   Moon,
   MoreVertical,
-  Plus,
   Redo2,
   Smartphone,
   Sun,
   Tablet,
   Undo2,
-  Unlock,
 } from "lucide-react";
 import Image from "next/image";
 import {
   type ChangeEvent,
   type CSSProperties,
-  type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   type WheelEvent as ReactWheelEvent,
@@ -39,22 +32,27 @@ import {
 } from "react";
 
 import { ArtboardBackground } from "@/features/editor/components/canvas/artboard-background";
+import { type Object3DGestureApi } from "@/features/editor/components/canvas/artboard-3d-scene";
+import { Artboard3DSceneWithViewport } from "@/features/editor/components/canvas/artboard-3d-scene-viewport";
 import {
-  Artboard3DScene,
-  type Object3DGestureApi,
-} from "@/features/editor/components/canvas/artboard-3d-scene";
+  CanvasElementView,
+  type CanvasElementHandlers,
+} from "@/features/editor/components/canvas/canvas-element-view";
 import { DrawDraftPreview } from "@/features/editor/components/canvas/draw-draft";
-import { PenEditControls } from "@/features/editor/components/canvas/pen-edit-controls";
+import { EditorNavigator } from "@/features/editor/components/canvas/editor-navigator";
 import { SelectionOutlineSvg } from "@/features/editor/components/canvas/selection-outline-svg";
-import { ShapeGraphic } from "@/features/editor/components/canvas/shape-graphic";
 import { DesignPanel } from "@/features/editor/components/panels/design-panel";
 import { Design3DPanel } from "@/features/editor/components/panels/design-3d-panel";
 import { DesignMixedPanel } from "@/features/editor/components/panels/design-mixed-panel";
 import { InteractionPanel } from "@/features/editor/components/panels/interaction-panel";
 import { LogicPanel } from "@/features/editor/components/panels/logic-panel";
 import { ScenePanel } from "@/features/editor/components/panels/scene-panel";
+import {
+  ElementLayerRow,
+  type LayerRowHandlers,
+  ObjectLayerRow,
+} from "@/features/editor/components/project-panel/layer-row";
 import { SoundPanel } from "@/features/editor/components/sound/sound-panel";
-import { LayerSymbol } from "@/features/editor/components/ui/layer-symbol";
 import { ModelAssetThumbnail } from "@/features/editor/components/ui/model-asset-thumbnail";
 import { ScrollArea } from "@/features/editor/components/ui/scroll-area";
 import { ShapePicker } from "@/features/editor/components/ui/shape-picker";
@@ -95,7 +93,6 @@ import {
   type GuideDrag,
   type HandleMirroring,
   type ImageResizeHandle,
-  type NavigatorViewport,
   type PenAnchor,
   type PenDraft,
   type Point,
@@ -123,7 +120,6 @@ import {
   NIGHT_POST_OFFICE_FIRST_STAR_ID,
 } from "@/features/editor/lib/night-post-office-demo-elements";
 import { createPinocchioDemoElements } from "@/features/editor/lib/pinocchio-demo-elements";
-import { textStyleForElement } from "@/features/editor/lib/element-style";
 import {
   resizedBoundsFromCorner,
   resizeElementWithinSelection,
@@ -198,6 +194,9 @@ import {
   useEditorStore,
   type VectorPath,
 } from "@/features/editor/store/editor-store";
+import { useEditorShellStore } from "@/features/editor/store/editor-selectors";
+import { useStableHandlers } from "@/features/editor/hooks/use-stable-handlers";
+import { createNavigatorViewportStore } from "@/features/editor/lib/navigator-viewport-store";
 import {
   importModelAsset,
   LOCAL_PROJECT_ID,
@@ -221,6 +220,11 @@ import {
 } from "@/features/editor/three/types";
 import { assetPath } from "@/lib/asset-path";
 
+// Shared empty selections for canvas elements that are not in node-edit mode,
+// so their memoized views keep receiving the same props.
+const NO_SELECTED_PEN_HANDLES: VectorHandleRef[] = [];
+const NO_SELECTED_PEN_NODES: VectorPointRef[] = [];
+
 type UploadedMediaAsset = {
   kind: "image" | "video";
   name: string;
@@ -242,12 +246,12 @@ export function EditorShell({
     addPage,
     artboard,
     checkpoint,
-    clipboard,
+    clipboardLength,
     copySelected,
-    future,
+    futureLength,
     pages,
     pasteClipboard,
-    past,
+    pastLength,
     redo,
     removeInteraction,
     removePage,
@@ -278,7 +282,7 @@ export function EditorShell({
     updateObject3D,
     updateSoundMixer,
     zoom,
-  } = useEditorStore();
+  } = useEditorShellStore();
   const activePage = pages.find((page) => page.id === activePageId) ?? pages[0];
   const elements = useMemo(() => activePage?.elements ?? [], [activePage]);
   const objects3d = useMemo(() => activePage?.objects3d ?? [], [activePage]);
@@ -941,13 +945,16 @@ export function EditorShell({
     setSelectedElementIds,
   ]);
   const [navigatorVisible, setNavigatorVisible] = useState(false);
-  const [navigatorViewport, setNavigatorViewport] = useState<NavigatorViewport>(
-    {
+  // The visible canvas area in artboard coordinates. Only the navigator and the
+  // 3D scene render from it, so it is kept in a small store instead of shell
+  // state: a viewport update after zooming re-renders those two, not the shell.
+  const [navigatorViewportStore] = useState(() =>
+    createNavigatorViewportStore({
       height: artboard.height,
       width: artboard.width,
       x: 0,
       y: 0,
-    },
+    }),
   );
   const [drawDraft, setDrawDraft] = useState<DrawDraft | null>(null);
   const [penDraft, setPenDraft] = useState<PenDraft | null>(null);
@@ -1490,7 +1497,7 @@ export function EditorShell({
         (canvasBounds.left - artboardBounds.left) / Math.max(0.01, totalScale);
       const y =
         (canvasBounds.top - artboardBounds.top) / Math.max(0.01, totalScale);
-      setNavigatorViewport((current) => {
+      navigatorViewportStore.update((current) => {
         const next = {
           height: viewportHeight,
           width: viewportWidth,
@@ -1519,7 +1526,14 @@ export function EditorShell({
       observer.disconnect();
       window.removeEventListener("resize", updateNavigatorViewport);
     };
-  }, [artboard.height, artboard.width, pan.x, pan.y, totalScale]);
+  }, [
+    artboard.height,
+    artboard.width,
+    navigatorViewportStore,
+    pan.x,
+    pan.y,
+    totalScale,
+  ]);
 
   useEffect(() => {
     if (!rulersVisible) return;
@@ -4485,50 +4499,141 @@ export function EditorShell({
   const marqueeBounds = marquee
     ? boundsFromPoints(marquee.start, marquee.current)
     : null;
-  const navigatorPreviewSize = { height: 104, width: 184 };
-  const navigatorWorldBounds = {
-    bottom: Math.max(
-      artboard.height,
-      navigatorViewport.y + navigatorViewport.height,
-    ),
-    left: Math.min(0, navigatorViewport.x),
-    right: Math.max(
-      artboard.width,
-      navigatorViewport.x + navigatorViewport.width,
-    ),
-    top: Math.min(0, navigatorViewport.y),
-  };
-  const navigatorWorldSize = {
-    height: Math.max(1, navigatorWorldBounds.bottom - navigatorWorldBounds.top),
-    width: Math.max(1, navigatorWorldBounds.right - navigatorWorldBounds.left),
-  };
-  const navigatorScale = Math.min(
-    navigatorPreviewSize.width / navigatorWorldSize.width,
-    navigatorPreviewSize.height / navigatorWorldSize.height,
-  );
-  const navigatorMap = {
-    height: navigatorWorldSize.height * navigatorScale,
-    left:
-      (navigatorPreviewSize.width - navigatorWorldSize.width * navigatorScale) /
-      2,
-    top:
-      (navigatorPreviewSize.height -
-        navigatorWorldSize.height * navigatorScale) /
-      2,
-    width: navigatorWorldSize.width * navigatorScale,
-  };
-  const navigatorBoard = {
-    height: artboard.height * navigatorScale,
-    left: -navigatorWorldBounds.left * navigatorScale,
-    top: -navigatorWorldBounds.top * navigatorScale,
-    width: artboard.width * navigatorScale,
-  };
-  const navigatorViewportStyle = {
-    height: navigatorViewport.height * navigatorScale,
-    left: (navigatorViewport.x - navigatorWorldBounds.left) * navigatorScale,
-    top: (navigatorViewport.y - navigatorWorldBounds.top) * navigatorScale,
-    width: navigatorViewport.width * navigatorScale,
-  };
+
+  // Canvas elements and layer rows are memoized components. They receive these
+  // handler objects, whose identity never changes and whose functions always
+  // run the logic below against the latest render's state, so the rows and
+  // elements re-render only when their own props change.
+  const canvasElementHandlers = useStableHandlers<CanvasElementHandlers>({
+    onCommitText: (elementId, updates) => {
+      checkpoint();
+      updateElement(elementId, updates);
+      setEditingTextId(null);
+    },
+    onElementClick: (event, element) => {
+      if (
+        element.locked ||
+        element.type !== "pen" ||
+        element.pathfinder ||
+        !selectionToolActive
+      ) {
+        return;
+      }
+      event.stopPropagation();
+      setNodeEditElementId(element.id);
+      setSelectedPenNodes([]);
+      setSelectedPenHandles([]);
+    },
+    onElementDoubleClick: (event, element) => {
+      if (element.locked) return;
+      event.stopPropagation();
+      if (element.type === "pen") {
+        setNodeEditElementId(element.id);
+        setSelectedPenNodes([]);
+        setSelectedPenHandles([]);
+        return;
+      }
+      if (element.type !== "text") return;
+      event.preventDefault();
+      gestureRef.current = null;
+      setSelectedElementIds([element.id]);
+      setSelectedGuideIds([]);
+      setNodeEditElementId(null);
+      setArtboardSelected(false);
+      setEditingTextId(element.id);
+    },
+    onElementPointerDown: (event, element) =>
+      handleElementPointerDown(event, element),
+    onImageCropPointerDown: (event, element, handle) =>
+      handleImageCropPointerDown(event, element, handle),
+    onLineEndpointPointerDown: (event, element, endpoint) =>
+      handleLineEndpointPointerDown(event, element, endpoint),
+    onPenHandlePointerDown: (event, element, pathIndex, nodeIndex, handle) =>
+      handlePenHandlePointerDown(event, element, pathIndex, nodeIndex, handle),
+    onPenNodePointerDown: (event, element, pathIndex, nodeIndex) =>
+      handlePenNodePointerDown(event, element, pathIndex, nodeIndex),
+    onResizePointerDown: (event, element, handle) =>
+      handleResizePointerDown(event, element, handle),
+    onTextEditorRef: (elementId, node) => {
+      if (node) textEditorRefs.current.set(elementId, node);
+      else textEditorRefs.current.delete(elementId);
+    },
+  });
+  const navigatorHandlers = useStableHandlers({
+    onZoomIn: () => zoomAtCanvasCenter(zoom + 10),
+    onZoomOut: () => zoomAtCanvasCenter(zoom - 10),
+  });
+  const layerRowHandlers = useStableHandlers<LayerRowHandlers>({
+    onActivateObjectLayer: (object) => {
+      if (object.locked) return;
+      setSelectedObject3DIds([object.id]);
+      setSelectedGuideIds([]);
+      setNodeEditElementId(null);
+      setArtboardSelected(false);
+    },
+    onFinishElementRename: (element, cancelled) => {
+      if (cancelled) {
+        setEditingElementId(null);
+        return;
+      }
+      renameElement(element.id, elementNameDraft);
+      setEditingElementId(null);
+    },
+    onFinishObjectRename: (object, cancelled) => {
+      if (cancelled) {
+        setEditingElementId(null);
+        return;
+      }
+      const nextName = elementNameDraft.trim();
+      if (nextName && nextName !== object.name) {
+        checkpoint();
+        updateObject3D(object.id, { name: nextName });
+      }
+      setEditingElementId(null);
+    },
+    onRenameDraftChange: (value) => setElementNameDraft(value),
+    onSelectElementLayer: (element, shiftKey) => {
+      if (element.locked) return;
+      const targetIds = selectionIdsForElement(elements, element);
+      const targetSet = new Set(targetIds);
+      if (shiftKey) {
+        const allSelected = targetIds.every((id) =>
+          selectedElementIds.includes(id),
+        );
+        setSelectedItems(
+          allSelected
+            ? selectedElementIds.filter((id) => !targetSet.has(id))
+            : [...new Set([...selectedElementIds, ...targetIds])],
+          selectedObject3DIds,
+        );
+        return;
+      }
+      setSelectedElementIds(targetIds);
+    },
+    onSelectObjectLayer: (object, shiftKey) => {
+      if (object.locked) return;
+      if (shiftKey) {
+        const selected = selectedObject3DIds.includes(object.id);
+        setSelectedItems(
+          selectedElementIds,
+          selected
+            ? selectedObject3DIds.filter((id) => id !== object.id)
+            : [...selectedObject3DIds, object.id],
+        );
+      } else {
+        setSelectedObject3DIds([object.id]);
+      }
+      setSelectedGuideIds([]);
+      setNodeEditElementId(null);
+      setArtboardSelected(false);
+    },
+    onStartRename: (id, name) => {
+      setEditingElementId(id);
+      setElementNameDraft(name);
+    },
+    onToggleLocked: (id) => toggleElementLocked(id),
+    onToggleVisible: (id) => toggleElementVisible(id),
+  });
 
   return (
     <main
@@ -4676,7 +4781,7 @@ export function EditorShell({
           <div aria-label="History" className="history-controls">
             <button
               aria-label="Undo"
-              disabled={!past.length}
+              disabled={!pastLength}
               onClick={undo}
               type="button"
             >
@@ -4684,7 +4789,7 @@ export function EditorShell({
             </button>
             <button
               aria-label="Redo"
-              disabled={!future.length}
+              disabled={!futureLength}
               onClick={redo}
               type="button"
             >
@@ -4937,303 +5042,31 @@ export function EditorShell({
               role="listbox"
             >
               {[...objects3d].reverse().map((object) => {
-                const selected = selectedObject3DIds.includes(object.id);
-                const hasSound = object.interactionSounds?.some(
-                  (sound) => sound.assets.length > 0,
-                ) ?? false;
+                const editing = editingElementId === object.id;
                 return (
-                  <div
-                    aria-selected={selected}
-                    className="layer-row"
+                  <ObjectLayerRow
+                    editing={editing}
+                    handlers={layerRowHandlers}
                     key={object.id}
-                    onClick={(event) => {
-                      if (object.locked) return;
-                      if (event.shiftKey) {
-                        setSelectedItems(
-                          selectedElementIds,
-                          selected
-                            ? selectedObject3DIds.filter(
-                                (id) => id !== object.id,
-                              )
-                            : [...selectedObject3DIds, object.id],
-                        );
-                      } else {
-                        setSelectedObject3DIds([object.id]);
-                      }
-                      setSelectedGuideIds([]);
-                      setNodeEditElementId(null);
-                      setArtboardSelected(false);
-                    }}
-                    onKeyDown={(event) => {
-                      if (event.key !== "Enter" && event.key !== " ") return;
-                      event.preventDefault();
-                      if (object.locked) return;
-                      setSelectedObject3DIds([object.id]);
-                      setSelectedGuideIds([]);
-                      setNodeEditElementId(null);
-                      setArtboardSelected(false);
-                    }}
-                    role="option"
-                    tabIndex={0}
-                  >
-                    <span className="layer-symbol symbol-object3d">
-                      {object.source.kind === "asset" ? (
-                        <ModelAssetThumbnail
-                          assetId={object.source.assetId}
-                          projectId={projectId}
-                        />
-                      ) : (
-                        <Box aria-hidden="true" size={15} strokeWidth={1} />
-                      )}
-                    </span>
-                    {editingElementId === object.id ? (
-                      <input
-                        aria-label={`Rename ${object.name}`}
-                        autoFocus
-                        className="inline-name-input"
-                        data-cancel="false"
-                        onBlur={(event) => {
-                          if (event.currentTarget.dataset.cancel === "true") {
-                            setEditingElementId(null);
-                            return;
-                          }
-                          const nextName = elementNameDraft.trim();
-                          if (nextName && nextName !== object.name) {
-                            checkpoint();
-                            updateObject3D(object.id, { name: nextName });
-                          }
-                          setEditingElementId(null);
-                        }}
-                        onChange={(event) =>
-                          setElementNameDraft(event.target.value)
-                        }
-                        onClick={(event) => event.stopPropagation()}
-                        onKeyDown={(event) => {
-                          if (event.key === "Enter") {
-                            event.preventDefault();
-                            event.currentTarget.blur();
-                          }
-                          if (event.key === "Escape") {
-                            event.preventDefault();
-                            event.currentTarget.dataset.cancel = "true";
-                            event.currentTarget.blur();
-                          }
-                        }}
-                        onPointerDown={(event) => event.stopPropagation()}
-                        type="text"
-                        value={elementNameDraft}
-                      />
-                    ) : (
-                      <span
-                        className="layer-name"
-                        onDoubleClick={(event) => {
-                          event.stopPropagation();
-                          setEditingElementId(object.id);
-                          setElementNameDraft(object.name);
-                        }}
-                      >
-                        {object.name}
-                      </span>
-                    )}
-                    <span className="layer-controls">
-                      {hasSound ? (
-                        <Image
-                          alt=""
-                          aria-hidden="true"
-                          className="layer-sound-indicator"
-                          height={10}
-                          src={assetPath("/figma/sound/layer-sound.svg")}
-                          width={8}
-                        />
-                      ) : null}
-                      <button
-                        aria-label={`${object.locked ? "Unlock" : "Lock"} ${object.name}`}
-                        className={`layer-action ${object.locked ? "is-persistent" : ""}`}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          toggleElementLocked(object.id);
-                        }}
-                        type="button"
-                      >
-                        {object.locked ? (
-                          <Lock size={11} />
-                        ) : (
-                          <Unlock size={11} />
-                        )}
-                      </button>
-                      <button
-                        aria-label={`${object.visible ? "Hide" : "Show"} ${object.name}`}
-                        className={`layer-action ${!object.visible ? "is-persistent" : ""}`}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          toggleElementVisible(object.id);
-                        }}
-                        type="button"
-                      >
-                        {object.visible ? (
-                          <Eye size={12} />
-                        ) : (
-                          <EyeOff size={12} />
-                        )}
-                      </button>
-                    </span>
-                  </div>
+                    nameDraft={editing ? elementNameDraft : ""}
+                    object={object}
+                    projectId={projectId}
+                    selected={selectedObject3DIds.includes(object.id)}
+                  />
                 );
               })}
               {[...elements].reverse().map((element) => {
-                const selected = selectedElementIds.includes(element.id);
-                const hasSound =
-                  element.interactionSounds?.some(
-                    (sound) => sound.assets.length > 0,
-                  ) ?? false;
+                const editing = editingElementId === element.id;
                 return (
-                  <div
-                    aria-selected={selected}
-                    className="layer-row"
+                  <ElementLayerRow
+                    editing={editing}
+                    element={element}
+                    handlers={layerRowHandlers}
                     key={element.id}
-                    onClick={(event) => {
-                      if (element.locked) return;
-                      const targetIds = selectionIdsForElement(
-                        elements,
-                        element,
-                      );
-                      const targetSet = new Set(targetIds);
-                      if (event.shiftKey) {
-                        const allSelected = targetIds.every((id) =>
-                          selectedElementIds.includes(id),
-                        );
-                        setSelectedItems(
-                          allSelected
-                            ? selectedElementIds.filter(
-                                (id) => !targetSet.has(id),
-                              )
-                            : [
-                                ...new Set([
-                                  ...selectedElementIds,
-                                  ...targetIds,
-                                ]),
-                              ],
-                          selectedObject3DIds,
-                        );
-                        return;
-                      }
-                      setSelectedElementIds(targetIds);
-                    }}
-                    role="option"
-                    tabIndex={0}
-                  >
-                    <span
-                      className={`layer-symbol ${element.pathfinder ? "symbol-pathfinder" : `symbol-${element.type}`}`}
-                      data-pathfinder-operation={
-                        element.pathfinder?.operation ?? undefined
-                      }
-                    >
-                      <LayerSymbol element={element} />
-                      {(element.type === "image" || element.type === "video") &&
-                      element.src ? (
-                        <span
-                          aria-hidden="true"
-                          className={`layer-image-preview ${element.type === "video" ? "layer-video-preview" : ""}`}
-                          style={{
-                            backgroundImage: mediaPreviewSources[element.src]
-                              ? `url(${mediaPreviewSources[element.src]})`
-                              : element.src in mediaPreviewSources
-                                ? "none"
-                                : element.type === "image"
-                                  ? `url(${element.src})`
-                                  : "none",
-                          }}
-                        />
-                      ) : null}
-                    </span>
-                    {editingElementId === element.id ? (
-                      <input
-                        aria-label={`Rename ${element.name}`}
-                        autoFocus
-                        className="inline-name-input"
-                        data-cancel="false"
-                        onBlur={(event) => {
-                          if (event.currentTarget.dataset.cancel === "true") {
-                            setEditingElementId(null);
-                            return;
-                          }
-                          renameElement(element.id, elementNameDraft);
-                          setEditingElementId(null);
-                        }}
-                        onChange={(event) =>
-                          setElementNameDraft(event.target.value)
-                        }
-                        onClick={(event) => event.stopPropagation()}
-                        onKeyDown={(event) => {
-                          if (event.key === "Enter") {
-                            event.preventDefault();
-                            event.currentTarget.blur();
-                          }
-                          if (event.key === "Escape") {
-                            event.preventDefault();
-                            event.currentTarget.dataset.cancel = "true";
-                            event.currentTarget.blur();
-                          }
-                        }}
-                        onPointerDown={(event) => event.stopPropagation()}
-                        type="text"
-                        value={elementNameDraft}
-                      />
-                    ) : (
-                      <span
-                        className="layer-name"
-                        onDoubleClick={(event) => {
-                          event.stopPropagation();
-                          setEditingElementId(element.id);
-                          setElementNameDraft(element.name);
-                        }}
-                      >
-                        {element.name}
-                      </span>
-                    )}
-                    <span className="layer-controls">
-                      {hasSound ? (
-                        <Image
-                          alt=""
-                          aria-hidden="true"
-                          className="layer-sound-indicator"
-                          height={10}
-                          src={assetPath("/figma/sound/layer-sound.svg")}
-                          width={8}
-                        />
-                      ) : null}
-                      <button
-                        aria-label={`${element.locked ? "Unlock" : "Lock"} ${element.name}`}
-                        className={`layer-action ${element.locked ? "is-persistent" : ""}`}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          toggleElementLocked(element.id);
-                        }}
-                        type="button"
-                      >
-                        {element.locked ? (
-                          <Lock size={11} />
-                        ) : (
-                          <Unlock size={11} />
-                        )}
-                      </button>
-                      <button
-                        aria-label={`${element.visible ? "Hide" : "Show"} ${element.name}`}
-                        className={`layer-action ${!element.visible ? "is-persistent" : ""}`}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          toggleElementVisible(element.id);
-                        }}
-                        type="button"
-                      >
-                        {element.visible ? (
-                          <Eye size={12} />
-                        ) : (
-                          <EyeOff size={12} />
-                        )}
-                      </button>
-                    </span>
-                  </div>
+                    mediaPreviewSources={mediaPreviewSources}
+                    nameDraft={editing ? elementNameDraft : ""}
+                    selected={selectedElementIds.includes(element.id)}
+                  />
                 );
               })}
             </div>
@@ -5426,10 +5259,10 @@ export function EditorShell({
           style={artboardStyle}
         >
           <ArtboardBackground artboard={artboard} />
-          <Artboard3DScene
+          <Artboard3DSceneWithViewport
             artboardHeight={artboard.height}
             artboardWidth={artboard.width}
-            viewport={navigatorViewport}
+            viewportStore={navigatorViewportStore}
             editable={selectionToolActive && !spacePressed}
             gestureBridgeRef={object3DBridgeRef}
             manipulatingRef={manipulatingObject3DRef}
@@ -5722,229 +5555,30 @@ export function EditorShell({
           {elements.map((element) => {
             if (!element.visible) return null;
             const selected = selectedElementIds.includes(element.id);
-            const selectionLineWidth = selectionOutlineWidth;
-            const vectorStrokeOutset =
-              element.type !== "image" &&
-              element.type !== "video" &&
-              element.type !== "text" &&
-              element.type !== "line" &&
-              element.strokeStyle !== "none" &&
-              element.stroke !== "transparent" &&
-              element.strokeWidth > 0 &&
-              (element.strokeOpacity ?? 100) > 0
-                ? (element.strokeWidth * selectionControlScale) / 2
-                : 0;
-            const selectionHandleOutset =
-              element.type === "image" || element.type === "video"
-                ? 0
-                : vectorStrokeOutset + selectionLineWidth / 2;
-            const elementStyle = {
-              height: `${element.height}px`,
-              left: `${element.x}px`,
-              opacity: element.opacity / 100,
-              top: `${element.y}px`,
-              transform: `rotate(${element.rotation}deg)`,
-              transformOrigin: "center",
-              width: `${element.width}px`,
-              "--selection-handle-outset": `${selectionHandleOutset}px`,
-              "--selection-outline-width": `${selectionLineWidth}px`,
-            };
+            const nodeEditing = nodeEditElementId === element.id;
             return (
-              <div
-                aria-label={element.name}
-                className={`canvas-element element-${element.type} ${element.pathfinder ? "is-pathfinder" : ""} ${selected && !groupedSelectionBounds ? "is-selected" : ""} ${element.locked ? "is-locked" : ""}`}
-                data-element-id={element.id}
+              <CanvasElementView
+                editingText={editingTextId === element.id}
+                element={element}
+                handlers={canvasElementHandlers}
                 key={element.id}
-                onDoubleClick={(event) => {
-                  if (element.locked) return;
-                  event.stopPropagation();
-                  if (element.type === "pen") {
-                    setNodeEditElementId(element.id);
-                    setSelectedPenNodes([]);
-                    setSelectedPenHandles([]);
-                    return;
-                  }
-                  if (element.type !== "text") return;
-                  event.preventDefault();
-                  gestureRef.current = null;
-                  setSelectedElementIds([element.id]);
-                  setSelectedGuideIds([]);
-                  setNodeEditElementId(null);
-                  setArtboardSelected(false);
-                  setEditingTextId(element.id);
-                }}
-                onClick={(event) => {
-                  if (
-                    element.locked ||
-                    element.type !== "pen" ||
-                    element.pathfinder ||
-                    !selectionToolActive
-                  ) {
-                    return;
-                  }
-                  event.stopPropagation();
-                  setNodeEditElementId(element.id);
-                  setSelectedPenNodes([]);
-                  setSelectedPenHandles([]);
-                }}
-                onPointerDown={(event) =>
-                  handleElementPointerDown(event, element)
+                nodeEditing={nodeEditing}
+                selected={selected}
+                selectedPenHandles={
+                  nodeEditing ? selectedPenHandles : NO_SELECTED_PEN_HANDLES
                 }
-                style={elementStyle}
-              >
-                {element.type === "text" ? (
-                  <div
-                    className="text-shape"
-                    contentEditable={editingTextId === element.id}
-                    data-text-resize-mode={element.textResizeMode ?? "fixed"}
-                    onBlur={(event) => {
-                      const editor = event.currentTarget;
-                      const text = editor.innerText ?? editor.textContent ?? "";
-                      const parent =
-                        editor.closest<HTMLElement>(".canvas-element");
-                      const sizeUpdates =
-                        element.textResizeMode === "auto-width" && parent
-                          ? {
-                              height: Math.max(
-                                1,
-                                Number.parseFloat(parent.style.height) ||
-                                  element.height,
-                              ),
-                              width: Math.max(
-                                1,
-                                Number.parseFloat(parent.style.width) ||
-                                  element.width,
-                              ),
-                            }
-                          : {};
-                      checkpoint();
-                      updateElement(element.id, { text, ...sizeUpdates });
-                      setEditingTextId(null);
-                    }}
-                    onInput={(event) => {
-                      if (element.textResizeMode !== "auto-width") return;
-                      const editor = event.currentTarget;
-                      const parent =
-                        editor.closest<HTMLElement>(".canvas-element");
-                      if (!parent) return;
-                      const fontSize = element.fontSize ?? 24;
-                      const lineHeight =
-                        typeof element.lineHeight === "number"
-                          ? element.lineHeight * fontSize
-                          : fontSize * 1.2;
-                      parent.style.width = `${Math.max(1, Math.ceil(editor.scrollWidth + 1))}px`;
-                      parent.style.height = `${Math.max(lineHeight, Math.ceil(editor.scrollHeight))}px`;
-                    }}
-                    onKeyDown={(event: ReactKeyboardEvent<HTMLDivElement>) => {
-                      if (event.key === "Escape") event.currentTarget.blur();
-                    }}
-                    ref={(node) => {
-                      if (node) textEditorRefs.current.set(element.id, node);
-                      else textEditorRefs.current.delete(element.id);
-                    }}
-                    style={textStyleForElement(element)}
-                    suppressContentEditableWarning
-                  >
-                    {element.text}
-                  </div>
-                ) : (
-                  <ShapeGraphic element={element} />
-                )}
-
-                {selected &&
-                !groupedSelectionBounds &&
-                element.type !== "line" ? (
-                  <SelectionOutlineSvg
-                    centerOutset={selectionHandleOutset}
-                    controlScale={selectionControlScale}
-                    height={element.height}
-                    lineWidth={selectionLineWidth}
-                    showCornerHandles={
-                      nodeEditElementId !== element.id &&
-                      selectedElements.length === 1 &&
-                      selectedObjects3D.length === 0 &&
-                      !element.locked
-                    }
-                    strokePlacement={
-                      element.type === "image" || element.type === "video"
-                        ? "inside"
-                        : "center"
-                    }
-                    width={element.width}
-                  />
-                ) : null}
-
-                {nodeEditElementId === element.id && element.type === "pen" ? (
-                  <PenEditControls
-                    element={element}
-                    onHandlePointerDown={handlePenHandlePointerDown}
-                    onNodePointerDown={handlePenNodePointerDown}
-                    selectedHandles={selectedPenHandles}
-                    selectedNodes={selectedPenNodes}
-                  />
-                ) : null}
-
-                {nodeEditElementId !== element.id &&
-                selectedElements.length === 1 &&
-                selectedObjects3D.length === 0 &&
-                selected &&
-                !element.locked ? (
-                  <>
-                    {element.type === "line" ? (
-                      (["start", "end"] as const).map((endpoint) => (
-                        <button
-                          aria-label={`Adjust ${element.name} ${endpoint}`}
-                          className={`line-endpoint endpoint-${endpoint}`}
-                          key={endpoint}
-                          onPointerDown={(event) =>
-                            handleLineEndpointPointerDown(
-                              event,
-                              element,
-                              endpoint,
-                            )
-                          }
-                          type="button"
-                        />
-                      ))
-                    ) : (
-                      <>
-                        {(["nw", "ne", "se", "sw"] as ResizeHandle[]).map(
-                          (handle) => (
-                            <button
-                              aria-label={`Resize ${handle}`}
-                              className={`resize-handle handle-${handle}`}
-                              key={handle}
-                              onPointerDown={(event) =>
-                                handleResizePointerDown(event, element, handle)
-                              }
-                              type="button"
-                            />
-                          ),
-                        )}
-                        {element.type === "image"
-                          ? (["n", "e", "s", "w"] as ImageResizeHandle[]).map(
-                              (handle) => (
-                                <button
-                                  aria-label={`Crop image ${handle}`}
-                                  className={`resize-handle image-edge-handle image-edge-handle-${handle}`}
-                                  key={handle}
-                                  onPointerDown={(event) =>
-                                    handleImageCropPointerDown(
-                                      event,
-                                      element,
-                                      handle,
-                                    )
-                                  }
-                                  type="button"
-                                />
-                              ),
-                            )
-                          : null}
-                      </>
-                    )}
-                  </>
-                ) : null}
-              </div>
+                selectedPenNodes={
+                  nodeEditing ? selectedPenNodes : NO_SELECTED_PEN_NODES
+                }
+                selectionControlScale={selectionControlScale}
+                selectionOutlineWidth={selectionOutlineWidth}
+                showSelectionChrome={selected && !groupedSelectionBounds}
+                singleSelection={
+                  selected &&
+                  selectedElements.length === 1 &&
+                  selectedObjects3D.length === 0
+                }
+              />
             );
           })}
 
@@ -6295,91 +5929,16 @@ export function EditorShell({
           />
         ) : null}
 
-        <aside
-          aria-label="Navigator"
-          className={`navigator interface-scale-surface ${navigatorVisible ? "is-visible" : ""}`}
-        >
-          <span className="navigator-title">Navigator</span>
-          <div className="navigator-preview">
-            <div
-              className="navigator-map"
-              style={{
-                height: navigatorMap.height,
-                left: navigatorMap.left,
-                top: navigatorMap.top,
-                width: navigatorMap.width,
-              }}
-            >
-              <div
-                className="navigator-artboard"
-                style={{
-                  background: "transparent",
-                  height: navigatorBoard.height,
-                  left: navigatorBoard.left,
-                  top: navigatorBoard.top,
-                  width: navigatorBoard.width,
-                }}
-              >
-                <ArtboardBackground artboard={artboard} playVideo={false} />
-                {elements.map((element) => {
-                  if (!element.visible) return null;
-                  return (
-                    <div
-                      className="navigator-element"
-                      key={element.id}
-                      style={{
-                        height: element.height * navigatorScale,
-                        left: element.x * navigatorScale,
-                        opacity: element.opacity / 100,
-                        top: element.y * navigatorScale,
-                        transform: `rotate(${element.rotation}deg)`,
-                        transformOrigin: "center",
-                        width: element.width * navigatorScale,
-                      }}
-                    >
-                      {element.type === "text" ? (
-                        <span className="navigator-text">{element.text}</span>
-                      ) : (
-                        <ShapeGraphic
-                          element={element}
-                          imageScale={navigatorScale}
-                          mediaSrc={
-                            element.src && element.src in mediaPreviewSources
-                              ? (mediaPreviewSources[element.src] ?? "")
-                              : undefined
-                          }
-                          playMedia={false}
-                        />
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-              <span
-                aria-hidden="true"
-                className="navigator-viewport"
-                style={navigatorViewportStyle}
-              />
-            </div>
-          </div>
-          <div className="navigator-zoom">
-            <button
-              aria-label="Zoom out"
-              onClick={() => zoomAtCanvasCenter(zoom - 10)}
-              type="button"
-            >
-              <Minus size={13} />
-            </button>
-            <strong>{Math.round(zoom)} %</strong>
-            <button
-              aria-label="Zoom in"
-              onClick={() => zoomAtCanvasCenter(zoom + 10)}
-              type="button"
-            >
-              <Plus size={13} />
-            </button>
-          </div>
-        </aside>
+        <EditorNavigator
+          artboard={artboard}
+          elements={elements}
+          mediaPreviewSources={mediaPreviewSources}
+          onZoomIn={navigatorHandlers.onZoomIn}
+          onZoomOut={navigatorHandlers.onZoomOut}
+          viewportStore={navigatorViewportStore}
+          visible={navigatorVisible}
+          zoom={zoom}
+        />
       </section>
 
       <aside
@@ -6581,8 +6140,8 @@ export function EditorShell({
         <output className="visually-hidden">
           {selectedElementIds.length
             ? `${selectedElementIds.length} selected`
-            : clipboard.length
-              ? `${clipboard.length} copied`
+            : clipboardLength
+              ? `${clipboardLength} copied`
               : ""}
         </output>
       </aside>

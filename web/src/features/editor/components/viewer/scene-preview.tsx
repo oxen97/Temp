@@ -1,3 +1,5 @@
+import { memo } from "react";
+
 import { ArtboardBackground } from "@/features/editor/components/canvas/artboard-background";
 import { ShapeGraphic } from "@/features/editor/components/canvas/shape-graphic";
 import { Scene3DPreview } from "@/features/editor/components/viewer/scene-3d-preview";
@@ -11,7 +13,10 @@ import type {
   Scene3DSettings,
 } from "@/features/editor/three/types";
 
-export function ScenePreview({
+// Memoized: the scene list renders one thumbnail per scene. The store keeps an
+// unchanged scene's elements as the same array, so only thumbnails whose scene
+// (or the shared artboard/media previews) changed are re-rendered.
+export const ScenePreview = memo(function ScenePreview({
   artboard,
   elements,
   mediaPreviewSources = {},
@@ -103,4 +108,4 @@ export function ScenePreview({
       </span>
     </span>
   );
-}
+});

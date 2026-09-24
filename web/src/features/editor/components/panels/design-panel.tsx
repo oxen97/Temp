@@ -1,5 +1,5 @@
 import Image from "next/image";
-import { type CSSProperties, useState } from "react";
+import { type CSSProperties, memo, useState } from "react";
 
 import {
   DesignColorField,
@@ -36,7 +36,10 @@ import {
 } from "@/features/editor/store/editor-store";
 import { assetPath } from "@/lib/asset-path";
 
-export function DesignPanel({
+// Memoized: every prop the editor shell passes is stable between unrelated
+// shell re-renders (store actions, memoized selections), so the panel only
+// re-renders when its own inputs change.
+export const DesignPanel = memo(function DesignPanel({
   artboard,
   lockRatio,
   onCheckpoint,
@@ -1041,4 +1044,4 @@ export function DesignPanel({
       )}
     </div>
   );
-}
+});

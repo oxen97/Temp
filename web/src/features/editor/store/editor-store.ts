@@ -270,7 +270,7 @@ type EditorSnapshot = {
   artboard: ArtboardSettings;
 };
 
-type EditorState = {
+export type EditorState = {
   saveStatus: SaveStatus;
   activeTool: EditorTool;
   selectedShape: ShapeType;

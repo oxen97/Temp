@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { memo, useRef, useState } from "react";
 
 import {
   DesignDropdown,
@@ -25,7 +25,10 @@ import { createMediaPoster } from "@/features/editor/lib/media-poster";
 import { type ArtboardSettings } from "@/features/editor/store/editor-store";
 import { assetPath } from "@/lib/asset-path";
 
-export function ScenePanel({
+// Memoized: every prop the editor shell passes is stable between unrelated
+// shell re-renders (store actions, memoized selections), so the panel only
+// re-renders when its own inputs change.
+export const ScenePanel = memo(function ScenePanel({
   activePageId,
   activePageName,
   artboard,
@@ -649,4 +652,4 @@ export function ScenePanel({
       ) : null}
     </section>
   );
-}
+});

@@ -7,20 +7,21 @@ import {
 import {
   type BackgroundMusicAsset,
   defaultInteractionSoundSettings,
+  type EditorPage,
+  type EditorState,
   type InteractionSoundSettings,
   useEditorStore,
 } from "@/features/editor/store/editor-store";
 
 export function useInteractionSoundAssets() {
-  const {
-    clipboard,
-    future,
-    pages,
-    past,
-    setBackgroundMusicArtwork,
-    updateElement,
-    updateObject3D,
-  } = useEditorStore();
+  // Only stable action references are selected here. Subscribing to the whole
+  // store would re-render the component that calls this hook (the editor
+  // shell) on every store change, including history-only changes.
+  const setBackgroundMusicArtwork = useEditorStore(
+    (state) => state.setBackgroundMusicArtwork,
+  );
+  const updateElement = useEditorStore((state) => state.updateElement);
+  const updateObject3D = useEditorStore((state) => state.updateObject3D);
   const backgroundMusicObjectUrlsRef = useRef(new Set<string>());
   const editorMountedRef = useRef(true);
 
@@ -228,47 +229,77 @@ export function useInteractionSoundAssets() {
   );
 
   useEffect(() => {
-    const referencedSources = new Set<string>();
-    const collectSources = (sourcePages: typeof pages) => {
-      sourcePages.forEach((page) => {
-        const asset = page.backgroundMusic?.asset;
-        if (asset) {
-          referencedSources.add(asset.src);
-          if (asset.artworkSrc) referencedSources.add(asset.artworkSrc);
-        }
-        page.elements.forEach((element) => {
-          element.interactionSounds?.forEach((sound) => {
-            sound.assets.forEach((soundAsset) =>
-              referencedSources.add(soundAsset.src),
-            );
+    // Revokes object URLs this hook created once nothing references them any
+    // more: not the current pages, not an undo/redo snapshot, not the
+    // clipboard. It runs after every change to those four values, one task
+    // later so React has already committed the render that dropped the URL.
+    // The subscription lives outside React rendering, so the calling component
+    // does not re-render when only the history or clipboard changes.
+    const revokeUnreferencedSources = (state: EditorState) => {
+      const referencedSources = new Set<string>();
+      const collectSources = (sourcePages: EditorPage[]) => {
+        sourcePages.forEach((page) => {
+          const asset = page.backgroundMusic?.asset;
+          if (asset) {
+            referencedSources.add(asset.src);
+            if (asset.artworkSrc) referencedSources.add(asset.artworkSrc);
+          }
+          page.elements.forEach((element) => {
+            element.interactionSounds?.forEach((sound) => {
+              sound.assets.forEach((soundAsset) =>
+                referencedSources.add(soundAsset.src),
+              );
+            });
+          });
+          page.objects3d?.forEach((object) => {
+            object.interactionSounds?.forEach((sound) => {
+              sound.assets.forEach((soundAsset) =>
+                referencedSources.add(soundAsset.src),
+              );
+            });
           });
         });
-        page.objects3d?.forEach((object) => {
-          object.interactionSounds?.forEach((sound) => {
-            sound.assets.forEach((soundAsset) =>
-              referencedSources.add(soundAsset.src),
-            );
-          });
+      };
+      collectSources(state.pages);
+      state.past.forEach((snapshot) => collectSources(snapshot.pages));
+      state.future.forEach((snapshot) => collectSources(snapshot.pages));
+      state.clipboard.forEach((element) => {
+        element.interactionSounds?.forEach((sound) => {
+          sound.assets.forEach((soundAsset) =>
+            referencedSources.add(soundAsset.src),
+          );
         });
+      });
+      const ownedSources = backgroundMusicObjectUrlsRef.current;
+      ownedSources.forEach((source) => {
+        if (referencedSources.has(source)) return;
+        URL.revokeObjectURL(source);
+        ownedSources.delete(source);
       });
     };
-    collectSources(useEditorStore.getState().pages);
-    past.forEach((snapshot) => collectSources(snapshot.pages));
-    future.forEach((snapshot) => collectSources(snapshot.pages));
-    useEditorStore.getState().clipboard.forEach((element) => {
-      element.interactionSounds?.forEach((sound) => {
-        sound.assets.forEach((soundAsset) =>
-          referencedSources.add(soundAsset.src),
-        );
-      });
+
+    let pendingSweep: number | null = null;
+    revokeUnreferencedSources(useEditorStore.getState());
+    const unsubscribe = useEditorStore.subscribe((state, previousState) => {
+      if (
+        state.pages === previousState.pages &&
+        state.past === previousState.past &&
+        state.future === previousState.future &&
+        state.clipboard === previousState.clipboard
+      ) {
+        return;
+      }
+      if (pendingSweep !== null) return;
+      pendingSweep = window.setTimeout(() => {
+        pendingSweep = null;
+        revokeUnreferencedSources(useEditorStore.getState());
+      }, 0);
     });
-    const ownedSources = backgroundMusicObjectUrlsRef.current;
-    ownedSources.forEach((source) => {
-      if (referencedSources.has(source)) return;
-      URL.revokeObjectURL(source);
-      ownedSources.delete(source);
-    });
-  }, [clipboard, future, pages, past]);
+    return () => {
+      unsubscribe();
+      if (pendingSweep !== null) window.clearTimeout(pendingSweep);
+    };
+  }, []);
 
   useEffect(() => {
     editorMountedRef.current = true;

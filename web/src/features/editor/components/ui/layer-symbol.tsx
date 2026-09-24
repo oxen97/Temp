@@ -1,4 +1,5 @@
 import Image from "next/image";
+import { memo } from "react";
 
 import {
   designAssetDimensions,
@@ -7,7 +8,12 @@ import {
 import { type CanvasElement } from "@/features/editor/store/editor-store";
 import { assetPath } from "@/lib/asset-path";
 
-export function LayerSymbol({ element }: { element: CanvasElement }) {
+// Memoized: one symbol per layer row; its output depends only on the element.
+export const LayerSymbol = memo(function LayerSymbol({
+  element,
+}: {
+  element: CanvasElement;
+}) {
   const { pathfinder, type } = element;
   if (pathfinder) {
     const asset = pathfinderLayerAssets[pathfinder.operation];
@@ -89,4 +95,4 @@ export function LayerSymbol({ element }: { element: CanvasElement }) {
   }
 
   return null;
-}
+});
