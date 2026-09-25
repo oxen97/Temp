@@ -1065,3 +1065,121 @@ describe("InteractionPanel conditional UI", () => {
     ).toBeTruthy();
   });
 });
+
+describe("InteractionPanel keeps HOW and the stored motion in sync", () => {
+  function renderAuthored({
+    elements = [{ id: "box", name: "Box", type: "rectangle" }],
+    selectedElementIds = ["box"],
+    selectedTypes = ["rectangle"],
+  }: {
+    elements?: { id: string; name: string; type: string }[];
+    selectedElementIds?: string[];
+    selectedTypes?: string[];
+  } = {}) {
+    const state = {
+      saved: createDefaultInteraction({ id: "drop" }),
+      updates: [] as Partial<InteractionDefinition>[],
+    };
+    function Harness() {
+      const [interaction, setInteraction] = useState(state.saved);
+      state.saved = interaction;
+      return (
+        <InteractionPanel
+          elements={elements}
+          interactionsByElement={{ [selectedElementIds[0]]: [interaction] }}
+          onUpdateInteraction={(_, __, next) => {
+            state.updates.push(next);
+            setInteraction((current) => ({ ...current, ...next }));
+          }}
+          selectedElementIds={selectedElementIds}
+          selectedName="Box"
+          selectedTypes={selectedTypes}
+        />
+      );
+    }
+    render(<Harness />);
+    return state;
+  }
+
+  const howButton = () =>
+    screen.getByRole("button", { name: "Motion behavior" });
+
+  it("replaces a hidden Gravity when the new effect cannot fall", () => {
+    const state = renderAuthored();
+    choose("Motion behavior", "Gravity");
+    expect(state.saved.motion).toBe("gravity");
+
+    state.updates.length = 0;
+    choose("Effect", "Scale");
+    // One update, so the effect and the motion are undone together.
+    expect(state.updates).toEqual([
+      expect.objectContaining({ effect: "scale", motion: "direct" }),
+    ]);
+    expect(state.saved.motion).toBe("direct");
+    expect(howButton()).toHaveTextContent("Direct");
+
+    // Going back to Move must not bring the old Gravity back.
+    choose("Effect", "Move");
+    expect(state.saved.motion).toBe("direct");
+    expect(howButton()).toHaveTextContent("Direct");
+  });
+
+  it("leaves the motion alone when the new effect still allows it", () => {
+    const state = renderAuthored();
+    expect(state.saved.motion).toBe("spring");
+    choose("Effect", "Scale");
+    expect(state.updates).toHaveLength(1);
+    expect(state.updates[0]).not.toHaveProperty("motion");
+    expect(state.saved.motion).toBe("spring");
+    expect(howButton()).toHaveTextContent("Spring");
+  });
+
+  it("replaces Gravity when the trigger changes to a continuous input", () => {
+    const state = renderAuthored();
+    choose("Motion behavior", "Gravity");
+    choose("Trigger", "Drag");
+    expect(state.saved).toMatchObject({ motion: "direct", trigger: "drag" });
+    expect(howButton()).toHaveTextContent("Direct");
+  });
+
+  it("replaces a motion the new input mapping does not allow", () => {
+    const state = renderAuthored();
+    choose("Trigger", "Drag");
+    choose("Motion behavior", "Inertia");
+    expect(state.saved.motion).toBe("inertia");
+    choose("Input mapping", "Pointer Velocity");
+    expect(state.saved).toMatchObject({
+      mapping: "pointer-velocity",
+      motion: "direct",
+    });
+    expect(howButton()).toHaveTextContent("Direct");
+  });
+
+  it("replaces Gravity when a group's child effect changes", () => {
+    const state = renderAuthored({
+      elements: [
+        { id: "box", name: "Box", type: "rectangle" },
+        { id: "dot", name: "Dot", type: "circle" },
+      ],
+      selectedElementIds: ["box", "dot"],
+      selectedTypes: ["rectangle", "circle"],
+    });
+    choose("Effect", "Group Animation");
+    choose("Motion behavior", "Gravity");
+    expect(state.saved.motion).toBe("gravity");
+    choose("Group child effect", "Scale");
+    expect(state.saved).toMatchObject({ groupEffect: "scale", motion: "direct" });
+    expect(howButton()).toHaveTextContent("Direct");
+  });
+
+  it("does the same for an interaction that is not saved yet", () => {
+    render(
+      <InteractionPanel selectedName="Rectangle 1" selectedTypes={["rectangle"]} />,
+    );
+    choose("Motion behavior", "Gravity");
+    choose("Effect", "Scale");
+    expect(howButton()).toHaveTextContent("Direct");
+    choose("Effect", "Move");
+    expect(howButton()).toHaveTextContent("Direct");
+  });
+});

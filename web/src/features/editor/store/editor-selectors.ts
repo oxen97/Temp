@@ -57,6 +57,7 @@ export function useEditorShellStore() {
       replaceElements: state.replaceElements,
       renameElement: state.renameElement,
       renamePage: state.renamePage,
+      replaceDocument: state.replaceDocument,
       selectedElementIds: state.selectedElementIds,
       selectedObject3DIds: state.selectedObject3DIds,
       selectedShape: state.selectedShape,

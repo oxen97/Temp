@@ -302,6 +302,15 @@ export type EditorState = {
   ) => void;
   addPage: () => void;
   removePage: () => void;
+  /**
+   * Swaps in a whole document (for example one opened from a project file).
+   * Selection is cleared and the previous document stays one undo step away.
+   */
+  replaceDocument: (document: {
+    activePageId: string;
+    artboard?: ArtboardSettings;
+    pages: EditorPage[];
+  }) => void;
   renamePage: (pageId: string, name: string) => void;
   addElement: (element: CanvasElement) => void;
   addObject3D: (object: Object3DElement) => void;
@@ -821,6 +830,22 @@ export const useEditorStore = create<EditorState>((set) => ({
       return {
         pages,
         activePageId: fallback.id,
+        selectedElementIds: [],
+        selectedObject3DIds: [],
+        past: pushHistory(state),
+        future: [],
+      };
+    }),
+  replaceDocument: ({ activePageId, artboard, pages }) =>
+    set((state) => {
+      if (!pages.length) return state;
+      return {
+        activePageId: pages.some((page) => page.id === activePageId)
+          ? activePageId
+          : pages[0].id,
+        activeTool: "selection",
+        artboard: artboard ?? state.artboard,
+        pages,
         selectedElementIds: [],
         selectedObject3DIds: [],
         past: pushHistory(state),

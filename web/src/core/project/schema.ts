@@ -108,7 +108,9 @@ const interactionSoundSchema = z.object({
   volume: z.number().min(0).max(100),
 });
 
-export const object3DElementSchema = z.object({
+// Passthrough keeps 3D object fields this schema does not list yet, so a saved
+// project does not silently lose settings added to the editor later.
+export const object3DElementSchema = z.looseObject({
   castShadow: z.boolean(),
   compositeLayer: z.enum(["behind-2d", "front-of-2d"]),
   dimensions: z.object({
@@ -189,7 +191,9 @@ const modelAssetMetadataSchema = z.object({
   materialNames: z.array(z.string()).default([]),
   meshFaceGroupNames: z.array(z.string()).default([]),
   meshNames: z.array(z.string()).default([]),
-  mimeType: z.literal("model/gltf-binary"),
+  // Embedded .gltf imports are stored as JSON; accepting only the binary type
+  // made any project with a .gltf model fail to save.
+  mimeType: z.enum(["model/gltf-binary", "model/gltf+json"]),
   morphTargetNames: z.array(z.string()).default([]),
 });
 

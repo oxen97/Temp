@@ -257,6 +257,29 @@ export async function getModelAsset(projectId: string, assetId: string) {
   };
 }
 
+/**
+ * Writes a model that arrived from outside the upload flow (for example a
+ * project file) back into this browser's asset store under its original id,
+ * so scenes that reference the id can load it again.
+ */
+export async function storeModelAsset(
+  projectId: string,
+  metadata: Model3DAssetMetadata,
+  blob: Blob,
+) {
+  const key = assetKey(projectId, metadata.id);
+  const record: StoredModel3DAsset = {
+    blob: blob.slice(0, blob.size, metadata.mimeType),
+    metadata,
+    projectId,
+  };
+  const database = await openAmousDatabase();
+  await database.put(MODEL_ASSET_STORE, record, key);
+  const loaded = await cache.get(key)?.catch(() => undefined);
+  if (loaded) disposeObject3D(loaded.scene);
+  cache.delete(key);
+}
+
 export async function deleteModelAsset(projectId: string, assetId: string) {
   const key = assetKey(projectId, assetId);
   const loaded = await cache.get(key)?.catch(() => undefined);
