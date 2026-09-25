@@ -9,7 +9,6 @@ import {
   Eye,
   Monitor,
   Moon,
-  MoreVertical,
   Redo2,
   Smartphone,
   Sun,
@@ -31,6 +30,11 @@ import {
   useState,
 } from "react";
 
+import {
+  PROJECT_FILE_EXTENSION,
+  PROJECT_FILE_MIME_TYPE,
+  ProjectFileError,
+} from "@/core/project/project-file";
 import { ArtboardBackground } from "@/features/editor/components/canvas/artboard-background";
 import { type Object3DGestureApi } from "@/features/editor/components/canvas/artboard-3d-scene";
 import { Artboard3DSceneWithViewport } from "@/features/editor/components/canvas/artboard-3d-scene-viewport";
@@ -41,6 +45,7 @@ import {
 import { DrawDraftPreview } from "@/features/editor/components/canvas/draw-draft";
 import { EditorNavigator } from "@/features/editor/components/canvas/editor-navigator";
 import { SelectionOutlineSvg } from "@/features/editor/components/canvas/selection-outline-svg";
+import { PreviewErrorBoundary } from "@/features/editor/components/editor-error-boundary";
 import { DesignPanel } from "@/features/editor/components/panels/design-panel";
 import { Design3DPanel } from "@/features/editor/components/panels/design-3d-panel";
 import { DesignMixedPanel } from "@/features/editor/components/panels/design-mixed-panel";
@@ -52,6 +57,7 @@ import {
   type LayerRowHandlers,
   ObjectLayerRow,
 } from "@/features/editor/components/project-panel/layer-row";
+import { ProjectFileMenu } from "@/features/editor/components/project-file-menu";
 import { SoundPanel } from "@/features/editor/components/sound/sound-panel";
 import { ModelAssetThumbnail } from "@/features/editor/components/ui/model-asset-thumbnail";
 import { ScrollArea } from "@/features/editor/components/ui/scroll-area";
@@ -146,6 +152,8 @@ import {
   imageCropForElement,
 } from "@/features/editor/lib/image-crop";
 import { createMediaPoster } from "@/features/editor/lib/media-poster";
+import { readProjectFile } from "@/features/editor/lib/project-file";
+import { saveEditorProjectToFile } from "@/features/editor/lib/save-project-file";
 import {
   INTERFACE_SCALE_OPTIONS,
   interfaceScaleFactor,
@@ -200,6 +208,7 @@ import { createNavigatorViewportStore } from "@/features/editor/lib/navigator-vi
 import {
   importModelAsset,
   LOCAL_PROJECT_ID,
+  storeModelAsset,
 } from "@/features/editor/three/model-assets";
 import { createAssetObject3D } from "@/features/editor/three/object-factory";
 import {
@@ -259,6 +268,7 @@ export function EditorShell({
     replaceElements,
     renameElement,
     renamePage,
+    replaceDocument,
     selectedElementIds,
     selectedObject3DIds,
     selectedShape,
@@ -1043,6 +1053,10 @@ export function EditorShell({
   const verticalSmartGuideRef = useRef<HTMLDivElement>(null);
   const distanceMeasurementRefs = useRef<Array<HTMLDivElement | null>>([]);
   const finishPenPathRef = useRef<(() => void) | null>(null);
+  const projectFileActionsRef = useRef<{
+    open: () => void;
+    save: () => void;
+  } | null>(null);
   const navigatorTimerRef = useRef<number | null>(null);
   const previousZoomRef = useRef(zoom);
   const pointerPositionRef = useRef<Point | null>(null);
@@ -1772,6 +1786,28 @@ export function EditorShell({
         }
         return;
       }
+      // The physical key is the fallback for layouts that do not type a Latin
+      // letter (for example Korean input), so Ctrl+S still saves there.
+      const pressedLetter = /^[a-z]$/i.test(event.key)
+        ? event.key.toLowerCase()
+        : /^Key[A-Z]$/.test(event.code)
+          ? event.code.slice(3).toLowerCase()
+          : "";
+      const projectFileKey =
+        pressedLetter === "s" ? "save" : pressedLetter === "o" ? "open" : null;
+      if (
+        projectFileKey &&
+        (event.ctrlKey || event.metaKey) &&
+        !event.altKey &&
+        !event.shiftKey
+      ) {
+        // Save/open the project file instead of the browser's own
+        // "Save page" and "Open file" dialogs, even while typing in a field.
+        event.preventDefault();
+        if (event.repeat) return;
+        projectFileActionsRef.current?.[projectFileKey]();
+        return;
+      }
       if (event.code === "Space" && !isEditableTarget(event.target)) {
         event.preventDefault();
         const focusedElement = document.activeElement;
@@ -2109,6 +2145,8 @@ export function EditorShell({
         }
         if (nodeEditElementId) return;
         if (artboardSelected) {
+          // A held key (auto-repeat) must not keep removing scene after scene.
+          if (event.repeat) return;
           removePage();
           setArtboardSelected(false);
           return;
@@ -2123,7 +2161,9 @@ export function EditorShell({
           );
           setSelectedGuideIds([]);
         }
-        if (!hasElementSelection && !hasGuideSelection) removePage();
+        // With nothing selected, Delete does nothing. It used to remove the
+        // whole current scene, and holding the key removed one scene after
+        // another. Scenes are deleted from the focused item in the SCENES list.
         return;
       }
       if (event.key === "Escape") {
@@ -4225,6 +4265,126 @@ export function EditorShell({
     if (modelFiles.length) void importModelAssetFiles(modelFiles);
   };
 
+  const [projectFileBusy, setProjectFileBusy] = useState(false);
+  const projectFileInputRef = useRef<HTMLInputElement>(null);
+
+  const saveProjectFile = async () => {
+    if (projectFileBusy) return;
+    setProjectFileBusy(true);
+    try {
+      const result = await saveEditorProjectToFile(projectId, {
+        media: uploadedAssets.map(({ kind, name, src }) => ({
+          kind,
+          name,
+          src,
+        })),
+        modelAssets: uploadedModelAssets,
+      });
+      if (result.missingAssetCount) {
+        window.alert(
+          `Saved. ${result.missingAssetCount} file(s) could not be read and are not in the project file.`,
+        );
+      }
+    } catch (error) {
+      window.alert(
+        `The project file could not be saved.${
+          error instanceof Error && error.message ? ` ${error.message}` : ""
+        }`,
+      );
+    } finally {
+      setProjectFileBusy(false);
+    }
+  };
+
+  const openProjectFile = () => {
+    if (projectFileBusy) return;
+    projectFileInputRef.current?.click();
+  };
+
+  const handleProjectFileChosen = async (
+    event: ChangeEvent<HTMLInputElement>,
+  ) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    const hasWork =
+      pages.length > 1 ||
+      pages.some(
+        (page) => page.elements.length > 0 || (page.objects3d?.length ?? 0) > 0,
+      );
+    if (
+      hasWork &&
+      !window.confirm(
+        "Open this project file? It replaces the scenes in this tab. You can undo with Ctrl+Z.",
+      )
+    ) {
+      return;
+    }
+    setProjectFileBusy(true);
+    try {
+      const result = await readProjectFile(file, {
+        storeModelAsset: (metadata, blob) =>
+          storeModelAsset(projectId, metadata, blob),
+      });
+      setPenDraft(null);
+      setEditingTextId(null);
+      setEditingPageId(null);
+      setNodeEditElementId(null);
+      setSelectedPenNodes([]);
+      setSelectedPenHandles([]);
+      setSelectedGuideIds([]);
+      setArtboardSelected(false);
+      previewLogicStateRef.current = null;
+      setPreviewVisible(false);
+      replaceDocument(result.snapshot);
+
+      const importedMedia: UploadedMediaAsset[] = result.library.media.map(
+        ({ kind, name, src }) => ({ kind, name, src }),
+      );
+      const importedSources = new Set(importedMedia.map((asset) => asset.src));
+      setUploadedAssets((current) => [
+        ...importedMedia,
+        ...current.filter((asset) => !importedSources.has(asset.src)),
+      ]);
+      const importedModelIds = new Set(
+        result.library.modelAssets.map((asset) => asset.id),
+      );
+      setUploadedModelAssets((current) => [
+        ...result.library.modelAssets,
+        ...current.filter((asset) => !importedModelIds.has(asset.id)),
+      ]);
+      for (const { blob, kind, name, src } of result.library.media) {
+        const mediaFile = new File([blob], name, { type: blob.type });
+        void createMediaPoster(mediaFile, src, { kind }).then((previewSrc) => {
+          if (!previewSrc) return;
+          setUploadedAssets((current) =>
+            current.map((asset) =>
+              asset.src === src ? { ...asset, previewSrc } : asset,
+            ),
+          );
+        });
+      }
+      if (result.missingAssetCount) {
+        window.alert(
+          `Opened. ${result.missingAssetCount} file(s) were already missing when this project was saved.`,
+        );
+      }
+    } catch (error) {
+      window.alert(
+        error instanceof ProjectFileError
+          ? error.message
+          : "This project file could not be opened.",
+      );
+    } finally {
+      setProjectFileBusy(false);
+    }
+  };
+
+  projectFileActionsRef.current = {
+    open: openProjectFile,
+    save: () => void saveProjectFile(),
+  };
+
   const addAssetToPage = (asset: UploadedMediaAsset) => {
     const { kind, src } = asset;
     const count =
@@ -4805,9 +4965,20 @@ export function EditorShell({
           <button className="send-button" type="button">
             SEND
           </button>
-          <button aria-label="More" className="more-button" type="button">
-            <MoreVertical size={15} />
-          </button>
+          <ProjectFileMenu
+            busy={projectFileBusy}
+            onOpen={openProjectFile}
+            onSave={() => void saveProjectFile()}
+          />
+          <input
+            accept={`${PROJECT_FILE_EXTENSION},${PROJECT_FILE_MIME_TYPE}`}
+            aria-label="Open project file"
+            hidden
+            onChange={(event) => void handleProjectFileChosen(event)}
+            ref={projectFileInputRef}
+            tabIndex={-1}
+            type="file"
+          />
         </div>
       </header>
 
@@ -4939,6 +5110,23 @@ export function EditorShell({
                     setArtboardSelected(false);
                   }}
                   onKeyDown={(event) => {
+                    if (
+                      (event.key === "Delete" || event.key === "Backspace") &&
+                      event.target === event.currentTarget
+                    ) {
+                      // Deleting a scene takes a key press on the focused
+                      // scene itself; holding the key does not delete more.
+                      event.preventDefault();
+                      event.stopPropagation();
+                      if (event.repeat || pages.length <= 1) return;
+                      finishPenPath();
+                      if (activePageId !== page.id) setActivePageId(page.id);
+                      removePage();
+                      setNodeEditElementId(null);
+                      setSelectedGuideIds([]);
+                      setArtboardSelected(false);
+                      return;
+                    }
                     if (event.key === "Enter" || event.key === " ") {
                       event.preventDefault();
                       finishPenPath();
@@ -6146,22 +6334,29 @@ export function EditorShell({
         </output>
       </aside>
       {previewVisible ? (
-        <ViewerPreview
+        <PreviewErrorBoundary
           key={`${activePageId}:${previewEpoch}`}
-          advancedSound={advancedSoundSettings}
-          artboard={artboard}
-          backgroundMusic={backgroundMusicSettings}
-          elements={elements}
-          mixer={soundMixerSettings}
-          objects3d={objects3d}
           onClose={() => {
             previewLogicStateRef.current = null;
             setPreviewVisible(false);
           }}
-          onInteractionEvent={handleViewerInteractionEvent}
-          projectId={projectId}
-          scene3d={activePage?.scene3d}
-        />
+        >
+          <ViewerPreview
+            advancedSound={advancedSoundSettings}
+            artboard={artboard}
+            backgroundMusic={backgroundMusicSettings}
+            elements={elements}
+            mixer={soundMixerSettings}
+            objects3d={objects3d}
+            onClose={() => {
+              previewLogicStateRef.current = null;
+              setPreviewVisible(false);
+            }}
+            onInteractionEvent={handleViewerInteractionEvent}
+            projectId={projectId}
+            scene3d={activePage?.scene3d}
+          />
+        </PreviewErrorBoundary>
       ) : null}
     </main>
   );

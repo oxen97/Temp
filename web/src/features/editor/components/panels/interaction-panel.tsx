@@ -1137,6 +1137,47 @@ export function InteractionPanel({
   const selectedMotion = motionChoices.some((option) => option.value === motion)
     ? motion
     : (motionChoices[0]?.value ?? "direct");
+  // The HOW list depends on the trigger, mapping and effect, and shows its
+  // first entry when the stored motion is not in it. A change to any of those
+  // therefore stores the motion HOW will show; before, a hidden Gravity stayed
+  // in the data and Preview dropped the shape while HOW said Direct.
+  const motionAfterChange = (next: {
+    effect?: string;
+    groupEffect?: string;
+    mapping?: string;
+    trigger?: string;
+  }) => {
+    const nextTrigger = next.trigger ?? trigger;
+    const nextMappingChoices = getMappingOptions(nextTrigger, threeDContext);
+    const requestedMapping = next.mapping ?? mapping;
+    const nextMapping = nextMappingChoices.some(
+      (option) => option.value === requestedMapping,
+    )
+      ? requestedMapping
+      : (nextMappingChoices[0]?.value ?? "");
+    const nextEffectChoices = getEffectOptions(
+      selectedTypes,
+      nextTrigger,
+      threeDContext,
+    );
+    const requestedEffect = next.effect ?? effect;
+    const nextEffect = nextEffectChoices.some(
+      (option) => option.value === requestedEffect,
+    )
+      ? requestedEffect
+      : (nextEffectChoices[0]?.value ?? requestedEffect);
+    const nextChoices = getMotionOptions(
+      nextTrigger,
+      nextMapping,
+      nextEffect,
+      next.groupEffect ?? groupEffect,
+    );
+    // Keep what HOW shows now when it still fits, so the visible choice does
+    // not jump; otherwise take the first motion HOW will list.
+    return nextChoices.some((option) => option.value === selectedMotion)
+      ? selectedMotion
+      : (nextChoices[0]?.value ?? "direct");
+  };
   const isStacking =
     activeEffect === "stack-on-target" ||
     (selectedMotion === "gravity" && gravityContact === "stack");
@@ -1638,6 +1679,11 @@ export function InteractionPanel({
                 nextTrigger,
                 threeDContext,
               ).some((option) => option.value === effect);
+              const nextMotion = motionAfterChange({
+                effect: effectIsSupported ? effect : "move",
+                mapping: nextMapping,
+                trigger: nextTrigger,
+              });
               if (authoredInteraction && selectedElementId && onUpdateInteraction) {
                 onUpdateInteraction(selectedElementId, authoredInteraction.id, {
                   trigger: nextTrigger,
@@ -1649,6 +1695,7 @@ export function InteractionPanel({
                     ? { collisionTarget: firstTarget }
                     : {}),
                   ...(!effectIsSupported ? { effect: "move", name: "Move" } : {}),
+                  ...(nextMotion !== motion ? { motion: nextMotion } : {}),
                 });
                 return;
               }
@@ -1662,6 +1709,7 @@ export function InteractionPanel({
               if (!effectIsSupported) {
                 setEffect("move");
               }
+              if (nextMotion !== motion) setMotion(nextMotion);
             }}
             value={trigger}
           />
@@ -2108,7 +2156,18 @@ export function InteractionPanel({
               ariaLabel="Input mapping"
               className="interaction-dropdown"
               noScroll
-              onChange={setMapping}
+              onChange={(nextMapping) => {
+                const nextMotion = motionAfterChange({ mapping: nextMapping });
+                if (authoredInteraction && selectedElementId && onUpdateInteraction) {
+                  onUpdateInteraction(selectedElementId, authoredInteraction.id, {
+                    mapping: nextMapping,
+                    ...(nextMotion !== motion ? { motion: nextMotion } : {}),
+                  });
+                  return;
+                }
+                setMapping(nextMapping);
+                if (nextMotion !== motion) setMotion(nextMotion);
+              }}
               options={mappingChoices}
               value={selectedMapping}
             />
@@ -2382,6 +2441,7 @@ export function InteractionPanel({
                     .filter((item) => selectedElementIds.includes(item.id))
                     .map((item) => item.id)
                 : [];
+              const nextMotion = motionAfterChange({ effect: nextEffect });
               if (authoredInteraction && selectedElementId && onUpdateInteraction)
                 onUpdateInteraction(selectedElementId, authoredInteraction.id, {
                   effect: nextEffect,
@@ -2398,6 +2458,7 @@ export function InteractionPanel({
                   ...(firstModalTarget && !currentModalTargetIsValid
                     ? { modalTarget: firstModalTarget }
                     : {}),
+                  ...(nextMotion !== motion ? { motion: nextMotion } : {}),
                 });
               else {
                 setEffect(nextEffect);
@@ -2409,6 +2470,7 @@ export function InteractionPanel({
                   setCollisionTarget(firstPlacementTarget);
                 if (firstModalTarget && !currentModalTargetIsValid)
                   setModalTarget(firstModalTarget);
+                if (nextMotion !== motion) setMotion(nextMotion);
               }
             }}
             options={effectChoices}
@@ -2445,7 +2507,20 @@ export function InteractionPanel({
               ariaLabel="Group child effect"
               className="interaction-dropdown"
               noScroll
-              onChange={setGroupEffect}
+              onChange={(nextGroupEffect) => {
+                const nextMotion = motionAfterChange({
+                  groupEffect: nextGroupEffect,
+                });
+                if (authoredInteraction && selectedElementId && onUpdateInteraction) {
+                  onUpdateInteraction(selectedElementId, authoredInteraction.id, {
+                    groupEffect: nextGroupEffect,
+                    ...(nextMotion !== motion ? { motion: nextMotion } : {}),
+                  });
+                  return;
+                }
+                setGroupEffect(nextGroupEffect);
+                if (nextMotion !== motion) setMotion(nextMotion);
+              }}
               options={effectChoices.filter(
                 (option) => option.value !== "group-animation",
               )}

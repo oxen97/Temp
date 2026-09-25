@@ -2829,6 +2829,60 @@ describe("EditorShell", () => {
     expect(useEditorStore.getState().activePageId).not.toBe("page-1");
   });
 
+  describe("deleting scenes", () => {
+    beforeEach(() => {
+      useEditorStore.setState({
+        activePageId: "page-1",
+        pages: [
+          { elements: [], id: "page-1", name: "Intro" },
+          { elements: [], id: "page-2", name: "Middle" },
+          { elements: [], id: "page-3", name: "Outro" },
+        ],
+      });
+    });
+
+    const pageIds = () =>
+      useEditorStore.getState().pages.map((page) => page.id);
+    const sceneItem = (name: string) => {
+      const item = screen.getByText(name).closest(".scene-item");
+      if (!(item instanceof HTMLElement)) throw new Error(`No scene ${name}`);
+      return item;
+    };
+
+    it("keeps every scene when Delete is pressed with nothing selected", () => {
+      render(<EditorShell />);
+      fireEvent.keyDown(window, { key: "Delete" });
+      fireEvent.keyDown(window, { key: "Delete", repeat: true });
+      fireEvent.keyDown(window, { key: "Backspace" });
+      expect(pageIds()).toEqual(["page-1", "page-2", "page-3"]);
+    });
+
+    it("deletes the focused scene once, even while the key is held", () => {
+      render(<EditorShell />);
+      const middle = sceneItem("Middle");
+      middle.focus();
+      fireEvent.keyDown(middle, { key: "Delete" });
+      expect(pageIds()).toEqual(["page-1", "page-3"]);
+
+      const outro = sceneItem("Outro");
+      outro.focus();
+      fireEvent.keyDown(outro, { key: "Delete", repeat: true });
+      expect(pageIds()).toEqual(["page-1", "page-3"]);
+
+      useEditorStore.getState().undo();
+      expect(pageIds()).toEqual(["page-1", "page-2", "page-3"]);
+    });
+
+    it("never deletes the last scene", () => {
+      useEditorStore.setState({
+        pages: [{ elements: [], id: "page-1", name: "Intro" }],
+      });
+      render(<EditorShell />);
+      fireEvent.keyDown(sceneItem("Intro"), { key: "Delete" });
+      expect(pageIds()).toEqual(["page-1"]);
+    });
+  });
+
   it("locks all selected layers when one selected layer lock is toggled", () => {
     const elements = [
       {

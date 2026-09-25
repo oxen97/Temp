@@ -3772,7 +3772,7 @@ test("shows Alt distance from a selected layer to a guide", async ({
   await expect(page.locator(".distance-measurement")).toHaveCount(0);
 });
 
-test("deletes the active page while preserving the final page", async ({
+test("deletes a scene only from its focused item and keeps the final page", async ({
   page,
 }) => {
   test.skip(
@@ -3782,12 +3782,29 @@ test("deletes the active page while preserving the final page", async ({
   await waitForEditor(page);
 
   await page.getByRole("button", { name: "Add scene" }).click();
-  await expect(page.locator(".scene-item")).toHaveCount(2);
-  await page.keyboard.press("Delete");
-  await expect(page.locator(".scene-item")).toHaveCount(1);
+  await page.getByRole("button", { name: "Add scene" }).click();
+  const scenes = page.locator(".scene-item");
+  await expect(scenes).toHaveCount(3);
 
+  // With nothing selected, Delete must not remove the current scene.
   await page.keyboard.press("Delete");
-  await expect(page.locator(".scene-item")).toHaveCount(1);
+  await expect(scenes).toHaveCount(3);
+
+  // Holding Delete on a focused scene removes that one scene only.
+  await scenes.nth(2).focus();
+  await page.keyboard.down("Delete");
+  await page.keyboard.down("Delete");
+  await page.keyboard.down("Delete");
+  await page.keyboard.up("Delete");
+  await expect(scenes).toHaveCount(2);
+
+  await scenes.nth(1).focus();
+  await page.keyboard.press("Delete");
+  await expect(scenes).toHaveCount(1);
+
+  await scenes.first().focus();
+  await page.keyboard.press("Delete");
+  await expect(scenes).toHaveCount(1);
 });
 
 test("renames scenes and layers with a double click", async ({ page }) => {
