@@ -86,6 +86,8 @@ stays front-facing. Full rules are in `INTERACTION-TAB.md` ("Camera Rotate 실�
 | HOW | Direct (continuous input follows Smoothing; events use Duration, Delay, Easing), Spring, Bounce, Inertia (a flick keeps turning; Initial velocity, Friction, Deceleration). Reduced motion moves directly |
 | Projection | The first enabled camera effect on the page sets the Preview camera's Projection and Field of view (1–160°). Orthographic orbits stay outside every object |
 | Gestures | Entire-artwork drags start anywhere except on an element or object that owns a click, drag or drop gesture. 3D Selected-object drags use screen-space movement |
+| Sound | An entire-artwork drag plays the host element's Drag sounds (drag start, while dragging, drop) wherever it starts; a press on the host itself is heard once, through the host |
+| Sky | With SCENES → Background → Image → Rotate with Camera (added 2026-09-27; rules in `SCENES-TAB.md`), the background image is drawn in the 3D layer as a 360° equirectangular sky from the live camera, behind every object, and turns with each orbit. The editor shows the camera's first view as a still |
 
 Validation: unit tests cover input mapping, persistence, pitch limits, inertia
 (including sparse pointer samples on slow devices), springs, eased and delayed
@@ -96,7 +98,11 @@ Drag / Entire artwork → Camera Rotate in the panel, checks persistence after a
 panel remount, drags in Preview, confirms Keep final state, and confirms a new
 Preview starts from the authored camera. The AMOUS Playground 08 SPACE browser
 checks cover drag, keep, inertia, buttons that do not turn the camera, and
-dragging from a 2D title.
+dragging from a 2D title, plus the sky turning with the camera and the
+caption's swoosh during a drag anywhere. A second Playwright case uploads a
+panorama, turns on Rotate with Camera, and checks the editor still and the sky
+turning in Preview; unit tests cover the host's Drag sounds and the sky
+wiring.
 
 ## Planned controls that this expansion does not implement
 

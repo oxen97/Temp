@@ -24,6 +24,7 @@ export const EditorNavigator = memo(function EditorNavigator({
   mediaPreviewSources,
   onZoomIn,
   onZoomOut,
+  sceneId,
   viewportStore,
   visible,
   zoom,
@@ -33,6 +34,7 @@ export const EditorNavigator = memo(function EditorNavigator({
   mediaPreviewSources: Record<string, string | undefined>;
   onZoomIn: () => void;
   onZoomOut: () => void;
+  sceneId?: string;
   viewportStore: NavigatorViewportStore;
   visible: boolean;
   zoom: number;
@@ -108,7 +110,11 @@ export const EditorNavigator = memo(function EditorNavigator({
               width: navigatorBoard.width,
             }}
           >
-            <ArtboardBackground artboard={artboard} playVideo={false} />
+            <ArtboardBackground
+              artboard={artboard}
+              playVideo={false}
+              sceneId={sceneId}
+            />
             <NavigatorMinimapElements
               elements={elements}
               mediaPreviewSources={mediaPreviewSources}

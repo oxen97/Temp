@@ -1,6 +1,11 @@
 import { create } from "zustand";
 
 import type { InteractionDefinition } from "@/features/editor/lib/interaction-model";
+import {
+  effectiveSceneBackground,
+  sceneBackgroundOf,
+  withSceneBackground,
+} from "@/features/editor/lib/scene-background";
 import type { SceneLogicRule } from "@/features/editor/lib/scene-logic";
 import type { PathPoint, VectorPath } from "@/features/editor/lib/vector-types";
 import {
@@ -222,6 +227,11 @@ export type EditorPage = {
   logicRules?: SceneLogicRule[];
   objects3d?: Object3DElement[];
   scene3d?: Scene3DSettings;
+  /**
+   * The scene's own background. Without it the scene shows the common
+   * background kept on the artboard (see lib/scene-background).
+   */
+  background?: SceneBackgroundSettings;
   backgroundMusic?: BackgroundMusicSettings;
   advancedSound?: SoundAdvancedSettings;
   soundMixer?: SoundMixerSettings;
@@ -260,7 +270,43 @@ export type ArtboardSettings = {
   backgroundAutoPlay?: boolean;
   backgroundLoop?: boolean;
   backgroundMute?: boolean;
+  /**
+   * On scenes with Camera Rotate, the background image is a 360° sky around
+   * the 3D camera and turns with it (see lib/scene-background).
+   */
+  backgroundRotateWithCamera?: boolean;
 };
+
+/** The background fields a scene can set for itself; the rest stay common. */
+export type SceneBackgroundKey =
+  | "background"
+  | "backgroundType"
+  | "backgroundSolidEnabled"
+  | "backgroundGradientEnabled"
+  | "backgroundMediaType"
+  | "backgroundOpacity"
+  | "gradientType"
+  | "gradientAngle"
+  | "gradientStartColor"
+  | "gradientEndColor"
+  | "gradientStartOpacity"
+  | "gradientEndOpacity"
+  | "gradientStops"
+  | "backgroundImage"
+  | "backgroundVideo"
+  | "backgroundMediaPreview"
+  | "backgroundMediaPreviewSource"
+  | "backgroundImageFit"
+  | "backgroundImageOpacity"
+  | "backgroundAutoPlay"
+  | "backgroundLoop"
+  | "backgroundMute"
+  | "backgroundRotateWithCamera";
+
+export type SceneBackgroundSettings = Pick<
+  ArtboardSettings,
+  SceneBackgroundKey
+>;
 
 type EditorSnapshot = {
   pages: EditorPage[];
@@ -292,6 +338,21 @@ export type EditorState = {
   setSelectedItems: (elementIds: string[], object3DIds: string[]) => void;
   setZoom: (zoom: number) => void;
   updateArtboard: (updates: Partial<ArtboardSettings>) => void;
+  /**
+   * Edits the background of scene `pageId` only. A scene that still shows the
+   * common background starts its own from it.
+   */
+  updateSceneBackground: (
+    pageId: string,
+    updates: Partial<SceneBackgroundSettings>,
+  ) => void;
+  /** Makes scene `pageId`'s background the common one for every scene. */
+  applySceneBackgroundToAll: (pageId: string) => void;
+  /**
+   * Stores a poster that finished after its upload on every background (and
+   * undo step) that shows `source`, without adding an undo step of its own.
+   */
+  setBackgroundMediaPreview: (source: string, preview: string) => void;
   updateBackgroundMusic: (updates: Partial<BackgroundMusicSettings>) => void;
   updateAdvancedSound: (updates: Partial<SoundAdvancedSettings>) => void;
   updateSoundMixer: (updates: Partial<SoundMixerSettings>) => void;
@@ -401,6 +462,9 @@ function clonePages(pages: EditorPage[]) {
     logicRules: page.logicRules ? structuredClone(page.logicRules) : undefined,
     objects3d: page.objects3d?.map(cloneObject3D),
     scene3d: page.scene3d ? resolveScene3DSettings(page.scene3d) : undefined,
+    ...(page.background
+      ? { background: sceneBackgroundOf(page.background) }
+      : {}),
     backgroundMusic: page.backgroundMusic
       ? {
           ...page.backgroundMusic,
@@ -492,6 +556,47 @@ function cloneArtboard(artboard: ArtboardSettings): ArtboardSettings {
   return {
     ...artboard,
     gradientStops: artboard.gradientStops?.map((stop) => ({ ...stop })),
+  };
+}
+
+function withoutOwnBackground(page: EditorPage): EditorPage {
+  if (!page.background) return page;
+  const next = { ...page };
+  delete next.background;
+  return next;
+}
+
+/** Adds a finished poster to the artboard and scene backgrounds showing `source`. */
+function withBackgroundMediaPreview(
+  artboard: ArtboardSettings,
+  pages: EditorPage[],
+  source: string,
+  preview: string,
+) {
+  const nextArtboard =
+    artboard.backgroundMediaPreviewSource === source &&
+    artboard.backgroundMediaPreview !== preview
+      ? { ...artboard, backgroundMediaPreview: preview }
+      : artboard;
+  let pagesChanged = false;
+  const nextPages = pages.map((page) => {
+    const background = page.background;
+    if (
+      !background ||
+      background.backgroundMediaPreviewSource !== source ||
+      background.backgroundMediaPreview === preview
+    ) {
+      return page;
+    }
+    pagesChanged = true;
+    return {
+      ...page,
+      background: { ...background, backgroundMediaPreview: preview },
+    };
+  });
+  return {
+    artboard: nextArtboard,
+    pages: pagesChanged ? nextPages : pages,
   };
 }
 
@@ -724,6 +829,61 @@ export const useEditorStore = create<EditorState>((set) => ({
         pages,
         past: pushHistory(state),
         future: [],
+      };
+    }),
+  updateSceneBackground: (pageId, updates) =>
+    set((state) => {
+      const page = state.pages.find((item) => item.id === pageId);
+      if (!page) return state;
+      // Unset fields are dropped, so turning a layer off leaves no stale key.
+      const background = sceneBackgroundOf({
+        ...effectiveSceneBackground(state.artboard, page),
+        ...updates,
+      });
+      return {
+        pages: state.pages.map((item) =>
+          item.id === pageId ? { ...item, background } : item,
+        ),
+        past: pushHistory(state),
+        future: [],
+      };
+    }),
+  applySceneBackgroundToAll: (pageId) =>
+    set((state) => {
+      const page = state.pages.find((item) => item.id === pageId);
+      if (!page || state.pages.every((item) => !item.background)) return state;
+      return {
+        artboard: page.background
+          ? withSceneBackground(state.artboard, page.background)
+          : state.artboard,
+        pages: state.pages.map(withoutOwnBackground),
+        past: pushHistory(state),
+        future: [],
+      };
+    }),
+  setBackgroundMediaPreview: (source, preview) =>
+    set((state) => {
+      const patchSnapshot = (snapshot: EditorSnapshot) => {
+        const patched = withBackgroundMediaPreview(
+          snapshot.artboard,
+          snapshot.pages,
+          source,
+          preview,
+        );
+        return patched.artboard === snapshot.artboard &&
+          patched.pages === snapshot.pages
+          ? snapshot
+          : { ...snapshot, ...patched };
+      };
+      return {
+        ...withBackgroundMediaPreview(
+          state.artboard,
+          state.pages,
+          source,
+          preview,
+        ),
+        past: state.past.map(patchSnapshot),
+        future: state.future.map(patchSnapshot),
       };
     }),
   updateBackgroundMusic: (updates) =>

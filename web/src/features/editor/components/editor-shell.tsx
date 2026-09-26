@@ -165,6 +165,7 @@ import {
   prepareRulerCanvas,
   rulerSize,
 } from "@/features/editor/lib/rulers";
+import { artboardForScene } from "@/features/editor/lib/scene-background";
 import {
   expandGroupedSelection,
   selectionIdsForElement,
@@ -177,6 +178,7 @@ import {
   buildSmartSnap,
 } from "@/features/editor/lib/smart-guides";
 import { useInteractionSoundAssets } from "@/features/editor/hooks/use-interaction-sound-assets";
+import { useCameraSkyBackground } from "@/features/editor/hooks/use-camera-sky-background";
 import {
   clearOrphanedVectorHandles,
   cloneVectorPaths,
@@ -210,6 +212,10 @@ import {
   LOCAL_PROJECT_ID,
   storeModelAsset,
 } from "@/features/editor/three/model-assets";
+import {
+  cameraSkyForScene,
+  sceneUsesCameraRotate,
+} from "@/features/editor/three/camera-sky";
 import { createAssetObject3D } from "@/features/editor/three/object-factory";
 import {
   spatialTransformToWorld,
@@ -253,6 +259,7 @@ export function EditorShell({
     addInteraction,
     addObject3D,
     addPage,
+    applySceneBackgroundToAll,
     artboard,
     checkpoint,
     clipboardLength,
@@ -274,6 +281,7 @@ export function EditorShell({
     selectedShape,
     setActivePageId,
     setActiveTool,
+    setBackgroundMediaPreview,
     setPageLogicRules,
     setSelectedElementIds,
     setSelectedItems,
@@ -290,12 +298,35 @@ export function EditorShell({
     updateElements,
     updateInteraction,
     updateObject3D,
+    updateSceneBackground,
     updateSoundMixer,
     zoom,
   } = useEditorShellStore();
   const activePage = pages.find((page) => page.id === activePageId) ?? pages[0];
   const elements = useMemo(() => activePage?.elements ?? [], [activePage]);
   const objects3d = useMemo(() => activePage?.objects3d ?? [], [activePage]);
+  // The common artboard with the active scene's own background, and that as
+  // the canvas draws it (a "Rotate with Camera" sky seen at rest).
+  const activeSceneArtboard = artboardForScene(artboard, activePage);
+  const activeScene3d = activePage?.scene3d;
+  const cameraSkyAvailable = useMemo(
+    () => sceneUsesCameraRotate([...elements, ...objects3d]),
+    [elements, objects3d],
+  );
+  const activeCameraSky = useMemo(
+    () =>
+      cameraSkyForScene(
+        activeSceneArtboard,
+        [...elements, ...objects3d],
+        activeScene3d,
+      ),
+    [activeScene3d, activeSceneArtboard, elements, objects3d],
+  );
+  const activeDisplayArtboard = useCameraSkyBackground(
+    activeSceneArtboard,
+    activeCameraSky,
+  );
+  const canApplyBackgroundToAll = pages.some((page) => page.background);
   const threeDemoSeededRef = useRef(false);
   const interactionDemoSeededRef = useRef(false);
   const monDemoSeededRef = useRef(false);
@@ -5146,12 +5177,13 @@ export function EditorShell({
                 >
                   <span className="scene-node" />
                   <ScenePreview
-                    artboard={artboard}
+                    artboard={artboardForScene(artboard, page)}
                     elements={page.elements}
                     mediaPreviewSources={mediaPreviewSources}
                     objects3d={page.objects3d}
                     projectId={projectId}
                     scene3d={page.scene3d}
+                    sceneId={page.id}
                   />
                   <span className="scene-copy">
                     <strong>{String(index + 1).padStart(2, "0")}</strong>
@@ -5446,7 +5478,10 @@ export function EditorShell({
           role="application"
           style={artboardStyle}
         >
-          <ArtboardBackground artboard={artboard} />
+          <ArtboardBackground
+            artboard={activeDisplayArtboard}
+            sceneId={activePageId}
+          />
           <Artboard3DSceneWithViewport
             artboardHeight={artboard.height}
             artboardWidth={artboard.width}
@@ -6118,11 +6153,12 @@ export function EditorShell({
         ) : null}
 
         <EditorNavigator
-          artboard={artboard}
+          artboard={activeDisplayArtboard}
           elements={elements}
           mediaPreviewSources={mediaPreviewSources}
           onZoomIn={navigatorHandlers.onZoomIn}
           onZoomOut={navigatorHandlers.onZoomOut}
+          sceneId={activePageId}
           viewportStore={navigatorViewportStore}
           visible={navigatorVisible}
           zoom={zoom}
@@ -6242,10 +6278,15 @@ export function EditorShell({
           <ScenePanel
             activePageId={activePageId}
             activePageName={activePage?.name ?? "Page"}
-            artboard={artboard}
+            artboard={activeSceneArtboard}
+            cameraSkyAvailable={cameraSkyAvailable}
+            canApplyBackgroundToAll={canApplyBackgroundToAll}
             key={activePageId}
+            onApplyBackgroundToAll={applySceneBackgroundToAll}
+            onBackgroundMediaPreview={setBackgroundMediaPreview}
             onRenamePage={renamePage}
             onUpdateArtboard={updateArtboard}
+            onUpdateBackground={updateSceneBackground}
           />
         ) : visiblePropertyTab === "sound" ? (
           <SoundPanel
@@ -6343,7 +6384,7 @@ export function EditorShell({
         >
           <ViewerPreview
             advancedSound={advancedSoundSettings}
-            artboard={artboard}
+            artboard={activeSceneArtboard}
             backgroundMusic={backgroundMusicSettings}
             elements={elements}
             mixer={soundMixerSettings}

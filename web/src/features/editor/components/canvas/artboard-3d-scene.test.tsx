@@ -1,7 +1,7 @@
 import { useFrame, useThree } from "@react-three/fiber";
-import { fireEvent, render } from "@testing-library/react";
+import { fireEvent, render, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { Group, Plane, Ray, Vector3 } from "three";
+import { Group, Plane, Ray, Texture, Vector3 } from "three";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -19,6 +19,17 @@ import {
   sceneRenderViewport,
   type ScreenPointToWorld3D,
 } from "./artboard-3d-scene";
+
+vi.mock("@/features/editor/three/camera-sky", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/features/editor/three/camera-sky")>();
+  return {
+    ...actual,
+    loadCameraSkyTexture: vi.fn(async () =>
+      actual.prepareCameraSkyTexture(new Texture()),
+    ),
+  };
+});
 
 vi.mock("@react-three/fiber", async () => {
   const { OrthographicCamera } = await import("three");
@@ -580,5 +591,52 @@ describe("Artboard3DScene camera rig", () => {
     expect(
       pressed(turn({ trigger: "drag", triggerArea: "entire-artwork" })),
     ).toBe(false);
+  });
+});
+
+describe("Artboard3DScene camera sky", () => {
+  const sky = { fov: 40, opacity: 1, src: "blob:night-sky" };
+
+  it("draws the Preview sky even on a scene without 3D objects", async () => {
+    const { container } = render(
+      <Artboard3DScene
+        artboardHeight={1080}
+        artboardWidth={1920}
+        objects={[]}
+        sky={sky}
+      />,
+    );
+    expect(
+      container.querySelector('[data-testid="three-canvas"]'),
+    ).not.toBeNull();
+    await waitFor(() =>
+      expect(container.querySelector('mesh[name="Camera sky"]')).not.toBeNull(),
+    );
+  });
+
+  it("leaves the sky out of the editor canvas and draws nothing without it", () => {
+    const editor = render(
+      <Artboard3DScene
+        artboardHeight={1080}
+        artboardWidth={1920}
+        objects={[]}
+        sky={sky}
+        viewport={{ height: 1080, width: 1920, x: 0, y: 0 }}
+      />,
+    );
+    expect(
+      editor.container.querySelector('[data-testid="three-canvas"]'),
+    ).toBeNull();
+    editor.unmount();
+    const empty = render(
+      <Artboard3DScene
+        artboardHeight={1080}
+        artboardWidth={1920}
+        objects={[]}
+      />,
+    );
+    expect(
+      empty.container.querySelector('[data-testid="three-canvas"]'),
+    ).toBeNull();
   });
 });

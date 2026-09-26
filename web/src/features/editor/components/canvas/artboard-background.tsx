@@ -15,11 +15,14 @@ export function ArtboardBackground({
   artboard,
   playVideo = true,
   paused = false,
+  sceneId,
 }: {
   artboard: ArtboardSettings;
   playVideo?: boolean;
   /** Holds the background video, e.g. while a modal backdrop covers it. */
   paused?: boolean;
+  /** The scene shown, so a live edit can reach only that scene's layers. */
+  sceneId?: string;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const mediaType = backgroundMediaType(artboard);
@@ -47,7 +50,11 @@ export function ArtboardBackground({
   }, [autoPlay, artboard.backgroundVideo]);
 
   return (
-    <div aria-hidden="true" className="artboard-background">
+    <div
+      aria-hidden="true"
+      className="artboard-background"
+      data-scene-id={sceneId}
+    >
       {hasSolidBackground(artboard) ? (
         <span
           className="artboard-background-layer"

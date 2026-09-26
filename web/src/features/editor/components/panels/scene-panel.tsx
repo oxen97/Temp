@@ -22,7 +22,10 @@ import {
 import { colorWithOpacity } from "@/features/editor/lib/element-style";
 import { clamp } from "@/features/editor/lib/geometry";
 import { createMediaPoster } from "@/features/editor/lib/media-poster";
-import { type ArtboardSettings } from "@/features/editor/store/editor-store";
+import {
+  type ArtboardSettings,
+  type SceneBackgroundSettings,
+} from "@/features/editor/store/editor-store";
 import { assetPath } from "@/lib/asset-path";
 
 // Memoized: every prop the editor shell passes is stable between unrelated
@@ -32,14 +35,32 @@ export const ScenePanel = memo(function ScenePanel({
   activePageId,
   activePageName,
   artboard,
+  cameraSkyAvailable = false,
+  canApplyBackgroundToAll = false,
+  onApplyBackgroundToAll,
+  onBackgroundMediaPreview,
   onRenamePage,
   onUpdateArtboard,
+  onUpdateBackground,
 }: {
   activePageId: string;
   activePageName: string;
+  /** The common artboard settings with this scene's own background. */
   artboard: ArtboardSettings;
+  /** The scene has Camera Rotate, so its image can turn with the camera. */
+  cameraSkyAvailable?: boolean;
+  /** Some scene has its own background that "Apply to All Scenes" replaces. */
+  canApplyBackgroundToAll?: boolean;
+  onApplyBackgroundToAll: (pageId: string) => void;
+  onBackgroundMediaPreview: (source: string, preview: string) => void;
   onRenamePage: (pageId: string, name: string) => void;
+  /** Page size, type and viewport: common to every scene. */
   onUpdateArtboard: (updates: Partial<ArtboardSettings>) => void;
+  /** Background: this scene only. */
+  onUpdateBackground: (
+    pageId: string,
+    updates: Partial<SceneBackgroundSettings>,
+  ) => void;
 }) {
   const [pageNameDraft, setPageNameDraft] = useState<string | null>(null);
   const backgroundUploadRef = useRef<HTMLInputElement>(null);
@@ -56,6 +77,10 @@ export const ScenePanel = memo(function ScenePanel({
   const backgroundMedia = isVideoBackground
     ? artboard.backgroundVideo
     : artboard.backgroundImage;
+  const rotatesWithCamera =
+    cameraSkyAvailable &&
+    mediaBackgroundType === "image" &&
+    Boolean(artboard.backgroundRotateWithCamera);
   const activeBackgroundTypes: SceneBackgroundType[] = [
     ...(solidBackgroundEnabled ? (["solid"] as const) : []),
     ...(gradientBackgroundEnabled ? (["gradation"] as const) : []),
@@ -93,22 +118,25 @@ export const ScenePanel = memo(function ScenePanel({
     });
   };
 
+  const updateBackground = (updates: Partial<SceneBackgroundSettings>) =>
+    onUpdateBackground(activePageId, updates);
+
   const toggleBackgroundType = (type: SceneBackgroundType) => {
     if (type === "solid") {
-      onUpdateArtboard({
+      updateBackground({
         backgroundSolidEnabled: !solidBackgroundEnabled,
         backgroundType: undefined,
       });
       return;
     }
     if (type === "gradation") {
-      onUpdateArtboard({
+      updateBackground({
         backgroundGradientEnabled: !gradientBackgroundEnabled,
         backgroundType: undefined,
       });
       return;
     }
-    onUpdateArtboard({
+    updateBackground({
       backgroundMediaType: mediaBackgroundType === type ? undefined : type,
       backgroundType: undefined,
     });
@@ -118,7 +146,7 @@ export const ScenePanel = memo(function ScenePanel({
     index: number,
     updates: Partial<(typeof gradientStops)[number]>,
   ) => {
-    onUpdateArtboard({
+    updateBackground({
       gradientStops: gradientStops
         .map((stop, stopIndex) =>
           stopIndex === index ? { ...stop, ...updates } : stop,
@@ -141,7 +169,7 @@ export const ScenePanel = memo(function ScenePanel({
     }
     const left = gradientStops[insertAfter];
     const right = gradientStops[insertAfter + 1] ?? left;
-    onUpdateArtboard({
+    updateBackground({
       gradientStops: [
         ...gradientStops,
         {
@@ -173,9 +201,15 @@ export const ScenePanel = memo(function ScenePanel({
     handle.style.left = `calc(${position}% - 3.5px)`;
     const nextGradient = gradientCssFromStops(artboard, nextStops);
     preview.style.background = nextGradient;
+    // Only this scene's canvas, navigator and thumbnail follow the drag.
     document
       .querySelectorAll<HTMLElement>('[data-background-layer="gradient"]')
       .forEach((layer) => {
+        if (
+          layer.closest("[data-scene-id]")?.getAttribute("data-scene-id") !==
+          activePageId
+        )
+          return;
         layer.style.backgroundImage = nextGradient;
       });
   };
@@ -305,6 +339,20 @@ export const ScenePanel = memo(function ScenePanel({
       </div>
       <span aria-hidden="true" className="scene-divider scene-divider-two" />
       <span className="scene-label scene-solid-title">Background</span>
+      {/* The background belongs to this scene; this makes it every scene's. */}
+      <button
+        className="scene-apply-all"
+        disabled={!canApplyBackgroundToAll}
+        onClick={() => onApplyBackgroundToAll(activePageId)}
+        title={
+          canApplyBackgroundToAll
+            ? "Use this scene's background on every scene, including new ones"
+            : "Every scene already uses this background"
+        }
+        type="button"
+      >
+        Apply to All Scenes
+      </button>
       <div className="scene-solid-tabs">
         <SceneModeTabs
           active={activeBackgroundTypes}
@@ -318,7 +366,7 @@ export const ScenePanel = memo(function ScenePanel({
           <div className="scene-solid-color-field">
             <SceneColorField
               ariaLabel="Solid background color"
-              onChange={(background) => onUpdateArtboard({ background })}
+              onChange={(background) => updateBackground({ background })}
               value={artboard.background}
             />
           </div>
@@ -326,7 +374,7 @@ export const ScenePanel = memo(function ScenePanel({
             <ScenePercentField
               ariaLabel="Solid background opacity"
               onChange={(backgroundOpacity) =>
-                onUpdateArtboard({ backgroundOpacity })
+                updateBackground({ backgroundOpacity })
               }
               value={artboard.backgroundOpacity ?? 100}
               wide
@@ -348,7 +396,7 @@ export const ScenePanel = memo(function ScenePanel({
             className="scene-dropdown scene-gradient-type-select"
             noScroll
             onChange={(value) =>
-              onUpdateArtboard({
+              updateBackground({
                 gradientType: value as NonNullable<
                   ArtboardSettings["gradientType"]
                 >,
@@ -382,7 +430,7 @@ export const ScenePanel = memo(function ScenePanel({
               max={360}
               min={0}
               onChange={(event) =>
-                onUpdateArtboard({ gradientAngle: Number(event.target.value) })
+                updateBackground({ gradientAngle: Number(event.target.value) })
               }
               type="number"
               value={artboard.gradientAngle ?? 0}
@@ -503,7 +551,7 @@ export const ScenePanel = memo(function ScenePanel({
                 kind === "video" ||
                 file.type.toLowerCase() === "image/gif" ||
                 /\.gif$/i.test(file.name);
-              onUpdateArtboard(
+              updateBackground(
                 isVideoBackground
                   ? {
                       backgroundMediaPreview: requiresPoster ? "" : source,
@@ -517,12 +565,11 @@ export const ScenePanel = memo(function ScenePanel({
                     },
               );
               if (requiresPoster) {
+                // The poster may finish after another scene is chosen: it goes
+                // to whichever background still shows this file.
                 void createMediaPoster(file, source, { kind }).then(
                   (preview) => {
-                    onUpdateArtboard({
-                      backgroundMediaPreview: preview ?? "",
-                      backgroundMediaPreviewSource: source,
-                    });
+                    if (preview) onBackgroundMediaPreview(source, preview);
                   },
                 );
               }
@@ -551,17 +598,29 @@ export const ScenePanel = memo(function ScenePanel({
             <span>{backgroundMedia ? "Replace" : "Upload"}</span>
           </button>
           <span
-            className="scene-label scene-image-fit-label"
+            className={[
+              "scene-label scene-image-fit-label",
+              rotatesWithCamera ? "is-disabled" : "",
+            ]
+              .filter(Boolean)
+              .join(" ")}
             style={{ top: mediaControlTop + 138 }}
           >
             Fit
           </span>
           <DesignDropdown
             ariaLabel="Background media fit"
-            className="scene-dropdown scene-image-fit-select"
+            className={[
+              "scene-dropdown scene-image-fit-select",
+              rotatesWithCamera ? "is-disabled" : "",
+            ]
+              .filter(Boolean)
+              .join(" ")}
+            // A sky wraps the whole image around the camera: nothing to fit.
+            disabled={rotatesWithCamera}
             noScroll
             onChange={(value) =>
-              onUpdateArtboard({
+              updateBackground({
                 backgroundImageFit: value as NonNullable<
                   ArtboardSettings["backgroundImageFit"]
                 >,
@@ -591,7 +650,7 @@ export const ScenePanel = memo(function ScenePanel({
               max={100}
               min={0}
               onChange={(backgroundImageOpacity) =>
-                onUpdateArtboard({ backgroundImageOpacity })
+                updateBackground({ backgroundImageOpacity })
               }
               value={artboard.backgroundImageOpacity ?? 100}
             />
@@ -603,7 +662,7 @@ export const ScenePanel = memo(function ScenePanel({
             <ScenePercentField
               ariaLabel="Background media opacity"
               onChange={(backgroundImageOpacity) =>
-                onUpdateArtboard({ backgroundImageOpacity })
+                updateBackground({ backgroundImageOpacity })
               }
               value={artboard.backgroundImageOpacity ?? 100}
             />
@@ -618,7 +677,7 @@ export const ScenePanel = memo(function ScenePanel({
                   checked={artboard.backgroundAutoPlay ?? true}
                   label="Auto Play"
                   onChange={(backgroundAutoPlay) =>
-                    onUpdateArtboard({ backgroundAutoPlay })
+                    updateBackground({ backgroundAutoPlay })
                   }
                 />
               </div>
@@ -630,7 +689,7 @@ export const ScenePanel = memo(function ScenePanel({
                   checked={artboard.backgroundLoop ?? true}
                   label="Loop"
                   onChange={(backgroundLoop) =>
-                    onUpdateArtboard({ backgroundLoop })
+                    updateBackground({ backgroundLoop })
                   }
                 />
               </div>
@@ -642,10 +701,31 @@ export const ScenePanel = memo(function ScenePanel({
                   checked={artboard.backgroundMute ?? true}
                   label="Mute"
                   onChange={(backgroundMute) =>
-                    onUpdateArtboard({ backgroundMute })
+                    updateBackground({ backgroundMute })
                   }
                 />
               </div>
+            </>
+          ) : cameraSkyAvailable ? (
+            <>
+              <div
+                className="scene-rotate-with-camera"
+                style={{ top: mediaControlTop + 190 }}
+              >
+                <SceneCheckbox
+                  checked={Boolean(artboard.backgroundRotateWithCamera)}
+                  label="Rotate with Camera"
+                  onChange={(backgroundRotateWithCamera) =>
+                    updateBackground({ backgroundRotateWithCamera })
+                  }
+                />
+              </div>
+              <span
+                className="scene-hint scene-rotate-with-camera-hint"
+                style={{ top: mediaControlTop + 211 }}
+              >
+                360° sky around the 3D camera · a 2:1 panorama fits best
+              </span>
             </>
           ) : null}
         </>

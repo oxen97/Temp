@@ -139,6 +139,7 @@ import {
   type SoundAdvancedSettings,
   type SoundMixerSettings,
 } from "@/features/editor/store/editor-store";
+import { cameraSkyForScene } from "@/features/editor/three/camera-sky";
 import type {
   Object3DElement,
   Scene3DSettings,
@@ -1655,6 +1656,14 @@ export function ViewerPreview({
   const usesCameraRig = cameraSources.some((source) =>
     (source.interactions ?? []).some(isCameraRotateInteraction),
   );
+  // "Rotate with Camera": the background image is a sky the 3D layer draws
+  // from the live camera, so the flat copy behind the page is left out.
+  const cameraSky = usesCameraRig
+    ? cameraSkyForScene(artboard, cameraSources, scene3d)
+    : null;
+  const pageBackground = cameraSky
+    ? { ...artboard, backgroundImage: undefined }
+    : artboard;
   const cameraPointerRows = cameraSources.flatMap((source) =>
     (source.interactions ?? [])
       .filter(
@@ -1703,6 +1712,7 @@ export function ViewerPreview({
       .map((interaction) => ({
         interaction,
         key: `artwork:${source.id}:${interaction.id}`,
+        source,
       })),
   );
   useEffect(() => () => cameraDragSessionRef.current?.finish(), []);
@@ -2791,6 +2801,13 @@ export function ViewerPreview({
     const scaleX = Math.max(0.0001, layout.scaleX);
     const scaleY = Math.max(0.0001, layout.scaleY);
     const drags = artworkCameraDrags;
+    // The drag belongs to the element that hosts the interaction, so its Drag
+    // sounds play wherever the drag starts. A press on the host itself is
+    // already heard through the host's own pointer session.
+    const soundHosts = [
+      ...new Map(drags.map(({ source }) => [source.id, source])).values(),
+    ].filter((source) => source.id !== pressedId);
+    let dragging = false;
     const follow = (clientX: number, clientY: number) => {
       for (const { interaction, key } of drags)
         cameraRig.update(key, interaction, {
@@ -2804,7 +2821,17 @@ export function ViewerPreview({
     const page = pageRef.current;
     const pageCursor = page?.style.cursor ?? "";
     const move = (moved: PointerEvent) => {
-      if (moved.pointerId === pointerId) follow(moved.clientX, moved.clientY);
+      if (moved.pointerId !== pointerId) return;
+      follow(moved.clientX, moved.clientY);
+      if (!dragging) {
+        if (Math.hypot(moved.clientX - startX, moved.clientY - startY) < 3)
+          return;
+        dragging = true;
+        for (const host of soundHosts)
+          playInteractionEvent(host, "drag", "drag-start");
+      }
+      for (const host of soundHosts)
+        playInteractionEvent(host, "drag", "while-dragging", true);
     };
     const end = (ended: PointerEvent) => {
       if (ended.pointerId !== pointerId) return;
@@ -2821,6 +2848,10 @@ export function ViewerPreview({
           active: false,
           angles: { ...ZERO_CAMERA_ANGLES },
         });
+      for (const host of soundHosts) {
+        stopContinuousInteraction(host.id, "drag");
+        if (dragging) playInteractionEvent(host, "drag", "drop");
+      }
       if (page) page.style.cursor = pageCursor;
       cameraDragSessionRef.current = null;
     };
@@ -3153,7 +3184,7 @@ export function ViewerPreview({
               }}
             >
               <ArtboardBackground
-                artboard={artboard}
+                artboard={pageBackground}
                 paused={Boolean(activeModal?.backdrop)}
               />
               <div
@@ -3247,6 +3278,7 @@ export function ViewerPreview({
                   reducedMotion={prefersReducedMotion}
                   scene={previewScene3d}
                   screenPointToWorldRef={screenPointToWorld3DRef}
+                  sky={cameraSky}
                 />
               </div>
               {activeModal?.backdrop ? (

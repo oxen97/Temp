@@ -24,6 +24,44 @@ const artboard: ArtboardSettings = {
 };
 
 describe("editor document serialization", () => {
+  it("keeps each scene's own background and the common one", () => {
+    const document = serializeEditorDocument({
+      artboard,
+      id: "project-backgrounds",
+      name: "Backgrounds",
+      pages: [
+        { id: "scene-1", name: "Intro", elements: [] },
+        {
+          background: {
+            background: "#04050c",
+            backgroundImage: "blob:night-sky",
+            backgroundMediaType: "image",
+            backgroundRotateWithCamera: true,
+          },
+          elements: [],
+          id: "scene-2",
+          name: "Space",
+        },
+      ],
+    });
+    const opened = hydrateEditorDocument(JSON.parse(JSON.stringify(document)));
+    expect(opened.artboard).toEqual(artboard);
+    expect(opened.pages[0]).not.toHaveProperty("background");
+    expect(opened.pages[1].background).toEqual({
+      background: "#04050c",
+      backgroundImage: "blob:night-sky",
+      backgroundMediaType: "image",
+      backgroundRotateWithCamera: true,
+    });
+
+    // A malformed scene background falls back to the common one.
+    const damaged = JSON.parse(JSON.stringify(document));
+    damaged.scenes[1].background = "#ffffff";
+    expect(hydrateEditorDocument(damaged).pages[1]).not.toHaveProperty(
+      "background",
+    );
+  });
+
   it("round-trips scene navigation rules", () => {
     const rule = createSceneLogicRule({
       id: "intro-next",
