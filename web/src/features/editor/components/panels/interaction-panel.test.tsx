@@ -354,6 +354,44 @@ describe("InteractionPanel conditional UI", () => {
     expect(screen.queryByRole("spinbutton", { name: "Shadow spread" })).toBeNull();
   });
 
+  it("persists Camera Rotate angles, projection and field of view", () => {
+    let saved = createDefaultInteraction({
+      cameraRotateY: -180,
+      effect: "camera-rotate",
+      id: "orbit",
+      trigger: "drag",
+    });
+    function Harness() {
+      const [interaction, setInteraction] = useState(saved);
+      saved = interaction;
+      return (
+        <InteractionPanel
+          elements={[{ id: "hint", name: "Hint", type: "text" }]}
+          interactionsByElement={{ hint: [interaction] }}
+          onUpdateInteraction={(_, __, updates) => setInteraction((current) => ({ ...current, ...updates }))}
+          selectedElementIds={["hint"]}
+          selectedName="Hint"
+          selectedTypes={["text"]}
+        />
+      );
+    }
+    render(<Harness />);
+    const y = screen.getByRole("spinbutton", { name: "Camera rotate Y" });
+    expect(y).toHaveValue(-180);
+    fireEvent.change(screen.getByRole("spinbutton", { name: "Camera rotate X" }), { target: { value: "60" } });
+    fireEvent.change(y, { target: { value: "-240" } });
+    fireEvent.change(screen.getByRole("spinbutton", { name: "Camera rotate Z" }), { target: { value: "8" } });
+    expect(saved).toMatchObject({ cameraRotateX: 60, cameraRotateY: -240, cameraRotateZ: 8 });
+    expect(screen.queryByRole("spinbutton", { name: "Camera field of view" })).toBeNull();
+    choose("Camera projection", "Perspective");
+    expect(saved.cameraProjection).toBe("perspective");
+    const fov = screen.getByRole("spinbutton", { name: "Camera field of view" });
+    expect(fov).toHaveValue(35);
+    fireEvent.change(fov, { target: { value: "42" } });
+    expect(saved.cameraFov).toBe(42);
+    expect(screen.getByText("X 60° · Y -240° · Z 8°")).toBeTruthy();
+  });
+
   it("hydrates and saves Liquid Merge settings from the selected shape", () => {
     let saved = createDefaultInteraction({
       id: "merge",

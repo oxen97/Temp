@@ -168,6 +168,30 @@ describe("interaction model", () => {
     });
   });
 
+  it("round-trips Camera Rotate angles and keeps its projection and field of view valid", () => {
+    const authored = createDefaultInteraction({
+      cameraFov: 42,
+      cameraProjection: "perspective",
+      cameraRotateX: 60,
+      cameraRotateY: -180,
+      cameraRotateZ: 5,
+      effect: "camera-rotate",
+      trigger: "drag",
+    });
+    expect(normalizeInteraction(JSON.parse(JSON.stringify(authored)))).toEqual(authored);
+    // Projects saved before the camera fields existed open with a front view.
+    expect(normalizeInteraction({ effect: "camera-rotate" })).toMatchObject({
+      cameraFov: 35,
+      cameraProjection: "orthographic",
+      cameraRotateX: 0,
+      cameraRotateY: 0,
+      cameraRotateZ: 0,
+    });
+    expect(normalizeInteraction({ cameraProjection: "fisheye" }).cameraProjection).toBe("orthographic");
+    expect(normalizeInteraction({ cameraFov: 0 }).cameraFov).toBe(1);
+    expect(normalizeInteraction({ cameraFov: 500 }).cameraFov).toBe(160);
+  });
+
   it("keeps trail replacement fade durations nonnegative and preserves immediate removal", () => {
     expect(normalizeInteraction({ trailFadeOutDuration: -1 }).trailFadeOutDuration).toBe(0);
     expect(normalizeInteraction({ trailFadeOutDuration: 0 }).trailFadeOutDuration).toBe(0);

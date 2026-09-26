@@ -1,8 +1,13 @@
+import { useFrame, useThree } from "@react-three/fiber";
 import { fireEvent, render } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { Group, Plane, Ray, Vector3 } from "three";
 import { describe, expect, it, vi } from "vitest";
 
+import {
+  CameraRig,
+  isPointerGestureClaimed,
+} from "@/features/editor/lib/camera-rig";
 import { createDefaultInteraction } from "@/features/editor/lib/interaction-model";
 import { defaultInteractionSoundSettings } from "@/features/editor/store/editor-store";
 import { createPrimitiveObject3D } from "@/features/editor/three/types";
@@ -330,6 +335,36 @@ describe("Artboard3DScene selection", () => {
     expect(onSelectObject).not.toHaveBeenCalled();
   });
 
+  it("lets a press through a locked object to the artboard, like a locked 2D element", () => {
+    const object = createPrimitiveObject3D({
+      dimensions: { depth: 6000, height: 6000, width: 6000 },
+      id: "locked-sky",
+      name: "Locked sky",
+      position: { x: 600, y: 340, z: 0 },
+      primitive: "sphere",
+    });
+    object.locked = true;
+    const onArtboardPointerDown = vi.fn();
+    const onSelectObject = vi.fn();
+    const { container } = render(
+      <div onPointerDown={onArtboardPointerDown}>
+        <Artboard3DScene
+          artboardHeight={679}
+          artboardWidth={1208}
+          editable
+          objects={[object]}
+          onSelectObject={onSelectObject}
+          scene={{ enabled: true }}
+        />
+      </div>,
+    );
+
+    fireEvent.pointerDown(container.querySelector('group[name="Locked sky"]')!);
+
+    expect(onSelectObject).not.toHaveBeenCalled();
+    expect(onArtboardPointerDown).toHaveBeenCalledOnce();
+  });
+
   it("does not select or consume pointer down when editing is disabled", () => {
     const object = createPrimitiveObject3D({
       dimensions: { depth: 100, height: 100, width: 100 },
@@ -405,5 +440,145 @@ describe("Artboard3DScene selection", () => {
 
     fireEvent.pointerOver(objectGroup);
     expect(visualGroup.getAttribute("scale")).toBe("1.3,1.3,1.3");
+  });
+});
+
+describe("Artboard3DScene camera rig", () => {
+  // Runs the scene's frame callbacks; prioritized ones render and need WebGL.
+  const runFrames = () => {
+    for (const [callback, priority] of vi.mocked(useFrame).mock.calls)
+      if (!priority)
+        (callback as (state: unknown, delta: number) => void)(
+          { clock: { elapsedTime: 0 } },
+          1 / 60,
+        );
+  };
+  const orbitBox = () =>
+    createPrimitiveObject3D({
+      dimensions: { depth: 200, height: 200, width: 200 },
+      id: "orbit-box",
+      name: "Orbit box",
+      position: { x: 960, y: 540, z: 0 },
+      primitive: "box",
+    });
+  const turn = (overrides = {}) =>
+    createDefaultInteraction({
+      cameraRotateY: 90,
+      duration: 0,
+      effect: "camera-rotate",
+      id: "turn",
+      motion: "direct",
+      trigger: "click-tap",
+      ...overrides,
+    });
+  const renderScene = (rig: CameraRig, object = orbitBox()) =>
+    render(
+      <Artboard3DScene
+        artboardHeight={1080}
+        artboardWidth={1920}
+        cameraRig={rig}
+        interactive
+        objects={[object]}
+        scene={{ enabled: true }}
+      />,
+    );
+
+  it("orbits the preview camera around the scene target and rolls it", () => {
+    vi.mocked(useFrame).mockClear();
+    const rig = new CameraRig(() => 0);
+    renderScene(rig);
+    const { camera } = useThree();
+    expect(camera.position.x).toBeCloseTo(960);
+    expect(camera.position.z).toBeCloseTo(1000);
+
+    rig.update("turn", turn(), { active: true, angles: { x: 0, y: 90, z: 0 } });
+    runFrames();
+    expect(camera.position.x).toBeCloseTo(1960);
+    expect(camera.position.y).toBeCloseTo(-540);
+    expect(camera.position.z).toBeCloseTo(0);
+    expect(camera.getWorldDirection(new Vector3()).x).toBeCloseTo(-1);
+
+    rig.update("turn", turn(), { active: true, angles: { x: 0, y: 0, z: 8 } });
+    runFrames();
+    expect(camera.position.x).toBeCloseTo(960);
+    expect(camera.position.z).toBeCloseTo(1000);
+    expect(camera.rotation.z).toBeCloseTo((8 * Math.PI) / 180);
+
+    // The camera never tilts over the top of its target.
+    rig.update("turn", turn(), {
+      active: true,
+      angles: { x: 120, y: 0, z: 0 },
+    });
+    expect(rig.target().x).toBeCloseTo(85);
+  });
+
+  it("turns the camera from a 3D object's click and back on the next click", () => {
+    const rig = new CameraRig(() => 0);
+    const object = orbitBox();
+    object.interactions = [turn({ cameraRotateY: 45 })];
+    const { container } = renderScene(rig, object);
+    const group = container.querySelector('group[name="Orbit box"]')!;
+    vi.mocked(useFrame).mockClear();
+    fireEvent.click(group);
+    runFrames();
+    expect(rig.target().y).toBeCloseTo(45);
+    vi.mocked(useFrame).mockClear();
+    fireEvent.click(group);
+    runFrames();
+    expect(rig.target().y).toBeCloseTo(0);
+  });
+
+  it("turns the camera by dragging a 3D object in screen space", () => {
+    const rig = new CameraRig(() => 0);
+    const object = orbitBox();
+    object.interactions = [
+      turn({
+        cameraRotateX: 0,
+        cameraRotateY: -180,
+        resetMode: "keep",
+        trackDistance: 400,
+        trigger: "drag",
+      }),
+    ];
+    const { container } = renderScene(rig, object);
+    const group = container.querySelector('group[name="Orbit box"]')!;
+    Object.assign(group, {
+      hasPointerCapture: () => true,
+      releasePointerCapture: vi.fn(),
+      setPointerCapture: vi.fn(),
+    });
+    fireEvent.pointerDown(group, { clientX: 100, clientY: 100, pointerId: 4 });
+    fireEvent.pointerMove(group, { clientX: 300, clientY: 100, pointerId: 4 });
+    expect(rig.target().y).toBeCloseTo(-90);
+    fireEvent.pointerUp(group, { clientX: 300, clientY: 100, pointerId: 4 });
+    expect(rig.target().y).toBeCloseTo(-90);
+  });
+
+  it("keeps artwork camera drags away from a 3D object's own buttons only", () => {
+    const pressed = (interaction: ReturnType<typeof turn>) => {
+      const object = orbitBox();
+      object.interactions = [interaction];
+      const { container, unmount } = renderScene(new CameraRig(), object);
+      let claimed: boolean | null = null;
+      const listener = (event: Event) => {
+        claimed = isPointerGestureClaimed(event);
+      };
+      document.addEventListener("pointerdown", listener);
+      fireEvent.pointerDown(
+        container.querySelector('group[name="Orbit box"]')!,
+        { pointerId: 5 },
+      );
+      document.removeEventListener("pointerdown", listener);
+      unmount();
+      return claimed;
+    };
+    expect(
+      pressed(
+        createDefaultInteraction({ effect: "scale", trigger: "click-tap" }),
+      ),
+    ).toBe(true);
+    expect(
+      pressed(turn({ trigger: "drag", triggerArea: "entire-artwork" })),
+    ).toBe(false);
   });
 });

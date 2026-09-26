@@ -10,6 +10,13 @@
   `InteractionDefinition`을 스토어에서 읽고 추가·수정·삭제한다. Preview는
   지원하는 트리거·효과를 이 데이터에서 실행한다. 아래 표의 전체 기획 조합이
   모두 재생되는 것은 아니며, 3D 확장 UI·Logic 연동에는 별도 제한이 있다.
+- **2026-09-27 Camera Rotate 실행**: DO → Camera Rotate의 Rotation X/Y/Z,
+  Projection, Field of view를 요소 데이터(`cameraRotateX/Y/Z`,
+  `cameraProjection`, `cameraFov`)에 저장하고, 관람 Preview의 작품 카메라가
+  이 값으로 3D 장면을 궤도 회전한다. 실행 규칙은 아래
+  「카메라·시각 파이프라인 → Camera Rotate 실행 규칙」에 있다. 에디터 캔버스
+  카메라는 계속 정면 고정이다. Camera Move·Zoom/Dolly·Look At·Shake는 아직
+  패널 설정만 있다. AMOUS Playground 데모의 08 SPACE 씬이 이 효과를 쓴다.
 - **2026-09-24 FIELD NOTES 오리지널 4개 Scene**: 기존 `?interactionDemo=mon-art`
   링크는 유지하며 화면은 AMOUS의 BREEZE·INK·BLOOM·TOPOGRAPHY로 교체했다.
   배경·갈대·꽃·등고선·텍스트는 모두 편집 가능한 기본 도형과 펜 경로로 구성하며
@@ -846,6 +853,80 @@ Delay만 보여주고 HOW를 숨긴다.
 Advanced의 Visual Pipeline에는 Performance/Balanced/High 품질, HDR,
 Tone mapping, Shadow map 품질을 둔다.
 
+#### Camera Rotate 실행 규칙 (2026-09-27 구현)
+
+카메라는 Scene의 camera target(기본값: 아트보드 중심)을 중심으로 궤도를 돈다.
+카메라와 target 사이 거리는 변하지 않는다. 2D 요소는 화면에 고정된 채로 있고
+3D 레이어만 돈다. 같은 페이지의 Camera Rotate 값은 모두 더한다.
+
+| 축 | 양수(+) 값의 의미 |
+| --- | --- |
+| X | 카메라가 위로 올라가 장면을 내려다본다. 고도는 ±85°에서 멈추므로 target 위로 뒤집히지 않는다. |
+| Y | 카메라가 수직축을 따라 오른쪽으로 돈다. 제한 없이 여러 바퀴 돌 수 있다. |
+| Z | 화면이 시계 방향으로 기운다(roll). |
+
+**WHEN별 입력**
+
+- **Drag**: Track distance만큼 끌 때마다 Rotation 값만큼 돈다. 방향 부호를
+  유지하고 한도가 없다. 가로 이동은 Y·Z에, 세로 이동은 X에 쓴다. MAPPING의
+  Axis를 X나 Y로 고르면 그 방향만 쓴다.
+  - Trigger area **Entire artwork**: 작품의 빈 곳, 3D 오브젝트, 텍스트 등
+    어디서 눌러도 카메라가 돈다. 버튼(Click / Tap)을 가졌거나 자기 드래그·
+    드롭 제스처를 가진 요소·오브젝트에서 시작한 누름은 그 요소가 쓰고, 카메라는
+    그대로 둔다. 페이지에는 grab 커서가 표시된다. 터치에서 화면 페이지는
+    스크롤되지 않고, 스크롤 페이지는 세로 스크롤을 유지한다.
+  - Trigger area **Selected object**: 그 요소·오브젝트를 끌 때만 돈다. 3D
+    오브젝트도 화면 기준 이동량을 쓰므로, 카메라가 돌아도 드래그가 튀지 않는다.
+- **Pointer Move / Touch Move**: 중심(Entire artwork=아트보드 중심, Selected
+  object=요소 중심)에서 포인터까지의 거리 ÷ Track distance를 ±1로 제한한 값에
+  Rotation 값을 곱한다(오른쪽·아래가 +). 포인터가 작품을 벗어나면 입력이 끝난다.
+- **Click / Tap(누를 때마다 켜고 끔), Hover, After Delay, Scroll / Swipe
+  (Track distance 대비 비율), Drop On/Outside Target, Drag Enter/Leave
+  Target**: 0~1 강도에 Rotation 값을 곱한다.
+
+**RESET**
+
+- **Keep final state**: Drag는 놓은 자리에 카메라가 멈추고, 다음 드래그가 그
+  자리에서 이어진다. Pointer Move와 Hover는 마지막 각도를 유지하고, 다시
+  움직이면 그 위치의 각도로 바뀐다.
+- Contextual default, Release, Restore initial camera: 입력이 끝나면 처음
+  카메라 위치로 돌아간다. Click / Tap은 두 번째 누름에서 돌아간다.
+
+**HOW와 TIMING**
+
+- **Direct**: 연속 입력(Drag, Pointer Move 등)은 TIMING의 Smoothing 시간만큼
+  보간해 따라간다(0초는 즉시). 이벤트 입력(Click 등)은 Duration·Delay·Easing으로
+  재생한다.
+- **Spring**: Strength·Mass·Damping 스프링으로 목표 각도에 다가간다.
+- **Bounce**: Bounce strength·damping으로 목표를 지나쳤다가 돌아온다.
+- **Inertia**: Drag를 놓을 때 움직이던 속도로 계속 돌다가 서서히 멈춘다.
+  Initial velocity(%)가 출발 속도를, Friction과 Deceleration이 멈추는 빠르기를
+  정한다(클수록 빨리 멈춤). 포인터를 멈췄다가 놓으면 관성 없이 그 자리에 선다.
+  포인터 보고 간격이 긴 느린 기기에서도 튕김을 알아보도록 판정 시간이
+  보고 간격에 맞춰 늘어난다(최대 0.5초). Keep final state와 함께 쓴다.
+- 운영체제의 **동작 줄이기(reduced motion)** 설정에서는 관성·스프링·지연
+  없이 바로 목표 각도로 이동한다.
+
+**Projection · Field of view**
+
+- 페이지에서 처음 나오는 사용 중인 카메라 효과의 Projection이 관람 Preview의
+  카메라에 적용된다. Perspective는 Field of view 1–160°를 쓴다.
+- 에디터 캔버스는 Scene 설정의 카메라(기본 정면 Orthographic)를 그대로 쓴다.
+- Orthographic 카메라가 돌 때는 모든 오브젝트를 담는 구 밖에서 돌아, 어떤
+  각도에서도 오브젝트가 잘리지 않는다. 화면에 보이는 크기는 같다.
+
+**저장·호환**
+
+- 저장 필드: `cameraRotateX`, `cameraRotateY`, `cameraRotateZ`(°),
+  `cameraProjection`(`orthographic`/`perspective`), `cameraFov`(1–160).
+- 이 필드가 없는 기존 프로젝트는 0°, Orthographic, 35°로 열린다. 잘못된
+  Projection은 Orthographic으로, 범위 밖 FOV는 1–160으로 맞춘다.
+
+**아직 실행되지 않는 카메라 항목**
+
+- Camera Move, Zoom / Dolly, Look At, Shake, Keyframe 편집기의 Camera 트랙은
+  패널 설정만 있다.
+
 ### GLB 내부 구조 제어
 
 GLB 업로드 시 Animation, Material, Morph뿐 아니라 Bone, Joint, Mesh와 Mesh의
@@ -937,6 +1018,7 @@ undo/redo, IndexedDB 저장, viewer runtime 평가기와 연결해야 한다.
 | 프로젝트 저장 스키마·복원 | `core/project/schema.ts`, `core/project/editor-document.ts` |
 | 인터랙션 공통 데이터 모델·기본값 | `lib/interaction-model.ts` |
 | 2D 뷰어 트리거·효과 평가 | `lib/interaction-runtime.ts`, `components/viewer/viewer-preview.tsx` |
+| Camera Rotate 입력·궤도·모션 | `lib/camera-rig.ts` (Preview 카메라), `three/camera-clearance.ts` (Orthographic 궤도 거리) |
 | Rapier 2D·3D 물리 기반 | `lib/interaction-physics.ts`, `lib/interaction-physics-3d.ts` |
 | 3D Trigger/Mapping/Effect 허용 정책 | `components/panels/interaction-panel-policy.ts` |
 | Interaction 조건부 폼 | `components/panels/interaction-panel.tsx` |
@@ -1028,6 +1110,12 @@ group, Morph Target 이름을 import 시 메타데이터로 추출한다. 좌측
 - 페이지별 Logic 규칙 저장·복원, INTERACTION 탭의 직접 씬 이동 설정,
   Click / Tap의 On Trigger·On Complete 이벤트 전달
 - Rapier 2D/3D 중력·바운스 기반과 3D World의 정적 2D 충돌 프록시
+- Camera Rotate(2026-09-27): Drag·Pointer Move·Click·Hover·After Delay·
+  Scroll·타깃 드롭 트리거, Keep/복귀 RESET, Direct·Spring·Bounce·Inertia,
+  Projection·Field of view를 관람 Preview의 작품 카메라 궤도 회전으로 실행
+  (규칙: 「카메라·시각 파이프라인 → Camera Rotate 실행 규칙」)
+- 잠긴(locked) 3D 오브젝트는 에디터에서 잠긴 2D 요소처럼 누름을 통과시킨다.
+  뒤의 오브젝트나 아트보드(선택 해제·영역 선택)가 누름을 받는다.
 
 **아직 UI 기획·프리뷰 상태**
 
@@ -1036,7 +1124,8 @@ group, Morph Target 이름을 import 시 메타데이터로 추출한다. 좌측
 - 나머지 Trigger·Effect 조합, Reset, Conflict/Priority 평가기
 - 2D 타깃 드래그 이외의 기획된 정밀 충돌 Trigger 감지·물체 간 Bounce Off
   Target·Stack의 완전한 물리 실행 및 3D Liquid Merge
-- Camera/Light/Shadow/Post Processing/Shader Effect의 관람 Preview 실행
+- Camera Move·Zoom/Dolly·Look At·Shake, Light/Post Processing/Shader Effect의
+  관람 Preview 실행 (Camera Rotate는 구현됨)
 - GLB AnimationMixer, Crossfade/Root motion, Bone/Joint/Mesh/Face 런타임 제어
 - Liquid Merge 메타볼/셰이더, 정밀 Keyframe 재생기
 - Click / Tap 외 트리거의 수명주기 이벤트를 Logic Scene 분기로 전달하는 경로

@@ -218,6 +218,18 @@ function interactionMeta(interaction: InteractionDefinition) {
   if (interaction.effect === "move") return `X ${interaction.moveX >= 0 ? "+" : ""}${interaction.moveX} px`;
   if (interaction.effect === "scale") return `${interaction.scaleX} %`;
   if (interaction.effect === "opacity") return `→ ${interaction.opacityTo} %`;
+  if (interaction.effect === "camera-rotate") {
+    const axes = (
+      [
+        ["X", interaction.cameraRotateX],
+        ["Y", interaction.cameraRotateY],
+        ["Z", interaction.cameraRotateZ],
+      ] as const
+    ).filter(([, degrees]) => degrees);
+    return axes.length
+      ? axes.map(([axis, degrees]) => `${axis} ${degrees}°`).join(" · ")
+      : "0°";
+  }
   return "";
 }
 
@@ -522,14 +534,9 @@ const defaultThreeDInteractionState: ThreeDInteractionState = {
 type ExtendedInteractionState = {
   blurAmount: number;
   boneName: string;
-  cameraFov: number;
   cameraMoveX: number;
   cameraMoveY: number;
   cameraMoveZ: number;
-  cameraProjection: string;
-  cameraRotateX: number;
-  cameraRotateY: number;
-  cameraRotateZ: number;
   cameraShake: number;
   cameraTarget: string;
   cameraZoom: number;
@@ -585,14 +592,9 @@ type ExtendedInteractionState = {
 const defaultExtendedInteractionState: ExtendedInteractionState = {
   blurAmount: 20,
   boneName: "",
-  cameraFov: 35,
   cameraMoveX: 0,
   cameraMoveY: 0,
   cameraMoveZ: 100,
-  cameraProjection: "orthographic",
-  cameraRotateX: 0,
-  cameraRotateY: 0,
-  cameraRotateZ: 0,
   cameraShake: 30,
   cameraTarget: "selected",
   cameraZoom: 120,
@@ -935,6 +937,11 @@ export function InteractionPanel({
   const [rotateTo, setRotateTo] = useInteractionField("rotateTo", 45, binding);
   const [rotateX, setRotateX] = useInteractionField("rotateX", 0, binding);
   const [rotateY, setRotateY] = useInteractionField("rotateY", 0, binding);
+  const [cameraRotateX, setCameraRotateX] = useInteractionField("cameraRotateX", 0, binding);
+  const [cameraRotateY, setCameraRotateY] = useInteractionField("cameraRotateY", 0, binding);
+  const [cameraRotateZ, setCameraRotateZ] = useInteractionField("cameraRotateZ", 0, binding);
+  const [cameraProjection, setCameraProjection] = useInteractionField("cameraProjection", "orthographic", binding);
+  const [cameraFov, setCameraFov] = useInteractionField("cameraFov", 35, binding);
   const [skewX, setSkewX] = useInteractionField("skewX", 12, binding);
   const [skewY, setSkewY] = useInteractionField("skewY", 0, binding);
   const [opacityTo, setOpacityTo] = useInteractionField("opacityTo", 40, binding);
@@ -1314,11 +1321,7 @@ export function InteractionPanel({
       effectTimelineTracks = axisTimelineTracks(
         "Camera Rotation",
         "camera-rotation",
-        [
-          extended.cameraRotateX,
-          extended.cameraRotateY,
-          extended.cameraRotateZ,
-        ],
+        [cameraRotateX, cameraRotateY, cameraRotateZ],
         "°",
       );
       break;
@@ -1474,14 +1477,9 @@ export function InteractionPanel({
       break;
     }
   }
-  if (isCameraEffect && extended.cameraProjection === "perspective") {
+  if (isCameraEffect && cameraProjection === "perspective") {
     effectTimelineTracks.push(
-      numericTimelineTrack(
-        "Camera Field of View",
-        "camera-fov",
-        extended.cameraFov,
-        "°",
-      ),
+      numericTimelineTrack("Camera Field of View", "camera-fov", cameraFov, "°"),
     );
   }
   const selectedTimelineObjects =
@@ -3148,29 +3146,23 @@ export function InteractionPanel({
                   <DesignNumberField
                     ariaLabel="Camera rotate X"
                     label="X"
-                    onChange={(value) =>
-                      setExtendedValue("cameraRotateX", value)
-                    }
+                    onChange={setCameraRotateX}
                     unit="°"
-                    value={extended.cameraRotateX}
+                    value={cameraRotateX}
                   />
                   <DesignNumberField
                     ariaLabel="Camera rotate Y"
                     label="Y"
-                    onChange={(value) =>
-                      setExtendedValue("cameraRotateY", value)
-                    }
+                    onChange={setCameraRotateY}
                     unit="°"
-                    value={extended.cameraRotateY}
+                    value={cameraRotateY}
                   />
                   <DesignNumberField
                     ariaLabel="Camera rotate Z"
                     label="Z"
-                    onChange={(value) =>
-                      setExtendedValue("cameraRotateZ", value)
-                    }
+                    onChange={setCameraRotateZ}
                     unit="°"
-                    value={extended.cameraRotateZ}
+                    value={cameraRotateZ}
                   />
                 </div>
               </Row>
@@ -3228,25 +3220,27 @@ export function InteractionPanel({
                 className="interaction-dropdown"
                 noScroll
                 onChange={(value) =>
-                  setExtendedValue("cameraProjection", value)
+                  setCameraProjection(
+                    value === "perspective" ? "perspective" : "orthographic",
+                  )
                 }
                 options={[
                   { label: "Orthographic", value: "orthographic" },
                   { label: "Perspective", value: "perspective" },
                 ]}
-                value={extended.cameraProjection}
+                value={cameraProjection}
               />
             </Row>
-            {extended.cameraProjection === "perspective" ? (
+            {cameraProjection === "perspective" ? (
               <Row label="Field of view">
                 <DesignNumberField
                   ariaLabel="Camera field of view"
                   label=""
                   max={160}
                   min={1}
-                  onChange={(value) => setExtendedValue("cameraFov", value)}
+                  onChange={setCameraFov}
                   unit="°"
-                  value={extended.cameraFov}
+                  value={cameraFov}
                 />
               </Row>
             ) : null}
