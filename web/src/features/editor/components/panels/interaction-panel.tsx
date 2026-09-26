@@ -438,8 +438,6 @@ type ThreeDInteractionState = {
   resetRotation: boolean;
   resetScale: boolean;
   rootMotion: string;
-  rotateX: number;
-  rotateY: number;
   rotateZ: number;
   rotationOrder: string;
   scaleZ: number;
@@ -514,8 +512,6 @@ const defaultThreeDInteractionState: ThreeDInteractionState = {
   resetRotation: true,
   resetScale: true,
   rootMotion: "ignore",
-  rotateX: 0,
-  rotateY: 0,
   rotateZ: 90,
   rotationOrder: "XYZ",
   scaleZ: 100,
@@ -937,6 +933,8 @@ export function InteractionPanel({
   const [scaleX, setScaleX] = useInteractionField("scaleX", 120, binding);
   const [scaleY, setScaleY] = useInteractionField("scaleY", 120, binding);
   const [rotateTo, setRotateTo] = useInteractionField("rotateTo", 45, binding);
+  const [rotateX, setRotateX] = useInteractionField("rotateX", 0, binding);
+  const [rotateY, setRotateY] = useInteractionField("rotateY", 0, binding);
   const [skewX, setSkewX] = useInteractionField("skewX", 12, binding);
   const [skewY, setSkewY] = useInteractionField("skewY", 0, binding);
   const [opacityTo, setOpacityTo] = useInteractionField("opacityTo", 40, binding);
@@ -2716,16 +2714,16 @@ export function InteractionPanel({
                 <DesignNumberField
                   ariaLabel="Rotate X"
                   label="X"
-                  onChange={(value) => setThreeDValue("rotateX", value)}
+                  onChange={setRotateX}
                   unit="°"
-                  value={threeD.rotateX}
+                  value={rotateX}
                 />
                 <DesignNumberField
                   ariaLabel="Rotate Y"
                   label="Y"
-                  onChange={(value) => setThreeDValue("rotateY", value)}
+                  onChange={setRotateY}
                   unit="°"
-                  value={threeD.rotateY}
+                  value={rotateY}
                 />
                 <DesignNumberField
                   ariaLabel="Rotate Z"

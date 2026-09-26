@@ -9,6 +9,7 @@ import {
   type CanvasElement,
 } from "@/features/editor/store/editor-store";
 
+import type { ViewerPointerTrailsElement } from "./viewer-pointer-trails";
 import { ViewerPreview } from "./viewer-preview";
 
 const { shapeRender } = vi.hoisted(() => ({ shapeRender: vi.fn() }));
@@ -53,6 +54,15 @@ function shape(
   };
 }
 
+/** Marks drawn by the canvas trail layer (the layer exposes what it draws). */
+function trailMarks(container: HTMLElement) {
+  return (
+    container
+      .querySelector<ViewerPointerTrailsElement>(".viewer-pointer-trails")
+      ?.amousTrails?.snapshot() ?? []
+  );
+}
+
 const commonProps = {
   advancedSound: defaultSoundAdvancedSettings,
   artboard: { background: "#000", cornerRadius: 0, height: 100, width: 200 },
@@ -65,6 +75,8 @@ const commonProps = {
 
 beforeEach(() => {
   shapeRender.mockClear();
+  // jsdom has no 2D canvas; the trail layer keeps its model without drawing.
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
   Object.defineProperty(document.documentElement, "clientWidth", {
     configurable: true,
     value: 200,
@@ -142,17 +154,12 @@ describe("viewer generated interactions", () => {
         isPrimary: true,
       });
     }
-    expect(
-      view.container.querySelectorAll(".viewer-pointer-particle"),
-    ).toHaveLength(7);
+    expect(trailMarks(view.container)).toHaveLength(7);
     expect(shapeRender).toHaveBeenCalledTimes(initialRenderCount);
     tick(500);
     tick(1000);
     expect(shapeRender).toHaveBeenCalledTimes(initialRenderCount);
-    expect(
-      view.container.querySelector<HTMLElement>(".viewer-pointer-particle")
-        ?.style.opacity,
-    ).toBe("0.5");
+    expect(trailMarks(view.container)[0]?.opacity).toBe(0.5);
   });
 
   it("still moves a dragged object when it also emits a trail", () => {
@@ -194,9 +201,7 @@ describe("viewer generated interactions", () => {
       isPrimary: true,
     });
     expect(surface.style.transform).toContain("translate(25px, 15px)");
-    expect(
-      view.container.querySelectorAll(".viewer-pointer-particle").length,
-    ).toBeGreaterThan(1);
+    expect(trailMarks(view.container).length).toBeGreaterThan(1);
   });
 
   it("emits a drag trail at pointer-down and along the artboard path", () => {
@@ -236,9 +241,7 @@ describe("viewer generated interactions", () => {
       pointerType: "mouse",
       isPrimary: true,
     });
-    expect(
-      view.container.querySelectorAll(".viewer-pointer-particle"),
-    ).toHaveLength(3);
+    expect(trailMarks(view.container)).toHaveLength(3);
     expect(
       view.container.querySelector<HTMLElement>('[data-element-id="emitter"]')
         ?.style.transform,

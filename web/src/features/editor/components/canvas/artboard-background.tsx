@@ -14,9 +14,12 @@ import { type ArtboardSettings } from "@/features/editor/store/editor-store";
 export function ArtboardBackground({
   artboard,
   playVideo = true,
+  paused = false,
 }: {
   artboard: ArtboardSettings;
   playVideo?: boolean;
+  /** Holds the background video, e.g. while a modal backdrop covers it. */
+  paused?: boolean;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const mediaType = backgroundMediaType(artboard);
@@ -28,7 +31,7 @@ export function ArtboardBackground({
     artboard.backgroundMediaPreviewSource === mediaSource
       ? artboard.backgroundMediaPreview
       : undefined;
-  const autoPlay = artboard.backgroundAutoPlay ?? true;
+  const autoPlay = (artboard.backgroundAutoPlay ?? true) && !paused;
 
   useEffect(() => {
     const video = videoRef.current;

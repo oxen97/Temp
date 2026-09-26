@@ -81,6 +81,7 @@ import {
   InteractionPhysicsWorld,
   loadRapier,
 } from "@/features/editor/lib/interaction-physics";
+import { physicsShapeForElement } from "@/features/editor/lib/physics-shape";
 import {
   constrainDragDelta,
   hasTargetDragGesture,
@@ -848,6 +849,7 @@ export function ViewerPreview({
           width: element.width,
           height: element.height,
           bounciness: gravity.bounciness / 100,
+          shape: physicsShapeForElement(element),
         });
         startPhysicsLoop();
       });
@@ -2880,7 +2882,10 @@ export function ViewerPreview({
                 width: artboard.width,
               }}
             >
-              <ArtboardBackground artboard={artboard} />
+              <ArtboardBackground
+                artboard={artboard}
+                paused={Boolean(activeModal?.backdrop)}
+              />
               <div
                 aria-hidden={activeModal?.backdrop ? true : undefined}
                 data-viewer-3d-layer
@@ -3080,6 +3085,11 @@ export function ViewerPreview({
                 const isInactiveModalElement =
                   referencedModalElementIds.has(element.id) && !isModalMember;
                 const isBehindModal = Boolean(activeModal && !isModalMember);
+                // Media nobody can see stops decoding: a closed dialog layer,
+                // or the page behind an open modal backdrop.
+                const mediaPaused =
+                  isInactiveModalElement ||
+                  Boolean(activeModal?.backdrop && isBehindModal);
                 const pullsNeighbors = (element.interactions ?? []).some(
                   (interaction) =>
                     interaction.enabled !== false &&
@@ -3689,6 +3699,7 @@ export function ViewerPreview({
                         artboardWidth={artboard.width}
                         artboardHeight={artboard.height}
                         elementIndex={elementIndex}
+                        paused={mediaPaused}
                       />
                     ) : waveInteraction &&
                       (element.type === "pen" || element.type === "line") ? (
@@ -3716,6 +3727,7 @@ export function ViewerPreview({
                     ) : (
                       <ShapeGraphic
                         element={element}
+                        mediaPaused={mediaPaused}
                         strandBend={strandBend}
                         strandPathData={
                           strandPose ? strandPosePath(strandPose) : undefined

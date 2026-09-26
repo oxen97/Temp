@@ -1,5 +1,7 @@
 import { expect, test, type Locator } from "@playwright/test";
 
+import { trailMarks } from "./trail-marks";
+
 const sceneNames = ["BREEZE", "INK", "BLOOM", "TOPOGRAPHY"] as const;
 
 function nextSceneButton(preview: Locator, index: number) {
@@ -331,8 +333,11 @@ test("native pages produce ink trails, click-spawned flowers, and pointer-respon
       steps: 12,
     },
   );
+  await expect
+    .poll(async () => (await trailMarks(preview)).length)
+    .toBeGreaterThan(0);
   await expect(
-    preview.locator(".viewer-pointer-particle").first(),
+    preview.locator(".viewer-pointer-trail-canvas").first(),
   ).toBeVisible();
   await page.mouse.up();
 

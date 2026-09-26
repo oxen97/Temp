@@ -25,6 +25,9 @@ export type RuntimeVisual = {
   tx: number;
   ty: number;
   rotate: number;
+  /** 3D-only rotation about X/Y in degrees; 2D renders ignore it. */
+  rotateX: number;
+  rotateY: number;
   scaleX: number;
   scaleY: number;
   skewX: number;
@@ -39,6 +42,8 @@ export const IDENTITY_VISUAL: RuntimeVisual = {
   tx: 0,
   ty: 0,
   rotate: 0,
+  rotateX: 0,
+  rotateY: 0,
   scaleX: 1,
   scaleY: 1,
   skewX: 0,
@@ -160,6 +165,8 @@ export function accumulateEffect(
       return {
         ...visual,
         rotate: visual.rotate + interaction.rotateTo * intensity,
+        rotateX: visual.rotateX + (interaction.rotateX ?? 0) * intensity,
+        rotateY: visual.rotateY + (interaction.rotateY ?? 0) * intensity,
       };
     case "scale":
       return {

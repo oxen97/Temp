@@ -24,6 +24,8 @@ import {
 } from "@/features/editor/lib/vector-path";
 import { type CanvasElement } from "@/features/editor/store/editor-store";
 
+import { PlaybackVideo } from "./playback-video";
+
 // Memoized: the canvas, the navigator, every scene thumbnail and the viewer all
 // render a ShapeGraphic per element. The store keeps unchanged elements as the
 // same objects, so an element whose props did not change is skipped when its
@@ -32,6 +34,7 @@ export const ShapeGraphic = memo(function ShapeGraphic({
   element,
   imageScale = 1,
   mediaSrc,
+  mediaPaused = false,
   playMedia = true,
   strandBend,
   strandPathData,
@@ -40,6 +43,8 @@ export const ShapeGraphic = memo(function ShapeGraphic({
   element: CanvasElement;
   imageScale?: number;
   mediaSrc?: string;
+  /** Keeps a playing video loaded but paused (hidden or covered content). */
+  mediaPaused?: boolean;
   playMedia?: boolean;
   strandBend?: StrandBendVisual;
   strandPathData?: string;
@@ -520,16 +525,7 @@ export const ShapeGraphic = memo(function ShapeGraphic({
         }}
       />
     ) : (
-      <video
-        aria-hidden="true"
-        autoPlay={playMedia}
-        className="video-shape"
-        loop
-        muted
-        playsInline
-        preload="auto"
-        src={element.src}
-      />
+      <PlaybackVideo paused={mediaPaused} src={element.src} />
     );
   }
 

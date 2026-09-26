@@ -33,7 +33,10 @@ function createRapierContractDouble() {
     setLinvel: (x: number, y: number) => BodyDescription;
   };
   type ColliderDescription = {
+    kind?: "cuboid" | "ball" | "round-cuboid" | "hull";
     size: [number, number];
+    radius?: number;
+    points?: number[];
     restitution: number;
     setRestitution: (value: number) => ColliderDescription;
   };
@@ -64,7 +67,38 @@ function createRapierContractDouble() {
     },
     ColliderDesc: {
       cuboid: (x: number, y: number): ColliderDescription => ({
+        kind: "cuboid",
         size: [x, y],
+        restitution: 0,
+        setRestitution(value) {
+          this.restitution = value;
+          return this;
+        },
+      }),
+      ball: (radius: number): ColliderDescription => ({
+        kind: "ball",
+        size: [radius, radius],
+        radius,
+        restitution: 0,
+        setRestitution(value) {
+          this.restitution = value;
+          return this;
+        },
+      }),
+      roundCuboid: (x: number, y: number, radius: number): ColliderDescription => ({
+        kind: "round-cuboid",
+        size: [x, y],
+        radius,
+        restitution: 0,
+        setRestitution(value) {
+          this.restitution = value;
+          return this;
+        },
+      }),
+      convexHull: (points: Float32Array): ColliderDescription => ({
+        kind: "hull",
+        size: [0, 0],
+        points: [...points],
         restitution: 0,
         setRestitution(value) {
           this.restitution = value;
@@ -190,6 +224,49 @@ describe("interaction 2D physics world contract", () => {
     expect(double.removed).toHaveLength(1);
     expect(world.hasBody("shape-a")).toBe(false);
     expect(world.read("shape-a")).toBeNull();
+    world.dispose();
+  });
+
+  it("builds a collider that matches the drawn shape", () => {
+    const double = createRapierContractDouble();
+    const world = new InteractionPhysicsWorld(double.rapier, {
+      width: 800,
+      height: 600,
+    });
+    const base = { centerX: 100, centerY: 100, width: 80, height: 40, bounciness: 0.5 };
+    world.addBody({ ...base, id: "ball", shape: { kind: "ball", radius: 40 } });
+    expect(double.colliders.at(-1)?.description).toMatchObject({
+      kind: "ball",
+      radius: 0.4,
+      restitution: 0.5,
+    });
+    world.addBody({ ...base, id: "pill", shape: { kind: "round-box", radius: 10 } });
+    const pill = double.colliders.at(-1)!.description;
+    expect(pill.kind).toBe("round-cuboid");
+    expect(pill.radius).toBeCloseTo(0.1);
+    expect(pill.size[0]).toBeCloseTo(0.3);
+    expect(pill.size[1]).toBeCloseTo(0.1);
+    world.addBody({
+      ...base,
+      id: "triangle",
+      shape: {
+        kind: "hull",
+        points: [
+          { x: 0, y: -20 },
+          { x: 40, y: 20 },
+          { x: -40, y: 20 },
+        ],
+      },
+    });
+    expect(double.colliders.at(-1)?.description.kind).toBe("hull");
+    expect(double.colliders.at(-1)?.description.points).toEqual([
+      0, -0.2, 0.4, 0.2, -0.4, 0.2,
+    ].map((value) => expect.closeTo(value)));
+    world.addBody({ ...base, id: "box" });
+    expect(double.colliders.at(-1)?.description).toMatchObject({
+      kind: "cuboid",
+      size: [0.4, 0.2],
+    });
     world.dispose();
   });
 });

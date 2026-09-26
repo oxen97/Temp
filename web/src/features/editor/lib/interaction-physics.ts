@@ -40,6 +40,17 @@ export async function loadRapier(): Promise<RapierApi> {
   return rapierPromise;
 }
 
+/**
+ * Collider outline in artboard px around the body center. Matching the drawn
+ * shape lets round and pointed shapes rest against each other without the gaps
+ * a bounding box leaves at their corners.
+ */
+export type PhysicsShape =
+  | { kind: "box" }
+  | { kind: "ball"; radius: number }
+  | { kind: "round-box"; radius: number }
+  | { kind: "hull"; points: { x: number; y: number }[] };
+
 export type PhysicsBodyInput = {
   id: string;
   /** Element center in artboard px. */
@@ -53,6 +64,8 @@ export type PhysicsBodyInput = {
   /** Optional initial velocity in px/s. */
   velocityX?: number;
   velocityY?: number;
+  /** Defaults to the bounding box. */
+  shape?: PhysicsShape;
 };
 
 export type PhysicsReadout = {
@@ -132,13 +145,43 @@ export class InteractionPhysicsWorld {
     const body = this.world.createRigidBody(desc);
     const bounciness = Math.min(1, Math.max(0, input.bounciness));
     this.world.createCollider(
-      this.rapier.ColliderDesc.cuboid(
-        pxToMeters(Math.max(1, input.width) / 2),
-        pxToMeters(Math.max(1, input.height) / 2),
-      ).setRestitution(bounciness),
+      this.colliderFor(input).setRestitution(bounciness),
       body,
     );
     this.bodies.set(input.id, body);
+  }
+
+  private colliderFor(input: PhysicsBodyInput) {
+    const halfWidth = pxToMeters(Math.max(1, input.width) / 2);
+    const halfHeight = pxToMeters(Math.max(1, input.height) / 2);
+    const shape = input.shape ?? { kind: "box" };
+    const { ColliderDesc } = this.rapier;
+    if (shape.kind === "ball") {
+      return ColliderDesc.ball(pxToMeters(Math.max(0.5, shape.radius)));
+    }
+    if (shape.kind === "round-box") {
+      const radius = Math.min(pxToMeters(shape.radius), halfWidth, halfHeight);
+      if (radius > 0) {
+        // Rapier grows the inner box by the radius on every side.
+        return ColliderDesc.roundCuboid(
+          Math.max(0.001, halfWidth - radius),
+          Math.max(0.001, halfHeight - radius),
+          radius,
+        );
+      }
+    }
+    if (shape.kind === "hull" && shape.points.length >= 3) {
+      const hull = ColliderDesc.convexHull(
+        new Float32Array(
+          shape.points.flatMap((point) => [
+            pxToMeters(point.x),
+            pxToMeters(point.y),
+          ]),
+        ),
+      );
+      if (hull) return hull;
+    }
+    return ColliderDesc.cuboid(halfWidth, halfHeight);
   }
 
   removeBody(id: string): void {

@@ -25,7 +25,11 @@ export function applyInteractionVisual3D(
     (translation?.y ?? -visual.ty) + shakeY,
     translation?.z ?? 0,
   );
-  group.rotation.set(0, 0, (visual.rotate * Math.PI) / 180);
+  group.rotation.set(
+    ((visual.rotateX ?? 0) * Math.PI) / 180,
+    ((visual.rotateY ?? 0) * Math.PI) / 180,
+    (visual.rotate * Math.PI) / 180,
+  );
   group.scale.set(
     visual.scaleX,
     visual.scaleY,

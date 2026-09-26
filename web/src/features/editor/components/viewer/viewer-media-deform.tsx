@@ -6,6 +6,7 @@ import {
   useRef,
 } from "react";
 
+import { PlaybackVideo } from "@/features/editor/components/canvas/playback-video";
 import { ShapeGraphic } from "@/features/editor/components/canvas/shape-graphic";
 import {
   colorWithOpacity,
@@ -53,6 +54,8 @@ export type ViewerMediaDeformProps = {
   artboardWidth: number;
   artboardHeight: number;
   elementIndex: number;
+  /** Hidden or covered media: the footage pauses and the mesh stops redrawing. */
+  paused?: boolean;
 };
 
 /** Media uses a real texture mesh. Frames update buffers/canvas/SVG imperatively;
@@ -218,7 +221,9 @@ export const ViewerMediaDeform = memo(
           videoFrameId = null;
           if (stopped || failed || !video) return;
           markMediaDeformVideoFrame(video);
-          ready();
+          // The shared wave clock already redraws every display frame and
+          // picks up the new texture; drawing here too would render twice.
+          if (!renderer || !waveInteraction || !waveClock.animating) ready();
           if (!stopped && !failed)
             videoFrameId = video.requestVideoFrameCallback(onVideoFrame);
         };
@@ -234,6 +239,8 @@ export const ViewerMediaDeform = memo(
           waveInteraction || (video && !decodedFrames)
             ? waveClock.subscribe((frame) => {
                 lastFrame = frame;
+                // Covered or hidden media keeps its last frame.
+                if (propsRef.current.paused && renderer) return;
                 if (
                   waveInteraction ||
                   (video && video.currentTime !== lastVideoTime)
@@ -253,14 +260,17 @@ export const ViewerMediaDeform = memo(
           video.addEventListener("loadeddata", onVideoReady);
           video.addEventListener("seeked", onVideoReady);
           video.addEventListener("error", fail);
-          video.addEventListener("timeupdate", draw);
+          // Without decode callbacks, playback time is the only frame signal.
+          if (!decodedFrames) video.addEventListener("timeupdate", draw);
           if (video.readyState >= 2) ready();
           if (decodedFrames && !failed)
             videoFrameId = video.requestVideoFrameCallback(onVideoFrame);
-          const playback = video.play();
-          playback?.catch(() => {
-            /* The native element remains available for user playback. */
-          });
+          if (!propsRef.current.paused) {
+            const playback = video.play();
+            playback?.catch(() => {
+              /* The native element remains available for user playback. */
+            });
+          }
         }
 
         return () => {
@@ -279,7 +289,7 @@ export const ViewerMediaDeform = memo(
             video.removeEventListener("loadeddata", onVideoReady);
             video.removeEventListener("seeked", onVideoReady);
             video.removeEventListener("error", fail);
-            video.removeEventListener("timeupdate", draw);
+            if (!decodedFrames) video.removeEventListener("timeupdate", draw);
             video.pause();
           }
           renderer?.dispose();
@@ -303,16 +313,10 @@ export const ViewerMediaDeform = memo(
             style={{ position: "absolute", inset: 0, pointerEvents: "none" }}
           >
             {element.type === "video" ? (
-              <video
+              <PlaybackVideo
                 ref={videoRef}
-                aria-hidden="true"
-                autoPlay
-                className="video-shape"
                 crossOrigin="anonymous"
-                loop
-                muted
-                playsInline
-                preload="auto"
+                paused={props.paused}
                 src={element.src}
                 style={{
                   transform: `scale(${element.flipX ? -1 : 1}, ${element.flipY ? -1 : 1})`,

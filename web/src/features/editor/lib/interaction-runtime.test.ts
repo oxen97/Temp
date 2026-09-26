@@ -14,6 +14,31 @@ import {
   runtimeVisualForElement,
 } from "@/features/editor/lib/interaction-runtime";
 
+describe("3D rotation about every axis", () => {
+  it("scales X, Y and Z rotation by the same pointer proximity", () => {
+    const interaction = createDefaultInteraction({
+      trigger: "pointer-move",
+      effect: "rotate",
+      rotateX: 60,
+      rotateY: 180,
+      rotateTo: 90,
+      trackDistance: 200,
+    });
+    const halfway = runtimeVisualForElement([interaction], IDLE_RUNTIME_STATE, {
+      center: { x: 0, y: 0 },
+      pointer: { x: 100, y: 0 },
+    });
+    expect(halfway.rotateX).toBeCloseTo(30);
+    expect(halfway.rotateY).toBeCloseTo(90);
+    expect(halfway.rotate).toBeCloseTo(45);
+    const far = runtimeVisualForElement([interaction], IDLE_RUNTIME_STATE, {
+      center: { x: 0, y: 0 },
+      pointer: { x: 400, y: 0 },
+    });
+    expect(far).toMatchObject({ rotateX: 0, rotateY: 0, rotate: 0 });
+  });
+});
+
 describe("interaction runtime", () => {
   it("treats an interaction as active only when its trigger is on", () => {
     const click = createDefaultInteraction({ trigger: "click-tap" });
@@ -81,6 +106,7 @@ describe("interaction runtime", () => {
       { ...IDLE_RUNTIME_STATE, hovering: true },
     );
     expect(rotate.rotate).toBe(90);
+    expect(rotate).toMatchObject({ rotateX: 0, rotateY: 0 });
 
     const scale = runtimeVisualForElement(
       [

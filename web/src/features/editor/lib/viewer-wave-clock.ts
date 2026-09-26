@@ -17,6 +17,11 @@ export class ViewerWaveClock {
   private frameId: number | null = null;
   private previous = 0;
 
+  /** True while the clock publishes a frame on every display frame. */
+  get animating(): boolean {
+    return !this.reducedMotion && this.listeners.size > 0;
+  }
+
   setPointer(pointer: ViewerPoint | null) {
     this.pointer = pointer;
     for (const listener of this.pointerListeners) listener(pointer);
