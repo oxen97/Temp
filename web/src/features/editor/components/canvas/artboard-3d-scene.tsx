@@ -86,6 +86,8 @@ import {
   orthographicCameraPlacement,
   orthographicOrbitPlacement,
 } from "@/features/editor/three/camera-clearance";
+import type { CameraSky } from "@/features/editor/three/camera-sky";
+import { CameraSkyMesh } from "@/features/editor/three/camera-sky-mesh";
 import {
   artboardPointToEditorAtDepth,
   projectEditorMoveToScreen,
@@ -570,6 +572,11 @@ type Artboard3DSceneProps = {
   onSelectObject?: (objectId: string, additive?: boolean) => void;
   projectId?: string;
   scene?: Partial<Scene3DSettings>;
+  /**
+   * Preview only: the scene background as a 360° sky that turns with the
+   * camera. The layer renders for it even without any 3D object.
+   */
+  sky?: CameraSky | null;
   /** Editor-only visible area in artboard coordinates; preview stays clipped. */
   viewport?: ProjectedBounds;
 };
@@ -2139,6 +2146,7 @@ export function Artboard3DScene({
   onSelectObject,
   projectId = "local-project",
   scene,
+  sky = null,
   viewport,
 }: Artboard3DSceneProps) {
   const settings = useMemo(() => resolveScene3DSettings(scene), [scene]);
@@ -2159,7 +2167,9 @@ export function Artboard3DScene({
           interaction.enabled !== false && interaction.motion === "gravity",
       ),
     );
-  if (!settings.enabled || !visibleObjects.length) return null;
+  // The sky is drawn from the preview camera, so it needs the whole page.
+  const cameraSky = viewport ? null : sky;
+  if (!cameraSky && (!settings.enabled || !visibleObjects.length)) return null;
 
   return (
     <div
@@ -2203,6 +2213,13 @@ export function Artboard3DScene({
             scene={settings}
             viewport={renderViewport}
           />
+          {cameraSky ? (
+            <CameraSkyMesh
+              artboardHeight={artboardHeight}
+              artboardWidth={artboardWidth}
+              sky={cameraSky}
+            />
+          ) : null}
           {screenPointToWorldRef ? (
             <ScreenPointToWorldBridge
               bridgeRef={screenPointToWorldRef}

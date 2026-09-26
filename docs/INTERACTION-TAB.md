@@ -17,6 +17,11 @@
   「카메라·시각 파이프라인 → Camera Rotate 실행 규칙」에 있다. 에디터 캔버스
   카메라는 계속 정면 고정이다. Camera Move·Zoom/Dolly·Look At·Shake는 아직
   패널 설정만 있다. AMOUS Playground 데모의 08 SPACE 씬이 이 효과를 쓴다.
+- **2026-09-27 씬별 배경 · 카메라와 함께 회전**: 배경은 이제 씬마다 따로다.
+  Camera Rotate가 있는 씬은 배경 이미지를 카메라와 함께 도는 360° 하늘로 쓸 수
+  있다. 둘 다 Interaction 효과가 아니라 SCENES 탭 설정이며, 규칙은
+  `docs/SCENES-TAB.md`에 있다. Entire artwork 카메라 드래그는 호스트 요소의
+  Drag 사운드를 재생한다(아래 Camera Rotate 실행 규칙).
 - **2026-09-24 FIELD NOTES 오리지널 4개 Scene**: 기존 `?interactionDemo=mon-art`
   링크는 유지하며 화면은 AMOUS의 BREEZE·INK·BLOOM·TOPOGRAPHY로 교체했다.
   배경·갈대·꽃·등고선·텍스트는 모두 편집 가능한 기본 도형과 펜 경로로 구성하며
@@ -875,6 +880,9 @@ Tone mapping, Shadow map 품질을 둔다.
     드롭 제스처를 가진 요소·오브젝트에서 시작한 누름은 그 요소가 쓰고, 카메라는
     그대로 둔다. 페이지에는 grab 커서가 표시된다. 터치에서 화면 페이지는
     스크롤되지 않고, 스크롤 페이지는 세로 스크롤을 유지한다.
+    이 인터랙션을 가진 요소(호스트)의 SOUND 탭 Drag 사운드(Drag start ·
+    While dragging · Drop)는 화면 어디서 끌어도 재생된다. 호스트 자신을 눌러
+    끌 때는 호스트의 소리가 한 번만 난다.
   - Trigger area **Selected object**: 그 요소·오브젝트를 끌 때만 돈다. 3D
     오브젝트도 화면 기준 이동량을 쓰므로, 카메라가 돌아도 드래그가 튀지 않는다.
 - **Pointer Move / Touch Move**: 중심(Entire artwork=아트보드 중심, Selected
@@ -914,6 +922,10 @@ Tone mapping, Shadow map 품질을 둔다.
 - 에디터 캔버스는 Scene 설정의 카메라(기본 정면 Orthographic)를 그대로 쓴다.
 - Orthographic 카메라가 돌 때는 모든 오브젝트를 담는 구 밖에서 돌아, 어떤
   각도에서도 오브젝트가 잘리지 않는다. 화면에 보이는 크기는 같다.
+- 배경 이미지를 카메라와 함께 도는 하늘로 쓰려면 SCENES 탭 → Background →
+  Image → **Rotate with Camera**를 켠다. 하늘은 이 Field of view로 보이며,
+  Orthographic에서는 씬의 Perspective 값(기본 35°)을 쓴다. 규칙:
+  `docs/SCENES-TAB.md`.
 
 **저장·호환**
 

@@ -1,36 +1,49 @@
-import { memo } from "react";
+import { memo, useMemo } from "react";
 
 import { ArtboardBackground } from "@/features/editor/components/canvas/artboard-background";
 import { ShapeGraphic } from "@/features/editor/components/canvas/shape-graphic";
 import { Scene3DPreview } from "@/features/editor/components/viewer/scene-3d-preview";
+import { useCameraSkyBackground } from "@/features/editor/hooks/use-camera-sky-background";
 import { textStyleForElement } from "@/features/editor/lib/element-style";
 import {
   type ArtboardSettings,
   type CanvasElement,
 } from "@/features/editor/store/editor-store";
+import { cameraSkyForScene } from "@/features/editor/three/camera-sky";
 import type {
   Object3DElement,
   Scene3DSettings,
 } from "@/features/editor/three/types";
 
+const NO_OBJECTS_3D: Object3DElement[] = [];
+
 // Memoized: the scene list renders one thumbnail per scene. The store keeps an
 // unchanged scene's elements as the same array, so only thumbnails whose scene
 // (or the shared artboard/media previews) changed are re-rendered.
 export const ScenePreview = memo(function ScenePreview({
-  artboard,
+  artboard: sceneArtboard,
   elements,
   mediaPreviewSources = {},
-  objects3d = [],
+  objects3d = NO_OBJECTS_3D,
   projectId,
   scene3d,
+  sceneId,
 }: {
+  /** The artboard with this scene's own background (lib/scene-background). */
   artboard: ArtboardSettings;
   elements: CanvasElement[];
   mediaPreviewSources?: Record<string, string | undefined>;
   objects3d?: Object3DElement[];
   projectId: string;
   scene3d?: Partial<Scene3DSettings>;
+  sceneId?: string;
 }) {
+  const sky = useMemo(
+    () =>
+      cameraSkyForScene(sceneArtboard, [...elements, ...objects3d], scene3d),
+    [elements, objects3d, scene3d, sceneArtboard],
+  );
+  const artboard = useCameraSkyBackground(sceneArtboard, sky);
   const previewSize = 49;
   const scale = Math.max(
     previewSize / artboard.width,
@@ -52,7 +65,11 @@ export const ScenePreview = memo(function ScenePreview({
           width: artboard.width,
         }}
       >
-        <ArtboardBackground artboard={artboard} playVideo={false} />
+        <ArtboardBackground
+          artboard={artboard}
+          playVideo={false}
+          sceneId={sceneId}
+        />
         <Scene3DPreview
           artboardHeight={artboard.height}
           artboardWidth={artboard.width}

@@ -365,6 +365,50 @@ describe("project files", () => {
     expect(opened.library.modelAssets).toEqual([robot, spare]);
   });
 
+  it("carries a scene's own background image and poster", async () => {
+    const { artboard, library, pages } = artwork();
+    pages[1] = {
+      ...pages[1],
+      background: {
+        background: "#04050c",
+        backgroundImage: UNPLACED,
+        backgroundMediaPreview: UNPLACED,
+        backgroundMediaPreviewSource: UNPLACED,
+        backgroundMediaType: "image",
+        backgroundRotateWithCamera: true,
+      },
+    };
+    const saved = await createProjectFile(
+      { activePageId: "scene-2", artboard, pages },
+      library,
+      exportDeps(),
+    );
+    const { manifest } = await decodeProjectFile(saved.blob);
+    expect(JSON.stringify(manifest.payload)).not.toContain("blob:");
+
+    const { created, deps } = importDeps();
+    const opened = await readProjectFile(saved.blob, deps);
+    const background = opened.snapshot.pages[1].background;
+    expect(background).toMatchObject({
+      background: "#04050c",
+      backgroundMediaType: "image",
+      backgroundRotateWithCamera: true,
+    });
+    expect(background?.backgroundImage).toMatch(/^blob:restored\//);
+    // The image and its poster stay one file.
+    expect(background?.backgroundMediaPreview).toBe(
+      background?.backgroundImage,
+    );
+    expect(background?.backgroundMediaPreviewSource).toBe(
+      background?.backgroundImage,
+    );
+    const restored =
+      created[Number(background?.backgroundImage?.split("/").pop()) - 1];
+    expect(await restored.text()).toBe("not on a scene yet");
+    // The first scene keeps showing the common background.
+    expect(opened.snapshot.pages[0]).not.toHaveProperty("background");
+  });
+
   it("still saves when some files can no longer be read, and counts them", async () => {
     const { artboard, library, pages } = artwork();
     const saved = await createProjectFile(

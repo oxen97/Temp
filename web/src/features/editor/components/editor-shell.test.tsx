@@ -21,6 +21,7 @@ import type {
 } from "../store/editor-store";
 import { calculateCanvasFitZoom } from "../lib/geometry";
 import { createDefaultInteraction } from "../lib/interaction-model";
+import { artboardForScene } from "../lib/scene-background";
 import {
   calculateInteractionSoundVolume,
   chooseInteractionSoundAsset,
@@ -30,6 +31,21 @@ import {
   soundPreloadAttribute,
 } from "../lib/sound-settings";
 import { EditorShell } from "./editor-shell";
+
+// The still of a "Rotate with Camera" sky needs WebGL; jsdom gets a stand-in.
+vi.mock("../three/camera-sky", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../three/camera-sky")>()),
+  requestCameraSkyView: vi.fn(async () => "data:image/webp;base64,c2t5"),
+}));
+
+/** The background the active scene shows (its own, or the common one). */
+function activeSceneBackground() {
+  const state = useEditorStore.getState();
+  return artboardForScene(
+    state.artboard,
+    state.pages.find((page) => page.id === state.activePageId),
+  );
+}
 
 beforeEach(() => {
   vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
@@ -2641,7 +2657,9 @@ describe("EditorShell", () => {
     fireEvent.change(screen.getByLabelText("Solid background color"), {
       target: { value: "336699" },
     });
-    expect(useEditorStore.getState().artboard.background).toBe("#336699");
+    // The background belongs to the scene; the common one is untouched.
+    expect(activeSceneBackground().background).toBe("#336699");
+    expect(useEditorStore.getState().artboard.background).toBe("#d9d9d9");
     expect(
       screen.getByLabelText("Solid background opacity").closest("label"),
     ).toHaveClass("scene-percent-field", "is-wide");
@@ -2676,9 +2694,7 @@ describe("EditorShell", () => {
     expect(screen.queryByText("Auto Play")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Gradation" }));
-    expect(useEditorStore.getState().artboard.backgroundGradientEnabled).toBe(
-      true,
-    );
+    expect(activeSceneBackground().backgroundGradientEnabled).toBe(true);
     expect(screen.getByRole("button", { name: "Solid" })).toHaveAttribute(
       "aria-pressed",
       "true",
@@ -2724,12 +2740,10 @@ describe("EditorShell", () => {
       ].some((layer) => layer.style.backgroundImage.includes("20%")),
     ).toBe(true);
     fireEvent.pointerUp(firstGradientStop, { clientX: 40, pointerId: 1 });
-    expect(useEditorStore.getState().artboard.gradientStops?.[0].position).toBe(
-      20,
-    );
+    expect(activeSceneBackground().gradientStops?.[0].position).toBe(20);
 
     fireEvent.click(screen.getByRole("button", { name: "Add gradient color" }));
-    expect(useEditorStore.getState().artboard.gradientStops).toHaveLength(3);
+    expect(activeSceneBackground().gradientStops).toHaveLength(3);
     expect(screen.getAllByLabelText(/^Gradient color \d$/)).toHaveLength(3);
     expect(
       [...document.querySelectorAll<HTMLElement>(".artboard-background-layer")]
@@ -2763,17 +2777,12 @@ describe("EditorShell", () => {
       screen.getAllByRole("option").map((option) => option.textContent),
     ).toEqual(["Cover", "Contain", "Original", "Stretch"]);
     fireEvent.click(screen.getByRole("option", { name: "Contain" }));
-    expect(useEditorStore.getState().artboard.backgroundImageFit).toBe(
-      "contain",
-    );
+    expect(activeSceneBackground().backgroundImageFit).toBe("contain");
 
     act(() => {
-      useEditorStore.setState((state) => ({
-        artboard: {
-          ...state.artboard,
-          backgroundImage: "blob:uploaded-background",
-        },
-      }));
+      useEditorStore.getState().updateSceneBackground("page-1", {
+        backgroundImage: "blob:uploaded-background",
+      });
     });
     const replaceImageButton = screen.getByRole("button", {
       name: "Replace background image",
@@ -2791,7 +2800,141 @@ describe("EditorShell", () => {
     expect(screen.getByLabelText("Mute")).toBeChecked();
 
     fireEvent.click(screen.getByLabelText("Auto Play"));
-    expect(useEditorStore.getState().artboard.backgroundAutoPlay).toBe(false);
+    expect(activeSceneBackground().backgroundAutoPlay).toBe(false);
+  });
+
+  describe("scene backgrounds", () => {
+    beforeEach(() => {
+      useEditorStore.setState({
+        activePageId: "page-1",
+        pages: [
+          { elements: [], id: "page-1", name: "Intro" },
+          { elements: [], id: "page-2", name: "Space" },
+        ],
+      });
+    });
+
+    const thumbnailColor = (container: HTMLElement, index: number) =>
+      container
+        .querySelectorAll(".scene-thumbnail")
+        [index].querySelector<HTMLElement>(".artboard-background-layer")!.style
+        .backgroundColor;
+
+    it("edits only the current scene and applies it to every scene on request", () => {
+      const { container } = render(<EditorShell />);
+      fireEvent.click(screen.getByRole("tab", { name: "SCENES" }));
+      const applyAll = screen.getByRole("button", {
+        name: "Apply to All Scenes",
+      });
+      // Every scene still shows the common background.
+      expect(applyAll).toBeDisabled();
+
+      fireEvent.change(screen.getByLabelText("Solid background color"), {
+        target: { value: "336699" },
+      });
+      expect(activeSceneBackground().background).toBe("#336699");
+      expect(thumbnailColor(container, 0)).toContain("51, 102, 153");
+      expect(thumbnailColor(container, 1)).toContain("217, 217, 217");
+      expect(
+        container.querySelector<HTMLElement>(
+          "#editor-artboard .artboard-background-layer",
+        )!.style.backgroundColor,
+      ).toContain("51, 102, 153");
+
+      // The other scene keeps the common background in its own settings.
+      fireEvent.click(screen.getByText("Space").closest(".scene-item")!);
+      expect(screen.getByLabelText("Solid background color")).toHaveValue(
+        "D9D9D9",
+      );
+      fireEvent.click(screen.getByText("Intro").closest(".scene-item")!);
+
+      fireEvent.click(
+        screen.getByRole("button", { name: "Apply to All Scenes" }),
+      );
+      expect(useEditorStore.getState().artboard.background).toBe("#336699");
+      expect(
+        useEditorStore.getState().pages.every((page) => !page.background),
+      ).toBe(true);
+      expect(thumbnailColor(container, 1)).toContain("51, 102, 153");
+      expect(
+        screen.getByRole("button", { name: "Apply to All Scenes" }),
+      ).toBeDisabled();
+
+      // A new scene starts with the common background.
+      fireEvent.click(screen.getByRole("button", { name: "Add scene" }));
+      expect(activeSceneBackground().background).toBe("#336699");
+    });
+
+    it("offers Rotate with Camera for an image on a scene with Camera Rotate", async () => {
+      const caption = {
+        ...testSoundShape("caption", 100),
+        interactions: [
+          createDefaultInteraction({
+            cameraFov: 40,
+            cameraProjection: "perspective",
+            effect: "camera-rotate",
+            trigger: "drag",
+            triggerArea: "entire-artwork",
+          }),
+        ],
+      };
+      useEditorStore.setState((state) => ({
+        pages: state.pages.map((page) =>
+          page.id === "page-2" ? { ...page, elements: [caption] } : page,
+        ),
+      }));
+      const image = {
+        backgroundImage: "blob:night-sky",
+        backgroundMediaType: "image" as const,
+      };
+      useEditorStore.getState().updateSceneBackground("page-1", image);
+      useEditorStore.getState().updateSceneBackground("page-2", image);
+      const { container } = render(<EditorShell />);
+      fireEvent.click(screen.getByRole("tab", { name: "SCENES" }));
+
+      // No Camera Rotate on this scene: nothing turns, so no option.
+      expect(
+        screen.queryByLabelText("Rotate with Camera"),
+      ).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByText("Space").closest(".scene-item")!);
+      const rotate = screen.getByLabelText("Rotate with Camera");
+      expect(rotate).not.toBeChecked();
+      expect(screen.getByLabelText("Background media fit")).toBeEnabled();
+      const fitDropdown = () =>
+        screen.getByLabelText("Background media fit").parentElement!;
+      expect(fitDropdown()).toHaveClass("scene-image-fit-select");
+      expect(fitDropdown()).not.toHaveClass("is-disabled");
+      const canvasImage = () =>
+        container.querySelector<HTMLElement>(
+          '#editor-artboard [data-background-layer="image"]',
+        );
+      expect(canvasImage()?.style.backgroundImage).toContain("blob:night-sky");
+
+      fireEvent.click(rotate);
+      expect(activeSceneBackground().backgroundRotateWithCamera).toBe(true);
+      expect(screen.getByLabelText("Rotate with Camera")).toBeChecked();
+      // A sky wraps the whole image around the camera: Fit does not apply.
+      expect(screen.getByLabelText("Background media fit")).toBeDisabled();
+      expect(fitDropdown()).toHaveClass(
+        "scene-image-fit-select",
+        "is-disabled",
+      );
+      // The canvas shows the sky as the camera sees it at rest.
+      await waitFor(() =>
+        expect(canvasImage()?.style.backgroundImage).toContain(
+          "data:image/webp;base64,c2t5",
+        ),
+      );
+      expect(canvasImage()?.style.backgroundSize).toBe("100% 100%");
+      // The first scene keeps its flat image.
+      expect(
+        container
+          .querySelectorAll(".scene-thumbnail")[0]
+          .querySelector<HTMLElement>('[data-background-layer="image"]')?.style
+          .backgroundImage,
+      ).toContain("blob:night-sky");
+    });
   });
 
   it("clamps canvas zoom between 5% and 500%", () => {

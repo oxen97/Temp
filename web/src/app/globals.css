@@ -2764,8 +2764,58 @@ input[type="number"] {
 
 .scene-auto-play,
 .scene-loop,
-.scene-mute {
+.scene-mute,
+.scene-rotate-with-camera {
   position: absolute;
+}
+
+.scene-rotate-with-camera {
+  left: 33px;
+}
+
+.scene-hint {
+  position: absolute;
+  left: 55px;
+  width: 260px;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 8px;
+  font-weight: 500;
+  line-height: 10px;
+}
+
+/* The Background row's right end: make this scene's background every scene's. */
+.scene-apply-all {
+  position: absolute;
+  top: 231px;
+  right: 16px;
+  height: 18px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  background: transparent;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 8px;
+  font-weight: 500;
+  line-height: 10px;
+  cursor: pointer;
+}
+
+.scene-apply-all:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.scene-apply-all:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.scene-apply-all:disabled {
+  color: var(--text-secondary);
+  cursor: default;
+  opacity: 0.6;
 }
 
 .scene-checkbox {
@@ -3199,6 +3249,11 @@ input[type="number"] {
   top: 467px;
   left: 95px;
   width: 71px;
+}
+
+.scene-image-fit-label.is-disabled,
+.scene-image-fit-select.is-disabled {
+  opacity: 0.4;
 }
 
 .scene-image-opacity-label {

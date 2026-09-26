@@ -4,6 +4,7 @@ import {
   type CurrentExhibitionProject,
 } from "@/core/project/schema";
 import { normalizeInteractions } from "@/features/editor/lib/interaction-model";
+import { normalizeSceneBackground } from "@/features/editor/lib/scene-background";
 import { normalizeSceneLogicRules } from "@/features/editor/lib/scene-logic";
 import type {
   ArtboardSettings,
@@ -77,9 +78,14 @@ export function serializeEditorDocument({
 function hydratePage(
   scene: CurrentExhibitionProject["scenes"][number],
 ): EditorPage {
-  const page = cloneSerializable(scene) as unknown as EditorPage;
+  const { background: rawBackground, ...page } = cloneSerializable(
+    scene,
+  ) as unknown as EditorPage & { background?: unknown };
+  // A malformed scene background falls back to the common one.
+  const background = normalizeSceneBackground(rawBackground);
   return {
     ...page,
+    ...(background ? { background } : {}),
     logicRules: normalizeSceneLogicRules(scene.logicRules),
     elements: cloneSerializable(scene.elements).map((rawElement) => {
       const element = rawElement as CanvasElement;
