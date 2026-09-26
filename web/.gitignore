@@ -33,6 +33,8 @@
 
 # debug
 npm-debug.log*
+# Chrome writes this when started from this folder.
+debug.log
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*

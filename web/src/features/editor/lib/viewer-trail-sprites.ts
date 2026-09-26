@@ -7,18 +7,47 @@ import {
  * previous CSS `blur()` rendering, which used the same factor). */
 export const TRAIL_BLUR_SCALE = 0.45;
 
-/** Sprite edge in pixels. Marks are soft, so one resolution serves every size. */
-export const TRAIL_SPRITE_SIZE = 128;
-
 /** A mark's blurred glow reaches about three radii beyond its disc. */
 const GLOW_REACH = 3;
 
-/** Blur-to-diameter ratios with a pre-rendered sprite. A mark uses the nearest
- * ratio; neighbouring steps are visually indistinguishable at trail sizes. */
-export const TRAIL_BLUR_RATIOS = [
-  0, 0.03, 0.06, 0.09, 0.12, 0.16, 0.2, 0.25, 0.3, 0.36, 0.43, 0.5, 0.6, 0.7,
-  0.85, 1, 1.25, 1.5,
-] as const;
+/** Blur-to-diameter ratios of the pre-blurred sprites. Level 0 is a sharp
+ * disc; the others grow geometrically by `TRAIL_BLUR_STEP`. A mark keeps its
+ * blur in world pixels while it grows, so its ratio falls and it moves through
+ * the levels. With 4% steps a switch changes the drawn coverage by under two
+ * percentage points; the former 20% steps made growing marks visibly flicker. */
+const MIN_RATIO = 0.02;
+const MAX_RATIO = 1.5;
+export const TRAIL_BLUR_STEP = 1.04;
+export const TRAIL_BLUR_LEVELS =
+  2 + Math.ceil(Math.log(MAX_RATIO / MIN_RATIO) / Math.log(TRAIL_BLUR_STEP));
+
+export function trailBlurRatio(level: number): number {
+  return level <= 0
+    ? 0
+    : MIN_RATIO *
+        TRAIL_BLUR_STEP ** (Math.min(level, TRAIL_BLUR_LEVELS - 1) - 1);
+}
+
+export function trailBlurLevel(blur: number, diameter: number): number {
+  if (!(blur > 0) || !(diameter > 0)) return 0;
+  const ratio = blur / diameter;
+  // Below the first level the blur is under 2% of the disc: draw it sharp.
+  if (ratio < MIN_RATIO / Math.sqrt(TRAIL_BLUR_STEP)) return 0;
+  const level =
+    1 + Math.round(Math.log(ratio / MIN_RATIO) / Math.log(TRAIL_BLUR_STEP));
+  return Math.min(TRAIL_BLUR_LEVELS - 1, Math.max(1, level));
+}
+
+/** Drawn sprite edge for a disc of `diameter`, including its glow margin. */
+export function trailSpriteExtent(diameter: number, level: number) {
+  return diameter * (1 + 2 * GLOW_REACH * trailBlurRatio(level));
+}
+
+/** Sprite edge in pixels: a soft glow needs little resolution, a crisp disc
+ * more. Keeps the whole sprite set of a busy trail within a few megabytes. */
+export function trailSpriteSize(level: number) {
+  return trailBlurRatio(level) >= 0.08 ? 64 : 128;
+}
 
 export type TrailMarkFrame = {
   id: number;
@@ -36,16 +65,21 @@ export type TrailMarkFrame = {
   retiring: boolean;
 };
 
+/** Growth factor of a mark at `now` (1 at birth, `growth` at the end of life). */
+export function trailMarkScale(particle: ViewerTrailParticle, now: number) {
+  const progress = Math.max(
+    0,
+    Math.min(1, (now - particle.createdAt) / (particle.lifespan * 1000)),
+  );
+  return 1 + (particle.growth - 1) * progress;
+}
+
 /** Geometry and opacity of one mark at `now`; the renderer and tests share it. */
 export function trailMarkFrame(
   particle: ViewerTrailParticle,
   now: number,
 ): TrailMarkFrame {
-  const progress = Math.max(
-    0,
-    Math.min(1, (now - particle.createdAt) / (particle.lifespan * 1000)),
-  );
-  const scale = 1 + (particle.growth - 1) * progress;
+  const scale = trailMarkScale(particle, now);
   return {
     id: particle.id,
     interactionId: particle.interactionId,
@@ -61,25 +95,6 @@ export function trailMarkFrame(
   };
 }
 
-export function trailBlurRatioIndex(blur: number, diameter: number): number {
-  if (!(blur > 0) || !(diameter > 0)) return 0;
-  const ratio = blur / diameter;
-  let best = 0;
-  for (let index = 1; index < TRAIL_BLUR_RATIOS.length; index += 1) {
-    if (
-      Math.abs(TRAIL_BLUR_RATIOS[index] - ratio) <
-      Math.abs(TRAIL_BLUR_RATIOS[best] - ratio)
-    )
-      best = index;
-  }
-  return best;
-}
-
-/** Drawn sprite edge for a disc of `diameter`, including its glow margin. */
-export function trailSpriteExtent(diameter: number, ratioIndex: number) {
-  return diameter * (1 + 2 * GLOW_REACH * TRAIL_BLUR_RATIOS[ratioIndex]);
-}
-
 const masks = new Map<number, Float32Array>();
 
 function blurAxis(
@@ -93,11 +108,13 @@ function blurAxis(
   for (let row = 0; row < size; row += 1) {
     for (let column = 0; column < size; column += 1) {
       let sum = 0;
-      for (let offset = -radius; offset <= radius; offset += 1) {
-        const x = horizontal ? column + offset : column;
-        const y = horizontal ? row : row + offset;
-        if (x < 0 || y < 0 || x >= size || y >= size) continue;
-        sum += source[y * size + x] * kernel[offset + radius];
+      const from = Math.max(-radius, -(horizontal ? column : row));
+      const to = Math.min(radius, size - 1 - (horizontal ? column : row));
+      for (let offset = from; offset <= to; offset += 1) {
+        const index = horizontal
+          ? row * size + column + offset
+          : (row + offset) * size + column;
+        sum += source[index] * kernel[offset + radius];
       }
       target[row * size + column] = sum;
     }
@@ -109,11 +126,11 @@ function blurAxis(
  * gradient is solid to 16% and clear at 76% of its farthest-corner ray),
  * blurred once here instead of by a per-mark CSS filter every frame.
  */
-export function trailSpriteMask(ratioIndex: number): Float32Array {
-  const cached = masks.get(ratioIndex);
+export function trailSpriteMask(level: number): Float32Array {
+  const cached = masks.get(level);
   if (cached) return cached;
-  const size = TRAIL_SPRITE_SIZE;
-  const ratio = TRAIL_BLUR_RATIOS[ratioIndex];
+  const size = trailSpriteSize(level);
+  const ratio = trailBlurRatio(level);
   const disc = size / (1 + 2 * GLOW_REACH * ratio);
   const radius = disc / 2;
   const center = size / 2;
@@ -150,32 +167,39 @@ export function trailSpriteMask(ratioIndex: number): Float32Array {
     blurAxis(scratch, blurred, size, kernel, false);
     alpha = blurred;
   }
-  masks.set(ratioIndex, alpha);
+  masks.set(level, alpha);
   return alpha;
 }
 
-/** Colored sprites are cheap to rebuild; the cap bounds pathological color lists. */
-const MAX_SPRITES = 256;
+/** Colored sprites of the levels in use. A busy four-color trail uses about
+ * 150; older entries are dropped in bulk beyond the cap (marks keep drawing
+ * the sprite they hold). */
+const MAX_SPRITES = 1024;
 const sprites = new Map<string, HTMLCanvasElement | null>();
+
+const spriteKey = (color: string, level: number) => `${level}|${color}`;
+
+export function hasTrailSprite(color: string, level: number) {
+  return sprites.has(spriteKey(color, level));
+}
 
 export function trailSprite(
   color: string,
-  ratioIndex: number,
+  level: number,
 ): HTMLCanvasElement | null {
-  const key = `${ratioIndex}|${color}`;
-  if (sprites.has(key)) return sprites.get(key)!;
+  const key = spriteKey(color, level);
+  const cached = sprites.get(key);
+  if (cached !== undefined) return cached;
   let sprite: HTMLCanvasElement | null = null;
   if (typeof document !== "undefined") {
+    const size = trailSpriteSize(level);
     const canvas = document.createElement("canvas");
-    canvas.width = TRAIL_SPRITE_SIZE;
-    canvas.height = TRAIL_SPRITE_SIZE;
+    canvas.width = size;
+    canvas.height = size;
     const context = canvas.getContext("2d");
     if (context) {
-      const mask = trailSpriteMask(ratioIndex);
-      const pixels = context.createImageData(
-        TRAIL_SPRITE_SIZE,
-        TRAIL_SPRITE_SIZE,
-      );
+      const mask = trailSpriteMask(level);
+      const pixels = context.createImageData(size, size);
       for (let index = 0; index < mask.length; index += 1) {
         const offset = index * 4;
         pixels.data[offset] = 255;
@@ -187,11 +211,18 @@ export function trailSprite(
       // Tint the white coverage with the authored CSS color, keeping its alpha.
       context.globalCompositeOperation = "source-in";
       context.fillStyle = color;
-      context.fillRect(0, 0, TRAIL_SPRITE_SIZE, TRAIL_SPRITE_SIZE);
+      context.fillRect(0, 0, size, size);
       sprite = canvas;
     }
   }
-  if (sprites.size >= MAX_SPRITES) sprites.clear();
+  if (sprites.size >= MAX_SPRITES) {
+    let drop = MAX_SPRITES / 4;
+    for (const stale of sprites.keys()) {
+      sprites.delete(stale);
+      drop -= 1;
+      if (drop <= 0) break;
+    }
+  }
   sprites.set(key, sprite);
   return sprite;
 }

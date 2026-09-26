@@ -200,8 +200,14 @@ describe("ViewerMediaDeform", () => {
       velocities: rest.map(() => ({ x: 0, y: 0 })),
       anchorIndex: 0,
     };
+    const drawsBefore = fake.draw.mock.calls.length;
     act(() => ref.current!.updatePose(pose));
+    // A pose update waits for the next display frame instead of rendering
+    // WebGL inside the caller (React renders call it too).
+    expect(fake.draw).toHaveBeenCalledTimes(drawsBefore);
+    tick(132);
     expect(hit.getAttribute("d")).toMatch(/^M250 0 /);
+    expect(fake.draw).toHaveBeenCalledTimes(drawsBefore + 1);
     expect(fake.shapeRender).toHaveBeenCalledTimes(1);
     view.unmount();
     expect(frames.size).toBe(0);
@@ -297,6 +303,32 @@ describe("ViewerMediaDeform", () => {
     view.unmount();
   });
 
+  it("coalesces re-renders of still media into one draw on the next frame", () => {
+    const clock = new ViewerWaveClock();
+    const ref = createRef<ViewerMediaDeformHandle>();
+    const view = render(
+      <ViewerMediaDeform {...base} ref={ref} waveClock={clock} />,
+    );
+    loadImage();
+    fake.draw.mockClear();
+    for (const tx of [4, 8, 12])
+      view.rerender(
+        <ViewerMediaDeform
+          {...base}
+          ref={ref}
+          visual={{ ...IDENTITY_VISUAL, tx }}
+          waveClock={clock}
+        />,
+      );
+    act(() => ref.current!.updatePose(null));
+    expect(fake.draw).not.toHaveBeenCalled();
+    expect(frames.size).toBe(1);
+    tick(16);
+    expect(fake.draw).toHaveBeenCalledTimes(1);
+    view.unmount();
+    expect(frames.size).toBe(0);
+  });
+
   it("pauses hidden or covered footage and freezes its mesh until shown again", () => {
     const clock = new ViewerWaveClock();
     const wave = createDefaultInteraction({ effect: "wave-deform" });
@@ -312,12 +344,14 @@ describe("ViewerMediaDeform", () => {
     Object.defineProperty(video, "paused", { configurable: true, value: false });
     const pause = vi.mocked(HTMLMediaElement.prototype.pause);
     pause.mockClear();
+    fake.draw.mockClear();
     view.rerender(
       <ViewerMediaDeform {...base} element={clip} paused waveClock={clock} waveInteraction={wave} />,
     );
     expect(pause).toHaveBeenCalled();
     expect(video).toHaveAttribute("data-playback", "paused");
-    fake.draw.mockClear();
+    // Covering the footage (a popup opening) renders nothing extra.
+    expect(fake.draw).not.toHaveBeenCalled();
     tick(116);
     tick(132);
     expect(fake.draw).not.toHaveBeenCalled();

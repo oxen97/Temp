@@ -63,6 +63,46 @@ describe("viewer generated effects", () => {
     ).toEqual([]);
   });
 
+  it("ages each mark from when the pointer passed it", () => {
+    const interaction = createDefaultInteraction({
+      id: "trail",
+      effect: "pointer-trail",
+      trailSpacing: 10,
+    });
+    // One frame's move from x 0 (t 1000) to x 40 (t 1016).
+    const points = sampleTrailSegment(
+      { x: 0, y: 0, time: 1000 },
+      { x: 40, y: 0, time: 1016 },
+      10,
+    );
+    expect(points).toEqual([
+      { x: 10, y: 0, time: 1004 },
+      { x: 20, y: 0, time: 1008 },
+      { x: 30, y: 0, time: 1012 },
+      { x: 40, y: 0, time: 1016 },
+    ]);
+    const particles = createTrailParticles(interaction, points, 1020, 1);
+    expect(particles.map((particle) => particle.createdAt)).toEqual([
+      1004, 1008, 1012, 1016,
+    ]);
+    expect(particles[0]).not.toHaveProperty("time");
+    // Untimed samples (and any time after processing) use the frame time.
+    expect(
+      createTrailParticles(
+        interaction,
+        [
+          { x: 1, y: 1 },
+          { x: 2, y: 2, time: 2000 },
+        ],
+        1020,
+        9,
+      ).map((particle) => particle.createdAt),
+    ).toEqual([1020, 1020]);
+    expect(
+      sampleTrailSegment({ x: 0, y: 0 }, { x: 20, y: 0, time: 5 }, 10)[0],
+    ).toEqual({ x: 10, y: 0 });
+  });
+
   it("fades over its authored lifespan and reaches zero before removal", () => {
     const interaction = createDefaultInteraction({
       trailLifespan: 8,

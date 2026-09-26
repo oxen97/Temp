@@ -44,12 +44,19 @@ export async function loadRapier(): Promise<RapierApi> {
  * Collider outline in artboard px around the body center. Matching the drawn
  * shape lets round and pointed shapes rest against each other without the gaps
  * a bounding box leaves at their corners.
+ *
+ * `polygons` lists convex pieces whose union is the drawn outline: one piece
+ * for a convex shape, several for a concave one such as a star. Solid pieces
+ * give every body a mass from its drawn area (the engine's rounded shapes
+ * weigh only their inner core, which let heavy shapes crush light ones).
  */
 export type PhysicsShape =
   | { kind: "box" }
   | { kind: "ball"; radius: number }
-  | { kind: "round-box"; radius: number }
-  | { kind: "hull"; points: { x: number; y: number }[] };
+  | { kind: "polygons"; parts: { x: number; y: number }[][] };
+
+/** Rolling resistance: without it a ball on a flat floor never stops. */
+export const BALL_ANGULAR_DAMPING = 3;
 
 export type PhysicsBodyInput = {
   id: string;
@@ -136,52 +143,55 @@ export class InteractionPhysicsWorld {
 
   addBody(input: PhysicsBodyInput): void {
     if (this.bodies.has(input.id)) return;
+    const shape = input.shape ?? { kind: "box" };
     const desc = this.rapier.RigidBodyDesc.dynamic()
       .setTranslation(pxToMeters(input.centerX), pxToMeters(input.centerY))
       .setLinvel(
         pxToMeters(input.velocityX ?? 0),
         pxToMeters(input.velocityY ?? 0),
       );
+    if (shape.kind === "ball") desc.setAngularDamping(BALL_ANGULAR_DAMPING);
     const body = this.world.createRigidBody(desc);
     const bounciness = Math.min(1, Math.max(0, input.bounciness));
-    this.world.createCollider(
-      this.colliderFor(input).setRestitution(bounciness),
-      body,
-    );
+    // Pieces of one body never collide with each other; their areas add up.
+    for (const collider of this.collidersFor(input, shape)) {
+      this.world.createCollider(collider.setRestitution(bounciness), body);
+    }
     this.bodies.set(input.id, body);
   }
 
-  private colliderFor(input: PhysicsBodyInput) {
+  private collidersFor(input: PhysicsBodyInput, shape: PhysicsShape) {
     const halfWidth = pxToMeters(Math.max(1, input.width) / 2);
     const halfHeight = pxToMeters(Math.max(1, input.height) / 2);
-    const shape = input.shape ?? { kind: "box" };
     const { ColliderDesc } = this.rapier;
     if (shape.kind === "ball") {
-      return ColliderDesc.ball(pxToMeters(Math.max(0.5, shape.radius)));
+      return [ColliderDesc.ball(pxToMeters(Math.max(0.5, shape.radius)))];
     }
-    if (shape.kind === "round-box") {
-      const radius = Math.min(pxToMeters(shape.radius), halfWidth, halfHeight);
-      if (radius > 0) {
-        // Rapier grows the inner box by the radius on every side.
-        return ColliderDesc.roundCuboid(
-          Math.max(0.001, halfWidth - radius),
-          Math.max(0.001, halfHeight - radius),
-          radius,
-        );
-      }
+    if (shape.kind === "polygons") {
+      const pieces = shape.parts
+        .filter((part) => part.length >= 3)
+        .map((part) =>
+          ColliderDesc.convexHull(
+            new Float32Array(
+              part.flatMap((point) => [
+                pxToMeters(point.x),
+                pxToMeters(point.y),
+              ]),
+            ),
+          ),
+        )
+        .filter((piece): piece is RAPIER.ColliderDesc => piece !== null);
+      if (pieces.length) return pieces;
     }
-    if (shape.kind === "hull" && shape.points.length >= 3) {
-      const hull = ColliderDesc.convexHull(
-        new Float32Array(
-          shape.points.flatMap((point) => [
-            pxToMeters(point.x),
-            pxToMeters(point.y),
-          ]),
-        ),
-      );
-      if (hull) return hull;
+    return [ColliderDesc.cuboid(halfWidth, halfHeight)];
+  }
+
+  /** True while no released body moves; a resting world needs no stepping. */
+  isResting(): boolean {
+    for (const body of this.bodies.values()) {
+      if (!body.isSleeping()) return false;
     }
-    return ColliderDesc.cuboid(halfWidth, halfHeight);
+    return true;
   }
 
   removeBody(id: string): void {
