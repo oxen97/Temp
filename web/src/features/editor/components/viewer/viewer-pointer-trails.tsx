@@ -7,13 +7,17 @@ import {
 } from "react";
 
 import {
+  trailParticleOpacity,
   trimTrailParticles,
   type ViewerTrailParticle,
 } from "@/features/editor/lib/viewer-generated-effects";
 import {
+  hasTrailSprite,
+  TRAIL_BLUR_SCALE,
   trailBlend,
-  trailBlurRatioIndex,
+  trailBlurLevel,
   trailMarkFrame,
+  trailMarkScale,
   trailSprite,
   trailSpriteExtent,
   type TrailMarkFrame,
@@ -32,8 +36,16 @@ export type ViewerPointerTrailsElement = HTMLDivElement & {
 
 /** Backing-store budget per blend layer (about 4K at 2× on a large artboard). */
 const MAX_BACKING_PIXELS = 3840 * 2160;
-/** How often the drawing scale is re-read while marks keep animating. */
-const SCALE_REFRESH_MS = 1000;
+/** Sprites built per frame for marks moving to a new blur level. A mark whose
+ * next level is not built yet keeps its current sprite a frame longer, so the
+ * first seconds of drawing never stall on sprite work. */
+const SPRITES_PER_FRAME = 4;
+/** A layer whose sharpest mark is blurred by at least this many device pixels
+ * is drawn at half resolution: a quarter of the pixels to fill and composite,
+ * with no visible difference in a glow that soft. Hysteresis avoids flapping. */
+const SOFT_SIGMA_ENTER = 4;
+const SOFT_SIGMA_EXIT = 3.5;
+const SOFT_RESOLUTION = 0.5;
 
 type Rect = { left: number; top: number; right: number; bottom: number };
 
@@ -41,28 +53,57 @@ type BlendLayer = {
   canvas: HTMLCanvasElement;
   context: CanvasRenderingContext2D | null;
   composite: GlobalCompositeOperation;
-  dirty: Rect | null;
+  /** Canvas pixels per device pixel (1, or less for soft glows). */
+  resolution: number;
+  /** Canvas pixels per artboard pixel at the current allocation. */
+  scale: number;
+  /** Smallest authored blur among this frame's marks. */
+  minBlur: number;
+  /** Area marks covered in the previous frame, cleared before the next. */
+  dirty: Rect;
+  hasDirty: boolean;
+  /** Area covered in the frame being drawn. */
+  next: Rect;
+  hasNext: boolean;
   /** Backing store is released while no marks are alive. */
   allocated: boolean;
 };
 
+type HeldSprite = { level: number; sprite: HTMLCanvasElement | null };
+
+const emptyRect = (): Rect => ({
+  left: Infinity,
+  top: Infinity,
+  right: -Infinity,
+  bottom: -Infinity,
+});
+
 /**
  * Draws every mark into one canvas per blend mode. A mark is a pre-blurred
  * sprite, so the per-frame cost is one image draw per mark: no DOM node, CSS
- * filter or blend layer per mark. React never renders during the animation.
+ * filter or blend layer per mark. React never renders during the animation,
+ * and the frame loop allocates nothing per mark.
  */
 class TrailLayer {
   private particles: ViewerTrailParticle[] = [];
   private limits = new Map<string, number>();
   private layers = new Map<string, BlendLayer>();
+  /** Authored blend mode → its layer, without re-deriving it per mark. */
+  private layerByMode = new Map<string, BlendLayer>();
+  private held = new WeakMap<ViewerTrailParticle, HeldSprite>();
   private frame: number | null = null;
   private disposed = false;
   private pixelScale = 1;
-  private scaleReadAt = -Infinity;
+  private scaleStale = true;
+  private devicePixelRatio = 0;
   private counts = { live: -1, retiring: -1 };
+  private readonly onResize = () => {
+    this.scaleStale = true;
+  };
 
   constructor(private container: ViewerPointerTrailsElement) {
     container.amousTrails = { snapshot: (now) => this.snapshot(now) };
+    window.addEventListener("resize", this.onResize);
     this.writeCounts();
   }
 
@@ -87,9 +128,14 @@ class TrailLayer {
   }
 
   private layerFor(blendMode: string): BlendLayer {
+    const known = this.layerByMode.get(blendMode);
+    if (known) return known;
     const blend = trailBlend(blendMode);
     const existing = this.layers.get(blend.key);
-    if (existing) return existing;
+    if (existing) {
+      this.layerByMode.set(blendMode, existing);
+      return existing;
+    }
     const canvas = document.createElement("canvas");
     canvas.className = "viewer-pointer-trail-canvas";
     canvas.dataset.trailBlend = blend.key;
@@ -108,23 +154,33 @@ class TrailLayer {
       canvas,
       context: null,
       composite: blend.composite,
-      dirty: null,
+      resolution: 1,
+      scale: 1,
+      minBlur: Infinity,
+      dirty: emptyRect(),
+      hasDirty: false,
+      next: emptyRect(),
+      hasNext: false,
       allocated: false,
     };
     this.layers.set(blend.key, layer);
+    this.layerByMode.set(blendMode, layer);
     return layer;
   }
 
-  /** Canvas pixels per artboard pixel: preview scale × device pixel ratio. */
-  private readPixelScale(now: number) {
-    if (now - this.scaleReadAt < SCALE_REFRESH_MS) return;
-    this.scaleReadAt = now;
+  /** Canvas pixels per artboard pixel: preview scale × device pixel ratio.
+   * Layout is read only after a resize, a display change or an idle period;
+   * reading it every frame would force a layout pass while the scene animates. */
+  private readPixelScale() {
+    const device =
+      typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
+    if (!this.scaleStale && device === this.devicePixelRatio) return;
+    this.scaleStale = false;
+    this.devicePixelRatio = device;
     const width = this.container.clientWidth;
     const height = this.container.clientHeight;
     const rect = this.container.getBoundingClientRect();
     const preview = width > 0 && rect.width > 0 ? rect.width / width : 1;
-    const device =
-      typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
     let scale = Math.max(0.25, preview * device);
     const pixels = width * height * scale * scale;
     if (pixels > MAX_BACKING_PIXELS)
@@ -137,18 +193,20 @@ class TrailLayer {
   }
 
   private allocate(layer: BlendLayer) {
+    layer.scale = this.pixelScale * layer.resolution;
     const width = Math.max(
       1,
-      Math.round(this.container.clientWidth * this.pixelScale),
+      Math.round(this.container.clientWidth * layer.scale),
     );
     const height = Math.max(
       1,
-      Math.round(this.container.clientHeight * this.pixelScale),
+      Math.round(this.container.clientHeight * layer.scale),
     );
     if (layer.canvas.width !== width) layer.canvas.width = width;
     if (layer.canvas.height !== height) layer.canvas.height = height;
     layer.context = layer.canvas.getContext("2d");
-    layer.dirty = { left: 0, top: 0, right: width, bottom: height };
+    // A resized backing store starts blank; nothing is left to clear.
+    layer.hasDirty = false;
     layer.allocated = true;
   }
 
@@ -159,70 +217,116 @@ class TrailLayer {
       layer.canvas.width = 0;
       layer.canvas.height = 0;
       layer.context = null;
-      layer.dirty = null;
+      layer.hasDirty = false;
       layer.allocated = false;
     }
+    // The preview may have been resized while nothing was drawn.
+    this.scaleStale = true;
+  }
+
+  /** The sprite for `level`, building at most a few new ones per frame. */
+  private spriteFor(
+    particle: ViewerTrailParticle,
+    level: number,
+    budget: { left: number },
+  ): HeldSprite {
+    const held = this.held.get(particle);
+    if (held && held.level === level) return held;
+    const built = hasTrailSprite(particle.color, level);
+    if (held && !built && budget.left <= 0) return held;
+    if (!built) budget.left -= 1;
+    const next = { level, sprite: trailSprite(particle.color, level) };
+    this.held.set(particle, next);
+    return next;
+  }
+
+  /** Half resolution for a soft layer, full resolution once a sharper mark
+   * joins it. Every frame repaints all marks, so a reallocation never shows. */
+  private resolutionFor(layer: BlendLayer) {
+    if (layer.minBlur === Infinity) return layer.resolution;
+    const sigma = layer.minBlur * TRAIL_BLUR_SCALE * this.pixelScale;
+    if (layer.resolution < 1)
+      return sigma < SOFT_SIGMA_EXIT ? 1 : layer.resolution;
+    return sigma >= SOFT_SIGMA_ENTER ? SOFT_RESOLUTION : 1;
   }
 
   private draw(now: number) {
-    this.readPixelScale(now);
-    const frames = this.particles.map((particle) =>
-      trailMarkFrame(particle, now),
-    );
-    const drawn = new Map<BlendLayer, Rect | null>();
-    for (const layer of this.layers.values()) drawn.set(layer, null);
-    for (const mark of frames) {
-      const layer = this.layerFor(mark.blendMode);
-      if (!layer.allocated) this.allocate(layer);
-      if (!drawn.has(layer)) drawn.set(layer, null);
+    this.readPixelScale();
+    for (const layer of this.layers.values()) layer.minBlur = Infinity;
+    for (const particle of this.particles) {
+      const layer = this.layerFor(particle.blendMode);
+      layer.minBlur = Math.min(layer.minBlur, Math.max(0, particle.blur));
     }
-    const scale = this.pixelScale;
-    for (const [layer] of drawn) {
-      if (!layer.allocated) continue;
+    for (const layer of this.layers.values()) {
+      layer.hasNext = false;
+      const resolution = this.resolutionFor(layer);
+      if (resolution !== layer.resolution) {
+        layer.resolution = resolution;
+        if (layer.allocated) this.allocate(layer);
+      }
       const context = layer.context;
-      if (!context) continue;
+      if (!layer.allocated || !context) continue;
       context.setTransform(1, 0, 0, 1, 0, 0);
       context.globalAlpha = 1;
       context.globalCompositeOperation = "source-over";
       // Only the area marks covered in the previous frame needs clearing.
-      if (layer.dirty) {
-        context.clearRect(
-          layer.dirty.left,
-          layer.dirty.top,
-          layer.dirty.right - layer.dirty.left,
-          layer.dirty.bottom - layer.dirty.top,
-        );
+      if (layer.hasDirty) {
+        const { left, top, right, bottom } = layer.dirty;
+        context.clearRect(left, top, right - left, bottom - top);
       }
       context.globalCompositeOperation = layer.composite;
     }
-    for (const mark of frames) {
-      if (mark.opacity <= 0.003 || mark.diameter <= 0) continue;
-      const layer = this.layerFor(mark.blendMode);
+    const budget = { left: SPRITES_PER_FRAME };
+    for (const particle of this.particles) {
+      const opacity = trailParticleOpacity(particle, now);
+      const diameter =
+        particle.size * Math.max(0, trailMarkScale(particle, now));
+      if (opacity <= 0.003 || diameter <= 0) continue;
+      const layer = this.layerFor(particle.blendMode);
+      if (!layer.allocated) {
+        this.allocate(layer);
+        const context = layer.context;
+        if (context) context.globalCompositeOperation = layer.composite;
+      }
       const context = layer.context;
       if (!context) continue;
-      const ratioIndex = trailBlurRatioIndex(mark.blur, mark.diameter);
-      const sprite = trailSprite(mark.color, ratioIndex);
+      const level = trailBlurLevel(
+        Math.max(0, particle.blur) * TRAIL_BLUR_SCALE,
+        diameter,
+      );
+      const { level: drawnLevel, sprite } = this.spriteFor(
+        particle,
+        level,
+        budget,
+      );
       if (!sprite) continue;
-      const extent = trailSpriteExtent(mark.diameter, ratioIndex) * scale;
-      const left = mark.x * scale - extent / 2;
-      const top = mark.y * scale - extent / 2;
-      context.globalAlpha = Math.min(1, mark.opacity);
+      // Sized by the level actually drawn, so the disc keeps its diameter.
+      const scale = layer.scale;
+      const extent = trailSpriteExtent(diameter, drawnLevel) * scale;
+      const left = particle.x * scale - extent / 2;
+      const top = particle.y * scale - extent / 2;
+      context.globalAlpha = Math.min(1, opacity);
       context.drawImage(sprite, left, top, extent, extent);
-      const bounds = drawn.get(layer) ?? null;
-      drawn.set(layer, {
-        left: Math.min(bounds?.left ?? Infinity, Math.floor(left) - 1),
-        top: Math.min(bounds?.top ?? Infinity, Math.floor(top) - 1),
-        right: Math.max(
-          bounds?.right ?? -Infinity,
-          Math.ceil(left + extent) + 1,
-        ),
-        bottom: Math.max(
-          bounds?.bottom ?? -Infinity,
-          Math.ceil(top + extent) + 1,
-        ),
-      });
+      const next = layer.next;
+      if (!layer.hasNext) {
+        next.left = Infinity;
+        next.top = Infinity;
+        next.right = -Infinity;
+        next.bottom = -Infinity;
+        layer.hasNext = true;
+      }
+      next.left = Math.min(next.left, Math.floor(left) - 1);
+      next.top = Math.min(next.top, Math.floor(top) - 1);
+      next.right = Math.max(next.right, Math.ceil(left + extent) + 1);
+      next.bottom = Math.max(next.bottom, Math.ceil(top + extent) + 1);
     }
-    for (const [layer, bounds] of drawn) layer.dirty = bounds;
+    for (const layer of this.layers.values()) {
+      // Swap the rectangles instead of allocating new ones.
+      const covered = layer.next;
+      layer.next = layer.dirty;
+      layer.dirty = covered;
+      layer.hasDirty = layer.hasNext;
+    }
     if (!this.particles.length) this.release();
     this.writeCounts();
   }
@@ -258,6 +362,8 @@ class TrailLayer {
     this.frame = null;
     this.particles = [];
     this.layers.clear();
+    this.layerByMode.clear();
+    window.removeEventListener("resize", this.onResize);
     delete this.container.amousTrails;
     this.container.replaceChildren();
   }

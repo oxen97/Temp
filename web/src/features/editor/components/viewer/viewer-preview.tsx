@@ -72,6 +72,7 @@ import {
   createSpawnInstance,
   createTrailParticles,
   sampleTrailSegment,
+  type ViewerTrailPoint,
   viewerPointToElementLocal as strandLocalPoint,
   type ViewerPoint,
   type ViewerSpawnInstance,
@@ -413,6 +414,10 @@ function strandBendForElement(
   };
 }
 
+/** Longest time span one pointer event's coalesced samples may cover. After
+ * a stalled frame, older samples count as this old rather than older. */
+const MAX_TRAIL_SAMPLE_SPAN_MS = 100;
+
 export function viewerPreviewLayout(
   artboard: ArtboardSettings,
   viewport: { height: number; width: number },
@@ -595,7 +600,9 @@ export function ViewerPreview({
   const lastPointerRef = useRef<{ x: number; y: number } | null>(null);
   const pageRef = useRef<HTMLDivElement>(null);
   const screenPointToWorld3DRef = useRef<ScreenPointToWorld3D | null>(null);
-  const trailSessionsRef = useRef(new Map<number, Map<string, ViewerPoint>>());
+  const trailSessionsRef = useRef(
+    new Map<number, Map<string, ViewerTrailPoint>>(),
+  );
   const nextParticleIdRef = useRef(1);
   const trailLayerRef = useRef<ViewerPointerTrailsHandle>(null);
   const nextSpawnIdRef = useRef(1);
@@ -814,16 +821,39 @@ export function ViewerPreview({
         return;
       }
       world.step();
+      // One state update per frame, only for bodies that moved: a settled
+      // pile no longer re-renders the whole preview on every frame.
+      let next: Map<string, ElementRuntimeState> | null = null;
       for (const id of releasedRef.current) {
         const readout = world.read(id);
-        if (readout) {
-          mutateRuntimeState(id, (state) => ({ ...state, physics: readout }));
-        }
+        if (!readout) continue;
+        const state =
+          (next ?? runtimeStateRef.current).get(id) ?? IDLE_RUNTIME_STATE;
+        const previous = state.physics;
+        if (
+          previous &&
+          Math.abs(previous.x - readout.x) < 0.01 &&
+          Math.abs(previous.y - readout.y) < 0.01 &&
+          Math.abs(previous.rotation - readout.rotation) < 0.01
+        )
+          continue;
+        next ??= new Map(runtimeStateRef.current);
+        next.set(id, { ...state, physics: readout });
+      }
+      if (next) {
+        runtimeStateRef.current = next;
+        setRuntimeState(next);
+      }
+      // Sleeping bodies only move again when something new is released,
+      // which restarts this loop.
+      if (world.isResting()) {
+        physicsFrameRef.current = null;
+        return;
       }
       physicsFrameRef.current = requestAnimationFrame(tick);
     };
     physicsFrameRef.current = requestAnimationFrame(tick);
-  }, [mutateRuntimeState]);
+  }, []);
 
   const releaseToPhysics = useCallback(
     (element: CanvasElement) => {
@@ -2596,27 +2626,34 @@ export function ViewerPreview({
     pageType === "scroll"
       ? Math.max(0, (viewport.height - layout.height) / 2)
       : (viewport.height - layout.height) / 2;
+  const pointInPage = (
+    rect: DOMRect,
+    clientX: number,
+    clientY: number,
+  ): ViewerPoint => ({
+    x: clamp(
+      (clientX - rect.left) / Math.max(0.0001, layout.scaleX),
+      0,
+      artboard.width,
+    ),
+    y: clamp(
+      (clientY - rect.top) / Math.max(0.0001, layout.scaleY),
+      0,
+      artboard.height,
+    ),
+  });
   const pointFromClient = (
     clientX: number,
     clientY: number,
   ): ViewerPoint | null => {
     const rect = pageRef.current?.getBoundingClientRect();
-    if (!rect) return null;
-    return {
-      x: clamp(
-        (clientX - rect.left) / Math.max(0.0001, layout.scaleX),
-        0,
-        artboard.width,
-      ),
-      y: clamp(
-        (clientY - rect.top) / Math.max(0.0001, layout.scaleY),
-        0,
-        artboard.height,
-      ),
-    };
+    return rect ? pointInPage(rect, clientX, clientY) : null;
   };
   const appendTrailPoints = (
-    additions: { interaction: InteractionDefinition; points: ViewerPoint[] }[],
+    additions: {
+      interaction: InteractionDefinition;
+      points: ViewerTrailPoint[];
+    }[],
   ) => {
     if (!additions.length) return;
     // Called only from pointer event handlers, never while rendering.
@@ -2798,8 +2835,14 @@ export function ViewerPreview({
                   (event.pointerType === "mouse" && event.button !== 0)
                 )
                   return;
-                const point = pointFromClient(event.clientX, event.clientY);
-                if (!point) return;
+                const position = pointFromClient(event.clientX, event.clientY);
+                if (!position) return;
+                const point: ViewerTrailPoint = {
+                  ...position,
+                  // Called only from this event handler, never while rendering.
+                  // eslint-disable-next-line react-hooks/purity
+                  time: performance.now(),
+                };
                 const targetId =
                   (event.target as Element)
                     .closest?.("[data-element-id]")
@@ -2837,31 +2880,65 @@ export function ViewerPreview({
               onPointerMove={
                 usesPointerMove || trailRows.length
                   ? (event) => {
-                      const point = pointFromClient(
+                      const rect = pageRef.current?.getBoundingClientRect();
+                      if (!rect) return;
+                      const point = pointInPage(
+                        rect,
                         event.clientX,
                         event.clientY,
                       );
-                      if (!point) return;
                       if (usesPointerMove) waveClock.setPointer(point);
                       if (usesReactPointerMove) setPagePointer(point);
                       const session = trailSessionsRef.current.get(
                         event.pointerId,
                       );
                       if (!session) return;
+                      // Browsers deliver one move per frame but keep every
+                      // sample the pointer reported in between. Following all
+                      // of them keeps fast curves round instead of straight
+                      // chords, and each mark ages from when it was drawn.
+                      const native = event.nativeEvent;
+                      const coalesced =
+                        typeof native.getCoalescedEvents === "function"
+                          ? native.getCoalescedEvents()
+                          : [];
+                      const reported = coalesced.length ? coalesced : [native];
+                      // Event times only space the samples; the clock that
+                      // ages marks (performance.now) anchors them.
+                      // eslint-disable-next-line react-hooks/purity
+                      const now = performance.now();
+                      const latest = reported[reported.length - 1].timeStamp;
+                      const samples: ViewerTrailPoint[] = reported.map(
+                        (sample) => ({
+                          ...pointInPage(rect, sample.clientX, sample.clientY),
+                          time:
+                            now -
+                            Math.min(
+                              MAX_TRAIL_SAMPLE_SPAN_MS,
+                              Math.max(0, latest - sample.timeStamp),
+                            ),
+                        }),
+                      );
                       const additions: {
                         interaction: InteractionDefinition;
-                        points: ViewerPoint[];
+                        points: ViewerTrailPoint[];
                       }[] = [];
                       for (const { interaction } of trailRows) {
-                        const lastEmission = session.get(interaction.id);
+                        let lastEmission = session.get(interaction.id);
                         if (!lastEmission) continue;
-                        const points = sampleTrailSegment(
-                          lastEmission,
-                          point,
-                          interaction.trailSpacing,
-                        );
+                        const points: ViewerTrailPoint[] = [];
+                        for (const sample of samples) {
+                          const segment = sampleTrailSegment(
+                            lastEmission,
+                            sample,
+                            interaction.trailSpacing,
+                          );
+                          if (!segment.length) continue;
+                          points.push(...segment);
+                          lastEmission = segment[segment.length - 1];
+                        }
                         if (!points.length) continue;
-                        session.set(interaction.id, points[points.length - 1]);
+                        session.set(interaction.id, lastEmission);
                         additions.push({ interaction, points });
                       }
                       appendTrailPoints(additions);

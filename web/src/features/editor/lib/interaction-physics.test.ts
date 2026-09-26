@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  BALL_ANGULAR_DAMPING,
   InteractionPhysicsWorld,
   metersToPx,
   pxToMeters,
@@ -24,16 +25,23 @@ function createRapierContractDouble() {
     kind: "fixed" | "dynamic";
     position: { x: number; y: number };
     velocity: { x: number; y: number };
+    angularDamping: number;
     angle: number;
+    sleeping: boolean;
     translation: () => { x: number; y: number };
     rotation: () => number;
+    isSleeping: () => boolean;
   };
-  type BodyDescription = Pick<Body, "kind" | "position" | "velocity"> & {
+  type BodyDescription = Pick<
+    Body,
+    "kind" | "position" | "velocity" | "angularDamping"
+  > & {
     setTranslation: (x: number, y: number) => BodyDescription;
     setLinvel: (x: number, y: number) => BodyDescription;
+    setAngularDamping: (value: number) => BodyDescription;
   };
   type ColliderDescription = {
-    kind?: "cuboid" | "ball" | "round-cuboid" | "hull";
+    kind?: "cuboid" | "ball" | "hull";
     size: [number, number];
     radius?: number;
     points?: number[];
@@ -51,12 +59,17 @@ function createRapierContractDouble() {
     kind,
     position: { x: 0, y: 0 },
     velocity: { x: 0, y: 0 },
+    angularDamping: 0,
     setTranslation(x, y) {
       this.position = { x, y };
       return this;
     },
     setLinvel(x, y) {
       this.velocity = { x, y };
+      return this;
+    },
+    setAngularDamping(value) {
+      this.angularDamping = value;
       return this;
     },
   });
@@ -85,16 +98,6 @@ function createRapierContractDouble() {
           return this;
         },
       }),
-      roundCuboid: (x: number, y: number, radius: number): ColliderDescription => ({
-        kind: "round-cuboid",
-        size: [x, y],
-        radius,
-        restitution: 0,
-        setRestitution(value) {
-          this.restitution = value;
-          return this;
-        },
-      }),
       convexHull: (points: Float32Array): ColliderDescription => ({
         kind: "hull",
         size: [0, 0],
@@ -115,12 +118,17 @@ function createRapierContractDouble() {
           kind: description.kind,
           position: description.position,
           velocity: description.velocity,
+          angularDamping: description.angularDamping,
           angle: 0,
+          sleeping: false,
           translation() {
             return this.position;
           },
           rotation() {
             return this.angle;
+          },
+          isSleeping() {
+            return this.sleeping;
           },
         };
         bodies.push(body);
@@ -227,7 +235,7 @@ describe("interaction 2D physics world contract", () => {
     world.dispose();
   });
 
-  it("builds a collider that matches the drawn shape", () => {
+  it("builds colliders that match the drawn shape", () => {
     const double = createRapierContractDouble();
     const world = new InteractionPhysicsWorld(double.rapier, {
       width: 800,
@@ -240,33 +248,62 @@ describe("interaction 2D physics world contract", () => {
       radius: 0.4,
       restitution: 0.5,
     });
-    world.addBody({ ...base, id: "pill", shape: { kind: "round-box", radius: 10 } });
-    const pill = double.colliders.at(-1)!.description;
-    expect(pill.kind).toBe("round-cuboid");
-    expect(pill.radius).toBeCloseTo(0.1);
-    expect(pill.size[0]).toBeCloseTo(0.3);
-    expect(pill.size[1]).toBeCloseTo(0.1);
+    // Balls get rolling resistance so they come to rest on a flat floor.
+    expect(double.bodies.at(-1)?.angularDamping).toBe(BALL_ANGULAR_DAMPING);
+
+    const before = double.colliders.length;
     world.addBody({
       ...base,
-      id: "triangle",
+      id: "star",
       shape: {
-        kind: "hull",
-        points: [
-          { x: 0, y: -20 },
-          { x: 40, y: 20 },
-          { x: -40, y: 20 },
+        kind: "polygons",
+        parts: [
+          [
+            { x: 0, y: -20 },
+            { x: 40, y: 20 },
+            { x: -40, y: 20 },
+          ],
+          [
+            { x: 0, y: 20 },
+            { x: 10, y: 40 },
+            { x: -10, y: 40 },
+          ],
         ],
       },
     });
-    expect(double.colliders.at(-1)?.description.kind).toBe("hull");
-    expect(double.colliders.at(-1)?.description.points).toEqual([
-      0, -0.2, 0.4, 0.2, -0.4, 0.2,
-    ].map((value) => expect.closeTo(value)));
+    // Every convex piece becomes a collider on the same body.
+    const pieces = double.colliders.slice(before);
+    expect(pieces).toHaveLength(2);
+    expect(new Set(pieces.map((piece) => piece.body)).size).toBe(1);
+    expect(pieces.every((piece) => piece.description.restitution === 0.5)).toBe(true);
+    expect(pieces[0].description.points).toEqual(
+      [0, -0.2, 0.4, 0.2, -0.4, 0.2].map((value) => expect.closeTo(value)),
+    );
+    expect(double.bodies.at(-1)?.angularDamping).toBe(0);
+
     world.addBody({ ...base, id: "box" });
     expect(double.colliders.at(-1)?.description).toMatchObject({
       kind: "cuboid",
       size: [0.4, 0.2],
     });
+    world.dispose();
+  });
+
+  it("reports rest only when every released body sleeps", () => {
+    const double = createRapierContractDouble();
+    const world = new InteractionPhysicsWorld(double.rapier, {
+      width: 800,
+      height: 600,
+    });
+    expect(world.isResting()).toBe(true);
+    world.addBody({ id: "a", centerX: 10, centerY: 10, width: 10, height: 10, bounciness: 0 });
+    world.addBody({ id: "b", centerX: 40, centerY: 10, width: 10, height: 10, bounciness: 0 });
+    const [a, b] = double.bodies.filter((body) => body.kind === "dynamic");
+    expect(world.isResting()).toBe(false);
+    a.sleeping = true;
+    expect(world.isResting()).toBe(false);
+    b.sleeping = true;
+    expect(world.isResting()).toBe(true);
     world.dispose();
   });
 });

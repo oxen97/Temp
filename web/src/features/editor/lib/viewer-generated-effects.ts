@@ -74,12 +74,18 @@ export type ViewerSpawnInstance = {
   scale: number;
 };
 
-/** Samples a continuous pointer segment at a fixed artboard-pixel interval. */
+/** A pointer sample on the trail path. `time` (the `performance.now()` clock)
+ * is when the pointer passed there; a mark ages from that moment. */
+export type ViewerTrailPoint = ViewerPoint & { time?: number };
+
+/** Samples a continuous pointer segment at a fixed artboard-pixel interval.
+ * When both ends carry a time, each mark gets the time the pointer passed it,
+ * so marks drawn in one frame still fade one after another along the stroke. */
 export function sampleTrailSegment(
-  lastEmission: ViewerPoint,
-  pointer: ViewerPoint,
+  lastEmission: ViewerTrailPoint,
+  pointer: ViewerTrailPoint,
   spacing: number,
-): ViewerPoint[] {
+): ViewerTrailPoint[] {
   const step = Math.max(1, spacing);
   const distance = Math.hypot(
     pointer.x - lastEmission.x,
@@ -89,15 +95,27 @@ export function sampleTrailSegment(
   const count = Math.min(500, Math.floor(distance / step));
   const dx = (pointer.x - lastEmission.x) / distance;
   const dy = (pointer.y - lastEmission.y) / distance;
-  return Array.from({ length: count }, (_, index) => ({
-    x: lastEmission.x + dx * step * (index + 1),
-    y: lastEmission.y + dy * step * (index + 1),
-  }));
+  const from = lastEmission.time;
+  // Marks along one stroke never get younger than the mark before them.
+  const to =
+    pointer.time === undefined || from === undefined
+      ? pointer.time
+      : Math.max(from, pointer.time);
+  return Array.from({ length: count }, (_, index) => {
+    const along = step * (index + 1);
+    const point: ViewerTrailPoint = {
+      x: lastEmission.x + dx * along,
+      y: lastEmission.y + dy * along,
+    };
+    if (from !== undefined && to !== undefined)
+      point.time = from + (to - from) * (along / distance);
+    return point;
+  });
 }
 
 export function createTrailParticles(
   interaction: InteractionDefinition,
-  points: ViewerPoint[],
+  points: ViewerTrailPoint[],
   now: number,
   firstId: number,
 ): ViewerTrailParticle[] {
@@ -115,10 +133,12 @@ export function createTrailParticles(
     // makes an authored trail reproducible from the same pointer path.
     const variation = ((firstId + index) * 0.61803398875) % 1;
     return {
-      ...point,
+      x: point.x,
+      y: point.y,
       id: firstId + index,
       interactionId: interaction.id,
-      createdAt: now,
+      // Never in the future: a sample time can only precede processing.
+      createdAt: Math.min(now, point.time ?? now),
       lifespan: Math.max(0.05, interaction.trailLifespan),
       size: minSize + (maxSize - minSize) * variation,
       growth: Math.max(0, interaction.trailGrowth) / 100,

@@ -5,6 +5,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ViewerTrailParticle } from "@/features/editor/lib/viewer-generated-effects";
 
 import {
+  TRAIL_BLUR_SCALE,
+  trailBlurLevel,
+  trailBlurRatio,
+  trailSpriteExtent,
+} from "@/features/editor/lib/viewer-trail-sprites";
+
+/** Drawn edge, in artboard pixels, of a mark with this authored blur. */
+const trailSpriteExtentFor = (blur: number, diameter: number) =>
+  trailSpriteExtent(diameter, trailBlurLevel(blur * TRAIL_BLUR_SCALE, diameter));
+
+import {
   ViewerPointerTrails,
   type ViewerPointerTrailsElement,
   type ViewerPointerTrailsHandle,
@@ -174,8 +185,11 @@ describe("isolated viewer pointer trails", () => {
       diameter: 12,
     });
     advanceFrame(0);
-    // 4.5 / 12 → the 0.36 sprite: the drawn square includes 3σ of glow.
-    expect(draws[0].size).toBeCloseTo(12 * (1 + 6 * 0.36));
+    // 4.5 / 12 is ~0.38: the drawn square includes 3σ of glow. A glow this
+    // soft is drawn on a half-resolution canvas.
+    const early = trailBlurRatio(trailBlurLevel(4.5, 12));
+    expect(early).toBeCloseTo(0.375, 1);
+    expect(draws[0].size).toBeCloseTo(12 * (1 + 6 * early) * 0.5);
 
     advanceFrame(1000);
     expect(ref.current?.snapshot(1000)[0]).toMatchObject({
@@ -183,8 +197,32 @@ describe("isolated viewer pointer trails", () => {
       diameter: 18,
       scale: 1.5,
     });
-    // 4.5 / 18 → the 0.25 sprite.
-    expect(draws[0].size).toBeCloseTo(18 * (1 + 6 * 0.25));
+    // 4.5 / 18 = 0.25: a finer sprite for the grown mark.
+    const later = trailBlurRatio(trailBlurLevel(4.5, 18));
+    expect(later).toBeCloseTo(0.25, 1);
+    expect(draws[0].size).toBeCloseTo(18 * (1 + 6 * later) * 0.5);
+  });
+
+  it("draws soft glows at half resolution until a sharp mark joins the layer", () => {
+    const ref = createRef<ViewerPointerTrailsHandle>();
+    render(<ViewerPointerTrails ref={ref} limits={new Map([["ink", 10]])} />);
+    act(() => ref.current?.append([particle(1, { blur: 10, x: 40, y: 60 })], 0));
+    advanceFrame(0);
+    const soft = trailSpriteExtentFor(10, 12);
+    expect(draws[0]).toMatchObject({ x: 20 - soft / 4, y: 30 - soft / 4 });
+    expect(draws[0].size).toBeCloseTo(soft / 2);
+
+    act(() => ref.current?.append([particle(2, { blur: 0, x: 40, y: 60 })], 10));
+    advanceFrame(10);
+    // Full resolution again: both marks at their artboard size. Both were
+    // born at 0; 10 ms into a 2 s life with growth 2 they are 12.06 across.
+    expect(draws).toHaveLength(2);
+    expect(draws[1]).toMatchObject({
+      size: expect.closeTo(12.06),
+      x: expect.closeTo(33.97),
+      y: expect.closeTo(53.97),
+    });
+    expect(draws[0].size).toBeCloseTo(trailSpriteExtentFor(10, 12.06));
   });
 
   it("gives each blend mode its own canvas and composite operation", () => {

@@ -182,8 +182,8 @@
 4. 행의 토글/삭제도 선택된 모든 요소의 해당 인터랙션에 일괄 적용된다.
 
 위 1~4는 전체 다중 선택 기획이다. 현재 일반 인터랙션 편집은 선택 목록의 첫
-요소에 저장된다. `Wave / Curve Deform`은 예외로, 추가로 선택한 Line/Pen의 ID를
-첫 요소의 `waveTargetIds`에 기록해 여러 경로를 함께 움직인다.
+요소에 저장된다. `Wave / Curve Deform`은 예외로, 추가로 선택한 Line/Pen·Image·Video의
+ID를 첫 요소의 `waveTargetIds`에 기록해 여러 요소를 함께 움직인다.
 
 ## 1. WHEN — 트리거
 
@@ -357,7 +357,7 @@ HOW를 숨기고 Preview에서 Delay 후 상태를 변경한다. 모달은
 | --- | --- | --- |
 | Emit Pointer Trail | 2D 요소의 Drag | 포인터 경로에서 생성하는 점의 간격·크기 범위·수명·번짐·성장률·페이드·색상 목록·합성 방식(Screen/Normal/Lighter)·최대 개수. 기존 Image `Trail`과 별도 효과다. 선택하면 Trigger area를 Entire artwork로 설정한다. |
 | Spawn Instance | 2D 요소의 Click / Tap | 원본 요소 또는 그룹 ID, 클릭 위치에 복제, 크기·회전 변화 범위, 최대 복제 수, 한도 도달 시 가장 오래된 복제 제거/생성 중단, 원본 Interaction 상속 여부. 선택하면 Trigger area를 Entire artwork로 설정한다. |
-| Wave / Curve Deform | Line/Pen의 Pointer Move. 여러 Line/Pen 선택 가능 | 추가로 영향을 받을 경로 선택, 포인터 X/Y 영향, 상시 물결 진폭·파장·속도, 포인터 영향 반경, 경로별 위상 차이. 여러 경로를 선택하고 이 효과를 지정하면 첫 경로의 규칙에 나머지 경로 ID를 연결한다. |
+| Wave / Curve Deform | Line/Pen·Image·Video의 Pointer Move. 여러 요소 선택 가능 | 추가로 영향을 받을 요소 선택, 포인터 X/Y 영향, 상시 물결 진폭·파장·속도, 포인터 영향 반경, 요소별 위상 차이. 여러 요소를 선택하고 이 효과를 지정하면 첫 요소의 규칙에 나머지 요소 ID를 연결한다. Line/Pen은 경로 모양이 휘고, Image·Video는 그림 표면이 휜다(아래 참고). |
 | Emit Event (Logic Only) | 2D 요소의 Click / Tap | 화면 변형 없이 이벤트만 발생시킨다. 같은 패널의 `On Trigger → Go to Scene`에서 목적지를 선택하면 해당 페이지의 LOGIC 규칙을 직접 추가·수정한다. 복잡한 조건은 LOGIC 탭에서 편집한다. |
 
 위 네 효과의 설정은 `InteractionDefinition`에 저장된다. `Emit Event`의 씬
@@ -1014,8 +1014,17 @@ group, Morph Target 이름을 import 시 메타데이터로 추출한다. 좌측
   따라감)와 `Swipe & sway`(포인터의 수평 이동량이 주변 열린 선에 운동량을
   전달하고, 앵커를 고정한 채 스프링으로 왕복) 중 선택한다. BREEZE
   데모는 후자를 사용하며 두 모드는 같은 인터랙션 모델과 관람 Preview에서 실행된다.
-- Wave / Curve Deform은 열린 Line/Pen 경로에 적용한다. Pointer Move /
-  Touch Move에서 경로를 먼저 선택하면 DO의 Effect 목록에 표시된다.
+- Wave / Curve Deform은 열린 Line/Pen 경로와 Image·Video에 적용한다.
+  Pointer Move / Touch Move에서 대상 요소를 먼저 선택하면 DO의 Effect 목록에
+  표시된다.
+  - **Image·Video (2026-09-26 기획 추가)**: 그림 표면을 격자 메시로 나눠 WebGL로
+    그린다. 가로 방향으로 흐르는 상시 물결이 표면을 위아래로 휘게 하고, 포인터에
+    가까운 부분(포인터 영향 반경 안)일수록 물결이 커지고, 포인터가 화면 중앙에서
+    벗어난 방향으로 포인터 X/Y 영향만큼 밀린다. 좌우 끝은 고정된다.
+    영상은 재생 중인 프레임에 물결을 입히며, 설정 항목은 Line/Pen과 같다.
+  - 모달 배경막에 가려진 Image·Video는 물결 그리기와 영상 재생을 멈추고, 모달을
+    닫으면 이어서 움직인다. 화면 밖에 있는 영상도 재생을 멈춘다.
+  - WebGL을 쓸 수 없는 환경에서는 물결 없이 원래 이미지·영상을 그대로 보여준다.
 - 페이지별 Logic 규칙 저장·복원, INTERACTION 탭의 직접 씬 이동 설정,
   Click / Tap의 On Trigger·On Complete 이벤트 전달
 - Rapier 2D/3D 중력·바운스 기반과 3D World의 정적 2D 충돌 프록시

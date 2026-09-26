@@ -206,7 +206,23 @@ export const ViewerMediaDeform = memo(
             fail();
           }
         };
-        drawRef.current = draw;
+        // React renders and strand poses only *request* a frame. Drawing here
+        // synchronously cost a full WebGL render and canvas copy per render,
+        // several times over when a click re-rendered the preview.
+        let requestedFrame: number | null = null;
+        const drawRequested = () => {
+          requestedFrame = null;
+          draw();
+        };
+        const requestDraw = () => {
+          if (stopped || failed || requestedFrame !== null) return;
+          // Covered media keeps its last frame until it is visible again.
+          if (propsRef.current.paused && renderer) return;
+          // The shared wave clock already draws animated media every frame.
+          if (waveInteraction && waveClock.animating && renderer) return;
+          requestedFrame = requestAnimationFrame(drawRequested);
+        };
+        drawRef.current = requestDraw;
         const ready = () => {
           if (stopped || failed || !source) return;
           if (!renderer)
@@ -233,7 +249,10 @@ export const ViewerMediaDeform = memo(
           !!video && typeof video.requestVideoFrameCallback === "function";
         const onVideoReady = () => {
           if (video && decodedFrames) markMediaDeformVideoFrame(video);
-          ready();
+          // A looping video seeks back to its start every loop; once the mesh
+          // exists, that only needs the next frame, not a draw right here.
+          if (renderer) requestDraw();
+          else ready();
         };
         const unsubscribe =
           waveInteraction || (video && !decodedFrames)
@@ -277,6 +296,7 @@ export const ViewerMediaDeform = memo(
           stopped = true;
           snapshotRef.current = null;
           drawRef.current = null;
+          if (requestedFrame !== null) cancelAnimationFrame(requestedFrame);
           unsubscribe();
           if (image) {
             image.onload = null;
