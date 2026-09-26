@@ -42,6 +42,21 @@ import {
 } from "react";
 
 import {
+  type CameraAngles,
+  cameraDragAngles,
+  cameraElevation,
+  cameraInputForState,
+  cameraPitchRange,
+  type CameraRig,
+  type CameraVector,
+  claimPointerGesture,
+  isArtworkCameraDrag,
+  isCameraRotateInteraction,
+  orbitCameraPose,
+  ownsPointerGesture,
+  ZERO_CAMERA_ANGLES,
+} from "@/features/editor/lib/camera-rig";
+import {
   type CollisionProxy3D,
   InteractionPhysics3DWorld,
   loadRapier3D,
@@ -67,7 +82,10 @@ import type {
   InteractionSoundEvent,
   InteractionSoundTrigger,
 } from "@/features/editor/store/editor-store";
-import { orthographicCameraPlacement } from "@/features/editor/three/camera-clearance";
+import {
+  orthographicCameraPlacement,
+  orthographicOrbitPlacement,
+} from "@/features/editor/three/camera-clearance";
 import {
   artboardPointToEditorAtDepth,
   projectEditorMoveToScreen,
@@ -119,6 +137,8 @@ import {
  */
 const Interactive3DContext = createContext(false);
 const ReducedMotion3DContext = createContext(false);
+/** The preview's Camera Rotate rig, for objects that host camera interactions. */
+const CameraRig3DContext = createContext<CameraRig | null>(null);
 export type ScreenPointToWorld3D = (
   point: { x: number; y: number },
   z: number,
@@ -511,6 +531,11 @@ function Physics3DProvider({
 type Artboard3DSceneProps = {
   artboardHeight: number;
   artboardWidth: number;
+  /**
+   * Preview only: Camera Rotate interactions turn the camera through this rig.
+   * Without one (the editor) the camera always faces the artboard.
+   */
+  cameraRig?: CameraRig | null;
   className?: string;
   /** 2D-element proxies (world px) that 3D bodies can collide with. */
   collisionProxies?: CollisionProxy3D[];
@@ -571,20 +596,41 @@ export function sceneRenderViewport(
   };
 }
 
+type CameraBasePose = { position: CameraVector; target: CameraVector };
+
+/** Orbits the camera around the base pose's target by Camera Rotate angles. */
+export function applyCameraOrbit(
+  camera: Object3D,
+  base: CameraBasePose,
+  angles: CameraAngles,
+) {
+  const pose = orbitCameraPose(base.position, base.target, angles);
+  camera.position.set(pose.position.x, pose.position.y, pose.position.z);
+  camera.up.set(0, 1, 0);
+  camera.lookAt(base.target.x, base.target.y, base.target.z);
+  // Rolling the camera counterclockwise turns the picture clockwise.
+  if (pose.roll) camera.rotateZ(pose.roll);
+  camera.updateMatrixWorld();
+}
+
 function SceneCamera({
   artboardHeight,
   artboardWidth,
   objects,
+  rig,
   scene,
   viewport,
 }: {
   artboardHeight: number;
   artboardWidth: number;
   objects: Object3DElement[];
+  /** Preview only: Camera Rotate orbits the authored camera around its target. */
+  rig?: CameraRig | null;
   scene: Scene3DSettings;
   viewport: ProjectedBounds;
 }) {
   const { camera, invalidate } = useThree();
+  const baseRef = useRef<CameraBasePose | null>(null);
 
   useLayoutEffect(() => {
     const centerX = artboardWidth / 2;
@@ -597,12 +643,15 @@ function SceneCamera({
         ? perspectiveDistance * Math.max(0.05, scene.cameraPosition.z / 1000)
         : Math.max(1, scene.cameraPosition.z);
     if (camera instanceof OrthographicCamera) {
-      const placement = orthographicCameraPlacement({
+      const placementInput = {
         artboardHeight,
         artboardWidth,
         objects,
         scene,
-      });
+      };
+      const placement = rig
+        ? orthographicOrbitPlacement(placementInput)
+        : orthographicCameraPlacement(placementInput);
       camera.position.copy(placement.position);
       setOrthographicFarPlane(camera, placement.far);
       camera.lookAt(placement.target);
@@ -612,17 +661,34 @@ function SceneCamera({
         top: artboardHeight / 2,
         bottom: -artboardHeight / 2,
       });
+      baseRef.current = {
+        position: { ...placement.position },
+        target: { ...placement.target },
+      };
     } else {
-      camera.position.set(
-        centerX + scene.cameraPosition.x,
-        centerY - scene.cameraPosition.y,
-        cameraDistance,
+      const base = {
+        position: {
+          x: centerX + scene.cameraPosition.x,
+          y: centerY - scene.cameraPosition.y,
+          z: cameraDistance,
+        },
+        target: {
+          x: centerX + scene.cameraTarget.x,
+          y: centerY - scene.cameraTarget.y,
+          z: scene.cameraTarget.z,
+        },
+      };
+      camera.position.set(base.position.x, base.position.y, base.position.z);
+      camera.lookAt(base.target.x, base.target.y, base.target.z);
+      baseRef.current = base;
+    }
+    if (rig && baseRef.current) {
+      const base = baseRef.current;
+      rig.setPitchRange(
+        ...cameraPitchRange(cameraElevation(base.position, base.target)),
       );
-      camera.lookAt(
-        centerX + scene.cameraTarget.x,
-        centerY - scene.cameraTarget.y,
-        scene.cameraTarget.z,
-      );
+      // A re-layout during an orbit keeps the camera where the rig has it.
+      applyCameraOrbit(camera, base, rig.angles());
     }
     if (camera instanceof PerspectiveCamera) {
       Object.assign(camera, { fov: scene.perspective });
@@ -649,9 +715,21 @@ function SceneCamera({
     camera,
     invalidate,
     objects,
+    rig,
     scene,
     viewport,
   ]);
+
+  // The rig asks for frames when its target changes and keeps them coming
+  // while the camera is still easing, springing or coasting.
+  useEffect(() => rig?.subscribe(() => invalidate()), [invalidate, rig]);
+  useFrame(() => {
+    const base = baseRef.current;
+    if (!rig || !base) return;
+    const moving = rig.step();
+    applyCameraOrbit(camera, base, rig.angles());
+    if (moving) invalidate();
+  });
 
   return null;
 }
@@ -791,6 +869,62 @@ function ObjectGroup({
         : [],
     [interactive, object.interactions],
   );
+  const cameraRig = useContext(CameraRig3DContext);
+  // Pointer Move and artwork-wide drags turn the camera from the page; the
+  // object itself drives its clicks, hovers, delays, drops and own drags.
+  const cameraInteractions = useMemo(
+    () =>
+      activeInteractions.filter(
+        (entry) =>
+          isCameraRotateInteraction(entry) &&
+          entry.trigger !== "pointer-move" &&
+          !isArtworkCameraDrag(entry),
+      ),
+    [activeInteractions],
+  );
+  const cameraDragRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startY: number;
+  } | null>(null);
+  const cameraKeysRef = useRef(new Set<string>());
+  const cameraKey = (interaction: InteractionDefinition) =>
+    `3d:${object.id}:${interaction.id}`;
+  useEffect(() => {
+    const keys = cameraKeysRef.current;
+    return () => {
+      for (const key of keys) cameraRig?.remove(key);
+      keys.clear();
+    };
+  }, [cameraRig]);
+  /** Turns the camera by a screen-space drag, so the turning camera never feeds back. */
+  const updateCameraDrag = (client: { x: number; y: number } | null) => {
+    const session = cameraDragRef.current;
+    if (!cameraRig || !session) return;
+    const rect = gl?.domElement?.getBoundingClientRect();
+    const scaleX =
+      rect && rect.width > 0 ? runtimeViewport.width / rect.width : 1;
+    const scaleY =
+      rect && rect.height > 0 ? runtimeViewport.height / rect.height : 1;
+    for (const interaction of cameraInteractions) {
+      if (interaction.trigger !== "drag") continue;
+      const key = cameraKey(interaction);
+      cameraKeysRef.current.add(key);
+      cameraRig.update(
+        key,
+        interaction,
+        client
+          ? {
+              active: true,
+              angles: cameraDragAngles(interaction, {
+                dx: (client.x - session.startX) * scaleX,
+                dy: (client.y - session.startY) * scaleY,
+              }),
+            }
+          : { active: false, angles: { ...ZERO_CAMERA_ANGLES } },
+      );
+    }
+  };
   const strand = activeInteractions.find(
     (entry) =>
       entry.effect === "strand-bend" &&
@@ -1152,8 +1286,26 @@ function ObjectGroup({
   const handlePointerDown = (event: ThreeEvent<PointerEvent>) => {
     if (!editable) {
       const canDrag =
-        activeInteractions.some((entry) => entry.trigger === "drag") ||
-        hasTargetDragGesture(activeInteractions);
+        activeInteractions.some(
+          (entry) => entry.trigger === "drag" && !isArtworkCameraDrag(entry),
+        ) || hasTargetDragGesture(activeInteractions);
+      // A press on this object's own drag or button leaves the artwork camera alone.
+      if (ownsPointerGesture(activeInteractions))
+        claimPointerGesture(event.nativeEvent);
+      if (
+        cameraRig &&
+        cameraInteractions.some((entry) => entry.trigger === "drag")
+      ) {
+        cameraDragRef.current = {
+          pointerId: event.pointerId,
+          startX: event.nativeEvent.clientX,
+          startY: event.nativeEvent.clientY,
+        };
+        updateCameraDrag({
+          x: event.nativeEvent.clientX,
+          y: event.nativeEvent.clientY,
+        });
+      }
       if (!hasSound && !canDrag) return;
       event.stopPropagation();
       suppressSoundClickRef.current = false;
@@ -1194,9 +1346,11 @@ function ObjectGroup({
       soundEvents?.play(object.id, "press", "while-pressing", true);
       return;
     }
+    // Locked objects let the press through, like locked 2D elements: the
+    // object behind or the artboard (clear selection, marquee) receives it.
+    if (object.locked) return;
     event.stopPropagation();
     event.nativeEvent.stopPropagation();
-    if (object.locked) return;
     if (event.nativeEvent.shiftKey) {
       onSelectObject?.(object.id, true);
       return;
@@ -1228,6 +1382,11 @@ function ObjectGroup({
   };
   const handlePointerMove = (event: ThreeEvent<PointerEvent>) => {
     if (!editable) {
+      if (cameraDragRef.current?.pointerId === event.pointerId)
+        updateCameraDrag({
+          x: event.nativeEvent.clientX,
+          y: event.nativeEvent.clientY,
+        });
       const drag = previewDragRef.current;
       if (drag && drag.pointerId === event.pointerId) {
         const hit = event.ray.intersectPlane(drag.plane, pointerMath.hit);
@@ -1317,6 +1476,10 @@ function ObjectGroup({
     canceled = false,
   ) => {
     if (!editable) {
+      if (cameraDragRef.current?.pointerId === event.pointerId) {
+        updateCameraDrag(null);
+        cameraDragRef.current = null;
+      }
       const drag = previewDragRef.current;
       if (drag && drag.pointerId === event.pointerId) {
         const offset = runtimeRef.current.drag;
@@ -1385,7 +1548,26 @@ function ObjectGroup({
   const readout = physics?.readouts.get(object.id) ?? null;
   const lastPointerRef = useRef<{ x: number; y: number } | null>(null);
 
+  /** Camera Rotate hosted by this object: clicks, hovers, delays, scrolls and drops. */
+  const updateCameraSources = () => {
+    if (!cameraRig) return;
+    for (const interaction of cameraInteractions) {
+      if (interaction.trigger === "drag") continue;
+      const input = cameraInputForState(interaction, {
+        ...runtimeRef.current,
+        hovering,
+        timed: timedIds.current.has(interaction.id),
+        toggled,
+      });
+      if (!input) continue;
+      const key = cameraKey(interaction);
+      if (input.active) cameraKeysRef.current.add(key);
+      cameraRig.update(key, interaction, input);
+    }
+  };
+
   useFrame(({ clock }, dt) => {
+    if (interactive) updateCameraSources();
     const content = contentRef.current;
     if (!interactive || !content?.isObject3D || !group?.isObject3D) return;
     const state = runtimeRef.current;
@@ -1934,6 +2116,7 @@ function AssetObject({
 export function Artboard3DScene({
   artboardHeight,
   artboardWidth,
+  cameraRig = null,
   className,
   collisionProxies = [],
   editable = false,
@@ -2016,6 +2199,7 @@ export function Artboard3DScene({
             artboardHeight={artboardHeight}
             artboardWidth={artboardWidth}
             objects={visibleObjects}
+            rig={cameraRig}
             scene={settings}
             viewport={renderViewport}
           />
@@ -2052,77 +2236,79 @@ export function Artboard3DScene({
             value={manipulatingRef ?? NEVER_MANIPULATING}
           >
             <ReducedMotion3DContext.Provider value={reducedMotion}>
-              <Interactive3DContext.Provider value={interactive}>
-                <Runtime3DEventsContext.Provider value={onRuntimeInteraction}>
-                  <DropTargets3DProvider getDropTargets={getDropTargets}>
-                    <Runtime3DPointerProvider>
-                      <Object3DVisualCompositorProvider
-                        enabled={interactive}
-                        artboardWidth={artboardWidth}
-                        artboardHeight={artboardHeight}
-                      >
-                        <Object3DSoundContext.Provider
-                          value={
-                            onSoundEvent && onSoundStop
-                              ? { play: onSoundEvent, stop: onSoundStop }
-                              : null
-                          }
+              <CameraRig3DContext.Provider value={cameraRig}>
+                <Interactive3DContext.Provider value={interactive}>
+                  <Runtime3DEventsContext.Provider value={onRuntimeInteraction}>
+                    <DropTargets3DProvider getDropTargets={getDropTargets}>
+                      <Runtime3DPointerProvider>
+                        <Object3DVisualCompositorProvider
+                          enabled={interactive}
+                          artboardWidth={artboardWidth}
+                          artboardHeight={artboardHeight}
                         >
-                          <Physics3DProvider
-                            artboardHeight={artboardHeight}
-                            artboardWidth={artboardWidth}
-                            proxies={collisionProxies}
+                          <Object3DSoundContext.Provider
+                            value={
+                              onSoundEvent && onSoundStop
+                                ? { play: onSoundEvent, stop: onSoundStop }
+                                : null
+                            }
                           >
-                            {visibleObjects.map((object) =>
-                              object.source.kind === "asset" ? (
-                                <AssetObject
-                                  editable={editable}
-                                  key={`${object.id}:${object.source.assetId}:${object.material.useSourceMaterial}`}
-                                  object={
-                                    object as Object3DElement & {
-                                      source: {
-                                        assetId: string;
-                                        kind: "asset";
-                                      };
+                            <Physics3DProvider
+                              artboardHeight={artboardHeight}
+                              artboardWidth={artboardWidth}
+                              proxies={collisionProxies}
+                            >
+                              {visibleObjects.map((object) =>
+                                object.source.kind === "asset" ? (
+                                  <AssetObject
+                                    editable={editable}
+                                    key={`${object.id}:${object.source.assetId}:${object.material.useSourceMaterial}`}
+                                    object={
+                                      object as Object3DElement & {
+                                        source: {
+                                          assetId: string;
+                                          kind: "asset";
+                                        };
+                                      }
                                     }
-                                  }
-                                  onLoadError={onLoadError}
-                                  onObjectDrag={onObjectDrag}
-                                  onObjectDragEnd={onObjectDragEnd}
-                                  onObjectDragStart={onObjectDragStart}
-                                  onProjectedBoundsChange={
-                                    onProjectedBoundsChange
-                                  }
-                                  onSelectObject={onSelectObject}
-                                  projectId={projectId}
-                                />
-                              ) : (
-                                <GeneratedObject
-                                  editable={editable}
-                                  key={object.id}
-                                  object={object}
-                                  onLoadError={onLoadError}
-                                  onObjectDrag={onObjectDrag}
-                                  onObjectDragEnd={onObjectDragEnd}
-                                  onObjectDragStart={onObjectDragStart}
-                                  onProjectedBoundsChange={
-                                    onProjectedBoundsChange
-                                  }
-                                  onSelectObject={onSelectObject}
-                                />
-                              ),
-                            )}
-                            <LiquidMerge3D
-                              objects={visibleObjects}
-                              enabled={interactive}
-                            />
-                          </Physics3DProvider>
-                        </Object3DSoundContext.Provider>
-                      </Object3DVisualCompositorProvider>
-                    </Runtime3DPointerProvider>
-                  </DropTargets3DProvider>
-                </Runtime3DEventsContext.Provider>
-              </Interactive3DContext.Provider>
+                                    onLoadError={onLoadError}
+                                    onObjectDrag={onObjectDrag}
+                                    onObjectDragEnd={onObjectDragEnd}
+                                    onObjectDragStart={onObjectDragStart}
+                                    onProjectedBoundsChange={
+                                      onProjectedBoundsChange
+                                    }
+                                    onSelectObject={onSelectObject}
+                                    projectId={projectId}
+                                  />
+                                ) : (
+                                  <GeneratedObject
+                                    editable={editable}
+                                    key={object.id}
+                                    object={object}
+                                    onLoadError={onLoadError}
+                                    onObjectDrag={onObjectDrag}
+                                    onObjectDragEnd={onObjectDragEnd}
+                                    onObjectDragStart={onObjectDragStart}
+                                    onProjectedBoundsChange={
+                                      onProjectedBoundsChange
+                                    }
+                                    onSelectObject={onSelectObject}
+                                  />
+                                ),
+                              )}
+                              <LiquidMerge3D
+                                objects={visibleObjects}
+                                enabled={interactive}
+                              />
+                            </Physics3DProvider>
+                          </Object3DSoundContext.Provider>
+                        </Object3DVisualCompositorProvider>
+                      </Runtime3DPointerProvider>
+                    </DropTargets3DProvider>
+                  </Runtime3DEventsContext.Provider>
+                </Interactive3DContext.Provider>
+              </CameraRig3DContext.Provider>
             </ReducedMotion3DContext.Provider>
           </Manipulating3DContext.Provider>
         </Viewport3DContext.Provider>

@@ -13,12 +13,13 @@
  * are plain scalars so a definition can be shallow-merged, diffed, and safely
  * serialized to JSON.
  *
- * Scope: this v1 covers the 2D authoring pipeline. 3D-object-only sections
- * (spatial transforms, colliders, rigid bodies, GLB clip/material/morph
- * control) and the camera / visual-pipeline / shader sections are intentionally
- * left out until their runtimes exist; `normalizeInteraction` fills defaults for
- * any field a stored definition is missing, so those sections can be added later
- * without breaking existing data.
+ * Scope: this v1 covers the 2D authoring pipeline plus Camera Rotate (the
+ * artwork camera's orbit angles and the projection it renders with). Other
+ * 3D-object-only sections (spatial transforms, colliders, rigid bodies, GLB
+ * clip/material/morph control) and the remaining camera / visual-pipeline /
+ * shader sections are intentionally left out until their runtimes exist;
+ * `normalizeInteraction` fills defaults for any field a stored definition is
+ * missing, so those sections can be added later without breaking existing data.
  */
 export type InteractionDefinition = {
   // Identity
@@ -68,6 +69,18 @@ export type InteractionDefinition = {
   /** 3D rotation about X/Y in degrees; `rotateTo` is the Z (screen-plane) angle. */
   rotateX: number;
   rotateY: number;
+  /**
+   * Camera Rotate: orbit of the artwork camera around the scene camera target,
+   * in degrees. X tilts the camera up (+), Y turns it right (+) around the
+   * vertical axis, Z rolls the image clockwise (+).
+   */
+  cameraRotateX: number;
+  cameraRotateY: number;
+  cameraRotateZ: number;
+  /** Projection of the Preview artwork camera while the page has a camera effect. */
+  cameraProjection: "orthographic" | "perspective";
+  /** Perspective field of view in degrees (1..160). */
+  cameraFov: number;
   opacityTo: number;
   skewX: number;
   skewY: number;
@@ -247,6 +260,11 @@ export function createDefaultInteraction(
     rotateTo: 45,
     rotateX: 0,
     rotateY: 0,
+    cameraRotateX: 0,
+    cameraRotateY: 0,
+    cameraRotateZ: 0,
+    cameraProjection: "orthographic",
+    cameraFov: 35,
     opacityTo: 40,
     skewX: 12,
     skewY: 0,
@@ -386,6 +404,9 @@ export function normalizeInteraction(raw: unknown): InteractionDefinition {
   }
   result.trailFadeOutDuration = Math.max(0, result.trailFadeOutDuration as number);
   result.strandTipLength = Math.max(0, result.strandTipLength as number);
+  if (result.cameraProjection !== "perspective")
+    result.cameraProjection = "orthographic";
+  result.cameraFov = Math.min(160, Math.max(1, result.cameraFov as number));
   return result as InteractionDefinition;
 }
 

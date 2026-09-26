@@ -75,3 +75,39 @@ export function orthographicCameraPlacement({
     target,
   };
 }
+
+/**
+ * Camera Rotate orbits the camera around its target. An orthographic camera
+ * can stand farther back without changing the picture, so it waits outside a
+ * sphere around the target that holds every object: no orbit angle can bring
+ * an object across the near plane or past the far plane.
+ */
+export function orthographicOrbitPlacement(
+  input: Parameters<typeof orthographicCameraPlacement>[0],
+) {
+  const placement = orthographicCameraPlacement(input);
+  const margin = Math.max(100, input.artboardHeight * 0.1);
+  let reach = 0;
+  for (const object of input.objects) {
+    const center = new Vector3(
+      object.transform.position.x,
+      -object.transform.position.y,
+      object.transform.position.z,
+    );
+    const radius =
+      Math.hypot(
+        object.dimensions.width * object.transform.scale.x,
+        object.dimensions.height * object.transform.scale.y,
+        object.dimensions.depth * object.transform.scale.z,
+      ) / 2;
+    reach = Math.max(reach, center.distanceTo(placement.target) + radius);
+  }
+  const distance = Math.max(placement.distance, reach + margin);
+  const direction = placement.position.clone().sub(placement.target).normalize();
+  return {
+    distance,
+    far: Math.max(placement.far, distance + reach + margin),
+    position: placement.target.clone().addScaledVector(direction, distance),
+    target: placement.target,
+  };
+}

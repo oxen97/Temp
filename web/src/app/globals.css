@@ -6920,6 +6920,23 @@ input[type="number"] {
   width: 100%;
 }
 
+/* Three labelled numbers share 229px: tighten the paddings (as in the 3D
+   DESIGN grid) so values such as -180° stay readable. */
+.interaction-field-pair.is-triple .number-prefix {
+  min-width: 18px;
+  padding-inline: 5px 3px;
+}
+
+.interaction-field-pair.is-triple
+  .number-field:not(.number-field--unitless)
+  input {
+  padding-inline: 4px 1px;
+}
+
+.interaction-field-pair.is-triple .number-unit {
+  padding-right: 4px;
+}
+
 .interaction-field-pair.is-single {
   width: 150px;
 }

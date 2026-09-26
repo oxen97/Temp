@@ -3,6 +3,7 @@
 
 import { X } from "lucide-react";
 import {
+  type PointerEvent as ReactPointerEvent,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -30,6 +31,19 @@ import {
   isolatedPointerVisualIds,
 } from "@/features/editor/components/viewer/viewer-pointer-visual";
 import { ViewerWaveClock } from "@/features/editor/lib/viewer-wave-clock";
+import {
+  cameraDragAngles,
+  cameraInputForState,
+  cameraPointerAngles,
+  CameraRig,
+  isArtworkCameraDrag,
+  isCameraEffect,
+  isCameraRotateInteraction,
+  isPointerGestureClaimed,
+  ownsPointerGesture,
+  sceneWithCameraProjection,
+  ZERO_CAMERA_ANGLES,
+} from "@/features/editor/lib/camera-rig";
 import {
   createSpawn3DInstance,
   type ViewerSpawn3DInstance,
@@ -621,6 +635,12 @@ export function ViewerPreview({
   );
   const trail3DSessionsRef = useRef(new Map<string, ViewerPoint>());
   const [waveClock] = useState(() => new ViewerWaveClock());
+  // One camera per preview page: Camera Rotate interactions orbit it.
+  const [cameraRig] = useState(() => new CameraRig());
+  const cameraDragSessionRef = useRef<{
+    finish: () => void;
+    pointerId: number;
+  } | null>(null);
   const [pagePointer, setPagePointer] = useState<{
     x: number;
     y: number;
@@ -1583,9 +1603,109 @@ export function ViewerPreview({
           interaction.enabled !== false &&
           interaction.trigger === "pointer-move" &&
           interaction.effect !== "wave-deform" &&
-          interaction.effect !== "strand-bend",
+          interaction.effect !== "strand-bend" &&
+          // The camera follows the pointer without rerendering the page.
+          !isCameraEffect(interaction.effect),
       ),
   );
+
+  // Camera Rotate. Every interaction adds orbit angles to the preview camera;
+  // the 3D layer eases the camera toward their sum each frame.
+  useLayoutEffect(() => {
+    cameraRig.setReducedMotion(prefersReducedMotion);
+  }, [cameraRig, prefersReducedMotion]);
+  // The first camera effect on the page chooses Projection / Field of view.
+  const previewScene3d = useMemo(
+    () =>
+      sceneWithCameraProjection(
+        scene3d,
+        [...renderElements, ...renderObjects3D].filter(
+          (source) => source.visible,
+        ),
+      ),
+    [renderElements, renderObjects3D, scene3d],
+  );
+  // Clicks, hovers, delays, scrolling, drops and an element's own drag. 3D
+  // objects report theirs from the scene; Pointer Move and artwork-wide drags
+  // are followed by the page below.
+  useEffect(() => {
+    const keys = new Set<string>();
+    for (const element of renderElements) {
+      if (!element.visible) continue;
+      const state = runtimeState.get(element.id) ?? IDLE_RUNTIME_STATE;
+      for (const interaction of element.interactions ?? []) {
+        if (
+          !isCameraRotateInteraction(interaction) ||
+          isArtworkCameraDrag(interaction)
+        )
+          continue;
+        const input = cameraInputForState(interaction, state);
+        if (!input) continue;
+        const key = `el:${element.id}:${interaction.id}`;
+        keys.add(key);
+        cameraRig.update(key, interaction, input);
+      }
+    }
+    cameraRig.prune("el:", keys);
+  }, [cameraRig, renderElements, runtimeState]);
+  const cameraSources = [...renderElements, ...renderObjects3D].filter(
+    (source) => source.visible,
+  );
+  // Pages without Camera Rotate keep the authored camera exactly as before.
+  const usesCameraRig = cameraSources.some((source) =>
+    (source.interactions ?? []).some(isCameraRotateInteraction),
+  );
+  const cameraPointerRows = cameraSources.flatMap((source) =>
+    (source.interactions ?? [])
+      .filter(
+        (interaction) =>
+          isCameraRotateInteraction(interaction) &&
+          interaction.trigger === "pointer-move",
+      )
+      .map((interaction) => ({
+        center:
+          interaction.triggerArea === "entire-artwork"
+            ? { x: artboard.width / 2, y: artboard.height / 2 }
+            : source.type === "object3d"
+              ? {
+                  x: source.transform.position.x,
+                  y: source.transform.position.y,
+                }
+              : {
+                  x: source.x + source.width / 2,
+                  y: source.y + source.height / 2,
+                },
+        interaction,
+        key: `pointer:${source.id}:${interaction.id}`,
+      })),
+  );
+  /** Pointer Move: the pointer's offset from the center turns the camera. */
+  const updateCameraPointer = (point: ViewerPoint | null) => {
+    for (const { center, interaction, key } of cameraPointerRows) {
+      cameraRig.update(
+        key,
+        interaction,
+        point
+          ? {
+              active: true,
+              angles: cameraPointerAngles(interaction, {
+                x: point.x - center.x,
+                y: point.y - center.y,
+              }),
+            }
+          : { active: false, angles: { ...ZERO_CAMERA_ANGLES } },
+      );
+    }
+  };
+  const artworkCameraDrags = cameraSources.flatMap((source) =>
+    (source.interactions ?? [])
+      .filter(isArtworkCameraDrag)
+      .map((interaction) => ({
+        interaction,
+        key: `artwork:${source.id}:${interaction.id}`,
+      })),
+  );
+  useEffect(() => () => cameraDragSessionRef.current?.finish(), []);
   const visibleElements = renderElements.filter((element) => element.visible);
   const elementsById = new Map(
     visibleElements.map((element) => [element.id, element]),
@@ -2649,6 +2769,68 @@ export function ViewerPreview({
     const rect = pageRef.current?.getBoundingClientRect();
     return rect ? pointInPage(rect, clientX, clientY) : null;
   };
+  /**
+   * Drag → Camera Rotate on the entire artwork: a press anywhere that is not
+   * an element's own drag or button turns the camera until it is released.
+   */
+  const startArtworkCameraDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (
+      !artworkCameraDrags.length ||
+      cameraDragSessionRef.current ||
+      activeModal ||
+      isPointerGestureClaimed(event.nativeEvent)
+    )
+      return;
+    const pressedId =
+      (event.target as Element)
+        .closest?.("[data-element-id]")
+        ?.getAttribute("data-element-id") ?? null;
+    const pressed = pressedId ? elementsById.get(pressedId) : undefined;
+    if (pressed && ownsPointerGesture(pressed.interactions)) return;
+    const { clientX: startX, clientY: startY, pointerId } = event;
+    const scaleX = Math.max(0.0001, layout.scaleX);
+    const scaleY = Math.max(0.0001, layout.scaleY);
+    const drags = artworkCameraDrags;
+    const follow = (clientX: number, clientY: number) => {
+      for (const { interaction, key } of drags)
+        cameraRig.update(key, interaction, {
+          active: true,
+          angles: cameraDragAngles(interaction, {
+            dx: (clientX - startX) / scaleX,
+            dy: (clientY - startY) / scaleY,
+          }),
+        });
+    };
+    const page = pageRef.current;
+    const pageCursor = page?.style.cursor ?? "";
+    const move = (moved: PointerEvent) => {
+      if (moved.pointerId === pointerId) follow(moved.clientX, moved.clientY);
+    };
+    const end = (ended: PointerEvent) => {
+      if (ended.pointerId !== pointerId) return;
+      // A canceled pointer reports no trustworthy position.
+      if (ended.type === "pointerup") follow(ended.clientX, ended.clientY);
+      finish();
+    };
+    const finish = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", end);
+      window.removeEventListener("pointercancel", end);
+      for (const { interaction, key } of drags)
+        cameraRig.update(key, interaction, {
+          active: false,
+          angles: { ...ZERO_CAMERA_ANGLES },
+        });
+      if (page) page.style.cursor = pageCursor;
+      cameraDragSessionRef.current = null;
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", end);
+    window.addEventListener("pointercancel", end);
+    if (page) page.style.cursor = "grabbing";
+    cameraDragSessionRef.current = { finish, pointerId };
+    follow(startX, startY);
+  };
   const appendTrailPoints = (
     additions: {
       interaction: InteractionDefinition;
@@ -2835,6 +3017,7 @@ export function ViewerPreview({
                   (event.pointerType === "mouse" && event.button !== 0)
                 )
                   return;
+                startArtworkCameraDrag(event);
                 const position = pointFromClient(event.clientX, event.clientY);
                 if (!position) return;
                 const point: ViewerTrailPoint = {
@@ -2874,6 +3057,7 @@ export function ViewerPreview({
                   ? () => {
                       waveClock.setPointer(null);
                       if (usesReactPointerMove) setPagePointer(null);
+                      updateCameraPointer(null);
                     }
                   : undefined
               }
@@ -2889,6 +3073,7 @@ export function ViewerPreview({
                       );
                       if (usesPointerMove) waveClock.setPointer(point);
                       if (usesReactPointerMove) setPagePointer(point);
+                      updateCameraPointer(point);
                       const session = trailSessionsRef.current.get(
                         event.pointerId,
                       );
@@ -2954,7 +3139,15 @@ export function ViewerPreview({
               ref={pageRef}
               style={{
                 borderRadius: artboard.cornerRadius,
+                // Artwork-wide camera drags: show the hand and keep touch
+                // drags from panning the page (scroll pages still scroll).
+                cursor: artworkCameraDrags.length ? "grab" : undefined,
                 height: artboard.height,
+                touchAction: artworkCameraDrags.length
+                  ? pageType === "scroll"
+                    ? "pan-y"
+                    : "none"
+                  : undefined,
                 transform: `scale(${layout.scaleX}, ${layout.scaleY})`,
                 width: artboard.width,
               }}
@@ -2971,6 +3164,7 @@ export function ViewerPreview({
                 <Artboard3DScene
                   artboardHeight={artboard.height}
                   artboardWidth={artboard.width}
+                  cameraRig={usesCameraRig ? cameraRig : null}
                   collisionProxies={collision3DProxies}
                   getDropTargets={() =>
                     visibleElements
@@ -3051,7 +3245,7 @@ export function ViewerPreview({
                   }
                   projectId={projectId}
                   reducedMotion={prefersReducedMotion}
-                  scene={scene3d}
+                  scene={previewScene3d}
                   screenPointToWorldRef={screenPointToWorld3DRef}
                 />
               </div>
@@ -3126,13 +3320,19 @@ export function ViewerPreview({
                   (element.interactions ?? []).some(
                     (interaction) =>
                       interaction.enabled !== false &&
-                      interaction.trigger === "drag",
+                      interaction.trigger === "drag" &&
+                      // Dragging anywhere turns the camera; the host stays put.
+                      !isArtworkCameraDrag(interaction),
                   );
+                const artworkCameraHostOnly =
+                  !dragEnabled &&
+                  (element.interactions ?? []).some(isArtworkCameraDrag);
                 const dragGestureInteraction = (
                   element.interactions ?? []
                 ).find(
                   (interaction) =>
                     interaction.enabled !== false &&
+                    !isArtworkCameraDrag(interaction) &&
                     (interaction.trigger === "drag" ||
                       isTargetDragTrigger(interaction.trigger)),
                 );
@@ -3483,7 +3683,11 @@ export function ViewerPreview({
                               isTargetDragTrigger(interaction.trigger)) &&
                             interaction.effect !== "strand-bend",
                         );
-                      if (!swipeOnlyStrand && !mediaOnlyStrandDrag)
+                      if (
+                        !swipeOnlyStrand &&
+                        !mediaOnlyStrandDrag &&
+                        !artworkCameraHostOnly
+                      )
                         setInteractionDrag(element, {
                           dx: constrainedDrag.x,
                           dy: constrainedDrag.y,
@@ -3694,6 +3898,12 @@ export function ViewerPreview({
                     }}
                     style={{
                       pointerEvents: mediaDeformed ? "none" : undefined,
+                      // The camera grab hand shows only where a drag turns it.
+                      cursor:
+                        artworkCameraDrags.length &&
+                        ownsPointerGesture(element.interactions)
+                          ? "default"
+                          : undefined,
                       animation:
                         runtimeVisual.shake && !prefersReducedMotion
                           ? "interaction-shake 0.35s ease-in-out infinite"

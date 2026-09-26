@@ -70,6 +70,34 @@ It does not implement light-cast 3D shadows, depth offset, or spread. The
 unconnected Shadow Z/Spread/opacity-only controls are no longer presented;
 the color field stores the actual CSS color including alpha.
 
+## Camera Rotate (added 2026-09-27)
+
+Camera Rotate is offered for every element type and now runs in Preview. The
+artwork camera orbits the Scene camera target by the sum of all Camera Rotate
+contributions on the page; 2D elements stay fixed on screen. The editor camera
+stays front-facing. Full rules are in `INTERACTION-TAB.md` ("Camera Rotate 실행
+규칙").
+
+| Area | Runtime behavior |
+| --- | --- |
+| Triggers | Drag (signed, unlimited, per Track distance; Entire artwork or Selected object), Pointer Move (offset from centre / Track distance, clamped ±1), Click / Tap toggle, Hover, After Delay, Scroll / Swipe, Drop On/Outside Target, Drag Enter/Leave Target |
+| Axes | X raises the camera (elevation limited to ±85°), Y turns it right around the vertical axis, Z rolls the picture clockwise |
+| RESET | Keep final state: Drag accumulates across drags, Pointer Move / Hover hold the last angle. Other choices return to the initial camera |
+| HOW | Direct (continuous input follows Smoothing; events use Duration, Delay, Easing), Spring, Bounce, Inertia (a flick keeps turning; Initial velocity, Friction, Deceleration). Reduced motion moves directly |
+| Projection | The first enabled camera effect on the page sets the Preview camera's Projection and Field of view (1–160°). Orthographic orbits stay outside every object |
+| Gestures | Entire-artwork drags start anywhere except on an element or object that owns a click, drag or drop gesture. 3D Selected-object drags use screen-space movement |
+
+Validation: unit tests cover input mapping, persistence, pitch limits, inertia
+(including sparse pointer samples on slow devices), springs, eased and delayed
+events, the orbit pose, projection selection, the orthographic orbit distance,
+3D-object clicks/drags and pointer claiming, and the Preview's artwork drag,
+Pointer Move, click and projection wiring. A desktop Playwright case authors
+Drag / Entire artwork → Camera Rotate in the panel, checks persistence after a
+panel remount, drags in Preview, confirms Keep final state, and confirms a new
+Preview starts from the authored camera. The AMOUS Playground 08 SPACE browser
+checks cover drag, keep, inertia, buttons that do not turn the camera, and
+dragging from a 2D title.
+
 ## Planned controls that this expansion does not implement
 
 These options already existed in the panel, but the audited viewer did not
@@ -82,7 +110,8 @@ execute their complete authored behavior:
 - Video Play, Pause, Resume, and Seek commands.
 - Bounce Off Target and Stack On Target pair effects. Gravity simulation is a
   separate existing path and does not make these commands complete.
-- Camera, lighting, post-processing, shader, look-at/orbit targeting, 3D material,
+- Camera Move, Zoom / Dolly, Look At and Shake (Camera Rotate runs; see below),
+  lighting, post-processing, shader, look-at/orbit targeting, 3D material,
   model animation, morph, bone, joint, mesh, and face controls.
 - Full collision/model/video lifecycle triggers and all advanced blending,
   timeline, constraint, and reset combinations.
