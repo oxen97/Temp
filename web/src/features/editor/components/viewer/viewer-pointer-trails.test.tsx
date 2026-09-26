@@ -6,15 +6,61 @@ import type { ViewerTrailParticle } from "@/features/editor/lib/viewer-generated
 
 import {
   ViewerPointerTrails,
+  type ViewerPointerTrailsElement,
   type ViewerPointerTrailsHandle,
 } from "./viewer-pointer-trails";
 
 let frameId = 0;
 let frames = new Map<number, FrameRequestCallback>();
 
+type DrawCall = {
+  canvas: HTMLCanvasElement;
+  alpha: number;
+  composite: string;
+  x: number;
+  y: number;
+  size: number;
+};
+let draws: DrawCall[] = [];
+let clears: HTMLCanvasElement[] = [];
+
+/** Records what the trail layer draws; jsdom has no 2D canvas of its own. */
+function fakeContext(canvas: HTMLCanvasElement) {
+  const context = {
+    canvas,
+    globalAlpha: 1,
+    globalCompositeOperation: "source-over",
+    fillStyle: "#000",
+    setTransform: vi.fn(),
+    clearRect: vi.fn(() => clears.push(canvas)),
+    fillRect: vi.fn(),
+    putImageData: vi.fn(),
+    createImageData: (width: number, height: number) => ({
+      data: new Uint8ClampedArray(width * height * 4),
+      height,
+      width,
+    }),
+    drawImage: vi.fn(
+      (_source: unknown, x: number, y: number, width: number) => {
+        if (canvas.classList.contains("viewer-pointer-trail-canvas"))
+          draws.push({
+            alpha: context.globalAlpha,
+            canvas,
+            composite: context.globalCompositeOperation,
+            size: width,
+            x,
+            y,
+          });
+      },
+    ),
+  };
+  return context;
+}
+
 function advanceFrame(now: number) {
   const pending = [...frames.values()];
   frames.clear();
+  draws = [];
   act(() => pending.forEach((callback) => callback(now)));
 }
 
@@ -43,6 +89,8 @@ function particle(
 beforeEach(() => {
   frameId = 0;
   frames = new Map();
+  draws = [];
+  clears = [];
   vi.stubGlobal(
     "requestAnimationFrame",
     vi.fn((callback: FrameRequestCallback) => {
@@ -55,15 +103,27 @@ beforeEach(() => {
     "cancelAnimationFrame",
     vi.fn((id: number) => frames.delete(id)),
   );
+  const contexts = new WeakMap<HTMLCanvasElement, ReturnType<typeof fakeContext>>();
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(
+    function (this: HTMLCanvasElement) {
+      let context = contexts.get(this);
+      if (!context) {
+        context = fakeContext(this);
+        contexts.set(this, context);
+      }
+      return context as unknown as CanvasRenderingContext2D;
+    } as unknown as HTMLCanvasElement["getContext"],
+  );
 });
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
 describe("isolated viewer pointer trails", () => {
-  it("animates opacity and transform without React renders or layout dimension changes", () => {
+  it("draws aging marks on one canvas without DOM marks or React renders", () => {
     const ref = createRef<ViewerPointerTrailsHandle>();
     const onRender = vi.fn();
     const view = render(
@@ -74,44 +134,101 @@ describe("isolated viewer pointer trails", () => {
     const initialRenderCount = onRender.mock.calls.length;
 
     act(() => ref.current?.append([particle(1)], 0));
-    const node = view.container.querySelector<HTMLElement>(
-      ".viewer-pointer-particle",
-    )!;
-    expect(node.style.transform).toBe("translate(-50%, -50%) scale(1)");
-    expect(node.style.filter).toBe("");
-    expect(node.style.opacity).toBe("1");
+    expect(ref.current?.snapshot(0)).toMatchObject([
+      { diameter: 12, opacity: 1, scale: 1, x: 20, y: 30, blur: 0 },
+    ]);
+    advanceFrame(0);
+    expect(draws).toHaveLength(1);
+    expect(draws[0]).toMatchObject({ alpha: 1, size: 12, x: 14, y: 24 });
 
     advanceFrame(1000);
-
-    expect(node.style.transform).toBe("translate(-50%, -50%) scale(1.5)");
-    expect(node.style.opacity).toBe("0.5");
-    expect(node.style.width).toBe("12px");
-    expect(node.style.height).toBe("12px");
-    expect(node.style.left).toBe("20px");
-    expect(node.style.top).toBe("30px");
-    expect(node.style.filter).toBe("");
+    expect(ref.current?.snapshot(1000)).toMatchObject([
+      { diameter: 18, opacity: 0.5, scale: 1.5, x: 20, y: 30, blur: 0 },
+    ]);
+    expect(draws).toHaveLength(1);
+    expect(draws[0]).toMatchObject({ alpha: 0.5, size: 18, x: 11, y: 21 });
+    const trails = view.container.querySelector<ViewerPointerTrailsElement>(
+      ".viewer-pointer-trails",
+    )!;
+    expect(trails.querySelectorAll("canvas")).toHaveLength(1);
+    expect(trails.querySelector(".viewer-pointer-particle")).toBeNull();
+    expect(trails.dataset.trailLive).toBe("1");
     expect(onRender).toHaveBeenCalledTimes(initialRenderCount);
 
     advanceFrame(2000);
-    expect(node.isConnected).toBe(false);
+    expect(ref.current?.snapshot(2000)).toEqual([]);
+    expect(draws).toHaveLength(0);
+    expect(trails.dataset.trailLive).toBe("0");
     expect(frames.size).toBe(0);
+    // The idle layer releases its backing store.
+    expect(trails.querySelector("canvas")?.width).toBe(0);
     expect(onRender).toHaveBeenCalledTimes(initialRenderCount);
   });
 
-  it("preserves authored blur in world pixels as the mark grows", () => {
+  it("keeps authored blur in world pixels as the mark grows", () => {
     const ref = createRef<ViewerPointerTrailsHandle>();
-    const view = render(
-      <ViewerPointerTrails ref={ref} limits={new Map([["ink", 10]])} />,
-    );
+    render(<ViewerPointerTrails ref={ref} limits={new Map([["ink", 10]])} />);
     act(() => ref.current?.append([particle(1, { blur: 10 })], 0));
-    const node = view.container.querySelector<HTMLElement>(
-      ".viewer-pointer-particle",
-    )!;
-    expect(node.style.filter).toBe("blur(4.5px)");
+    expect(ref.current?.snapshot(0)[0]).toMatchObject({
+      blur: 4.5,
+      diameter: 12,
+    });
+    advanceFrame(0);
+    // 4.5 / 12 → the 0.36 sprite: the drawn square includes 3σ of glow.
+    expect(draws[0].size).toBeCloseTo(12 * (1 + 6 * 0.36));
 
     advanceFrame(1000);
-    expect(node.style.transform).toBe("translate(-50%, -50%) scale(1.5)");
-    expect(node.style.filter).toBe("blur(3px)");
+    expect(ref.current?.snapshot(1000)[0]).toMatchObject({
+      blur: 4.5,
+      diameter: 18,
+      scale: 1.5,
+    });
+    // 4.5 / 18 → the 0.25 sprite.
+    expect(draws[0].size).toBeCloseTo(18 * (1 + 6 * 0.25));
+  });
+
+  it("gives each blend mode its own canvas and composite operation", () => {
+    const ref = createRef<ViewerPointerTrailsHandle>();
+    const view = render(
+      <ViewerPointerTrails
+        ref={ref}
+        limits={
+          new Map([
+            ["ink", 10],
+            ["glow", 10],
+          ])
+        }
+      />,
+    );
+    act(() =>
+      ref.current?.append(
+        [
+          particle(1),
+          particle(2, { interactionId: "glow", blendMode: "screen" }),
+          particle(3, { interactionId: "glow", blendMode: "lighter" }),
+        ],
+        0,
+      ),
+    );
+    advanceFrame(0);
+    const canvases = [
+      ...view.container.querySelectorAll<HTMLCanvasElement>("canvas"),
+    ];
+    expect(canvases.map((canvas) => canvas.dataset.trailBlend)).toEqual([
+      "normal",
+      "screen",
+      "lighter",
+    ]);
+    expect(canvases.map((canvas) => canvas.style.mixBlendMode)).toEqual([
+      "normal",
+      "screen",
+      "plus-lighter",
+    ]);
+    expect(draws.map((call) => call.composite)).toEqual([
+      "source-over",
+      "screen",
+      "lighter",
+    ]);
   });
 
   it("applies updated limits without recreating marks or resetting age", () => {
@@ -120,30 +237,36 @@ describe("isolated viewer pointer trails", () => {
       <ViewerPointerTrails ref={ref} limits={new Map([["ink", 2]])} />,
     );
     act(() => ref.current?.append([particle(1), particle(2)], 0));
-    const [oldest, newest] = [
-      ...view.container.querySelectorAll<HTMLElement>(
-        ".viewer-pointer-particle",
-      ),
-    ];
     advanceFrame(1000);
     view.rerender(
       <ViewerPointerTrails ref={ref} limits={new Map([["ink", 1]])} />,
     );
     advanceFrame(1100);
 
-    expect(oldest).toHaveAttribute("data-trail-retiring", "true");
-    expect(newest).not.toHaveAttribute("data-trail-retiring");
-    expect(Number(newest.style.opacity)).toBeCloseTo(0.45);
-    expect(view.container.querySelectorAll(".viewer-pointer-particle")[1]).toBe(
-      newest,
-    );
+    const [oldest, newest] = ref.current!.snapshot(1100);
+    expect(oldest).toMatchObject({ id: 1, retiring: true });
+    expect(newest).toMatchObject({ id: 2, retiring: false });
+    expect(newest.opacity).toBeCloseTo(0.45);
+    const trails = view.container.querySelector<HTMLElement>(
+      ".viewer-pointer-trails",
+    )!;
+    expect(trails.dataset.trailLive).toBe("1");
+    expect(trails.dataset.trailRetiring).toBe("1");
+
     advanceFrame(1350);
-    expect(Number(oldest.style.opacity)).toBeCloseTo(0.225);
-    expect(Number(newest.style.opacity)).toBeCloseTo(0.325);
+    const [fading, current] = ref.current!.snapshot(1350);
+    expect(fading.opacity).toBeCloseTo(0.225);
+    expect(current.opacity).toBeCloseTo(0.325);
+    expect(draws.map((call) => call.alpha)).toEqual([
+      expect.closeTo(0.225),
+      expect.closeTo(0.325),
+    ]);
+
     advanceFrame(1600);
-    expect(oldest.isConnected).toBe(false);
-    expect(newest.isConnected).toBe(true);
-    expect(Number(newest.style.opacity)).toBeCloseTo(0.2);
+    const remaining = ref.current!.snapshot(1600);
+    expect(remaining.map((mark) => mark.id)).toEqual([2]);
+    expect(remaining[0].opacity).toBeCloseTo(0.2);
+    expect(trails.dataset.trailRetiring).toBe("0");
   });
 
   it("uses the authored retirement duration and stops its frame on unmount", () => {
@@ -160,17 +283,20 @@ describe("isolated viewer pointer trails", () => {
         0,
       ),
     );
-    const oldest = view.container.querySelector<HTMLElement>(
-      ".viewer-pointer-particle",
-    )!;
     advanceFrame(1000);
-    expect(oldest.isConnected).toBe(true);
-    expect(Number(oldest.style.opacity)).toBeCloseTo(0.5);
+    const oldest = ref.current!.snapshot(1000)[0];
+    expect(oldest).toMatchObject({ id: 1, retiring: true });
+    expect(oldest.opacity).toBeCloseTo(0.5);
     expect(frames.size).toBe(1);
+    const trails = view.container.querySelector<ViewerPointerTrailsElement>(
+      ".viewer-pointer-trails",
+    )!;
+    expect(trails.amousTrails?.snapshot(1000)).toHaveLength(2);
 
     view.unmount();
     expect(cancelAnimationFrame).toHaveBeenCalled();
     expect(frames.size).toBe(0);
     expect(ref.current).toBeNull();
+    expect(trails.amousTrails).toBeUndefined();
   });
 });

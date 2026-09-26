@@ -330,6 +330,13 @@ describe("InteractionPanel conditional UI", () => {
     expect(z).toHaveValue(35);
     fireEvent.change(z, { target: { value: "70" } });
     expect(saved.rotateTo).toBe(70);
+    const x = screen.getByRole("spinbutton", { name: "Rotate X" });
+    const y = screen.getByRole("spinbutton", { name: "Rotate Y" });
+    expect(x).toHaveValue(0);
+    expect(y).toHaveValue(0);
+    fireEvent.change(x, { target: { value: "60" } });
+    fireEvent.change(y, { target: { value: "-120" } });
+    expect(saved).toMatchObject({ rotateX: 60, rotateY: -120, rotateTo: 70 });
     choose("Effect", "Skew");
     fireEvent.change(screen.getByRole("spinbutton", { name: "Skew X" }), { target: { value: "16" } });
     expect(saved.skewX).toBe(16);

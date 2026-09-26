@@ -1,5 +1,11 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
+import {
+  recordedTrailMarks,
+  recordTrailMarks,
+  trailMarks,
+} from "./trail-marks";
+
 async function choose(
   page: Page,
   panel: Locator,
@@ -128,16 +134,27 @@ for (const area of ["Selected object", "Entire artwork"] as const) {
       area === "Selected object"
         ? box
         : { x: bounds.x + 350 * scale, y: bounds.y + 250 * scale };
-    const marks = preview.locator(".viewer-pointer-particle");
-    await expect(marks).toHaveCount(0);
+    expect(await trailMarks(preview)).toHaveLength(0);
+    // Marks live only 1.2 s; sample them in the page on every frame.
+    await recordTrailMarks(preview);
     await page.mouse.move(at.x, at.y);
     await page.mouse.down();
     await page.mouse.move(at.x + 160 * scale, at.y + 50 * scale, { steps: 12 });
-    await expect.poll(() => marks.count()).toBeGreaterThan(4);
-    await expect(marks.first()).toHaveCSS("pointer-events", "none");
-    await expect(marks.first()).toHaveCSS("background-image", /255, 113, 91/);
+    await expect
+      .poll(
+        async () =>
+          (await recordedTrailMarks(page)).filter(
+            (mark) => mark.color.toLowerCase() === "#ff715b",
+          ).length,
+      )
+      .toBeGreaterThan(4);
+    await expect(
+      preview.locator(".viewer-pointer-trail-canvas").first(),
+    ).toHaveCSS("pointer-events", "none");
     await page.mouse.up();
-    await expect(marks).toHaveCount(0, { timeout: 5000 });
+    await expect
+      .poll(async () => (await trailMarks(preview)).length, { timeout: 5000 })
+      .toBe(0);
     expect(errors).toEqual([]);
   });
 }

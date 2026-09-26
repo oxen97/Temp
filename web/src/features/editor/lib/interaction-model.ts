@@ -65,6 +65,9 @@ export type InteractionDefinition = {
   scaleX: number;
   scaleY: number;
   rotateTo: number;
+  /** 3D rotation about X/Y in degrees; `rotateTo` is the Z (screen-plane) angle. */
+  rotateX: number;
+  rotateY: number;
   opacityTo: number;
   skewX: number;
   skewY: number;
@@ -242,6 +245,8 @@ export function createDefaultInteraction(
     scaleX: 120,
     scaleY: 120,
     rotateTo: 45,
+    rotateX: 0,
+    rotateY: 0,
     opacityTo: 40,
     skewX: 12,
     skewY: 0,

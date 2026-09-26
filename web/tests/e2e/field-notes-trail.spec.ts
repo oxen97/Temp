@@ -1,5 +1,7 @@
 import { expect, test } from "@playwright/test";
 
+import { trailMarks } from "./trail-marks";
+
 test("the authored fade-out time persists and controls replacement fading", async ({
   page,
 }) => {
@@ -46,22 +48,20 @@ test("the authored fade-out time persists and controls replacement fading", asyn
     bounds.y + bounds.height * 0.5,
   );
   await page.mouse.up();
-  const retiring = preview.locator(
-    '.viewer-pointer-particle[data-trail-retiring="true"]',
-  );
-  await expect(retiring.first()).toBeAttached();
-  const mark = await retiring.first().elementHandle();
-  if (!mark) throw new Error("Missing retiring mark");
+  await expect
+    .poll(async () => (await trailMarks(preview)).some((mark) => mark.retiring))
+    .toBe(true);
+  const markId = (await trailMarks(preview)).find((mark) => mark.retiring)!.id;
   await page.clock.runFor(1000);
-  expect(await mark.evaluate((node) => node.isConnected)).toBe(true);
-  const opacity = await mark.evaluate((node) =>
-    Number((node as HTMLElement).style.opacity),
-  );
-  expect(opacity).toBeGreaterThan(0.4);
-  expect(opacity).toBeLessThan(0.6);
+  const mark = (await trailMarks(preview)).find(({ id }) => id === markId);
+  expect(mark).toBeDefined();
+  expect(mark!.opacity).toBeGreaterThan(0.4);
+  expect(mark!.opacity).toBeLessThan(0.6);
   await page.clock.runFor(1050);
-  expect(await mark.evaluate((node) => node.isConnected)).toBe(false);
-  await expect(preview.locator(".viewer-pointer-particle")).toHaveCount(2);
+  expect((await trailMarks(preview)).some(({ id }) => id === markId)).toBe(
+    false,
+  );
+  await expect.poll(async () => (await trailMarks(preview)).length).toBe(2);
 });
 
 test("INK fades old strokes even when dragging exceeds the particle limit", async ({
@@ -95,27 +95,22 @@ test("INK fades old strokes even when dragging exceeds the particle limit", asyn
   await page.mouse.move(right, y + 20, { steps: 24 });
   await page.mouse.up();
 
-  const retiring = preview.locator(
-    '.viewer-pointer-particle[data-trail-retiring="true"]',
-  );
-  await expect(retiring.first()).toBeAttached();
-  const segment = await retiring.first().elementHandle();
-  if (!segment) throw new Error("Missing fading segment");
-  expect(
-    await segment.evaluate((node) =>
-      Number((node as HTMLElement).style.opacity),
-    ),
-  ).toBe(1);
+  await expect
+    .poll(async () => (await trailMarks(preview)).some((mark) => mark.retiring))
+    .toBe(true);
+  const segment = (await trailMarks(preview)).find((mark) => mark.retiring)!;
+  expect(segment.opacity).toBe(1);
   await page.clock.runFor(250);
-  const halfwayOpacity = await segment.evaluate((node) =>
-    Number((node as HTMLElement).style.opacity),
+  const halfway = (await trailMarks(preview)).find(
+    ({ id }) => id === segment.id,
   );
-  expect(halfwayOpacity).toBeGreaterThan(0.3);
-  expect(halfwayOpacity).toBeLessThan(0.7);
+  expect(halfway!.opacity).toBeGreaterThan(0.3);
+  expect(halfway!.opacity).toBeLessThan(0.7);
   await page.clock.runFor(300);
-  expect(await segment.evaluate((node) => node.isConnected)).toBe(false);
-  await expect(retiring).toHaveCount(0);
-  await expect(preview.locator(".viewer-pointer-particle")).toHaveCount(430);
+  const settled = await trailMarks(preview);
+  expect(settled.some(({ id }) => id === segment.id)).toBe(false);
+  expect(settled.filter((mark) => mark.retiring)).toHaveLength(0);
+  expect(settled).toHaveLength(430);
   await page.clock.runFor(7600);
-  await expect(preview.locator(".viewer-pointer-particle")).toHaveCount(0);
+  await expect.poll(async () => (await trailMarks(preview)).length).toBe(0);
 });

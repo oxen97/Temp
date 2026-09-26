@@ -271,4 +271,64 @@ describe("ViewerMediaDeform", () => {
     ).toHaveAttribute("data-media-deform-status", "fallback");
     expect(fake.dispose).not.toHaveBeenCalled();
   });
+
+  it("draws a clock-driven video once per display frame, not again per decoded frame", () => {
+    const clock = new ViewerWaveClock();
+    const wave = createDefaultInteraction({ effect: "wave-deform" });
+    const view = render(
+      <ViewerMediaDeform
+        {...base}
+        element={{ ...element, type: "video", src: "/clip.mp4" }}
+        waveClock={clock}
+        waveInteraction={wave}
+      />,
+    );
+    const video = view.container.querySelector("video")!;
+    Object.defineProperty(video, "readyState", { configurable: true, value: 2 });
+    act(() => video.dispatchEvent(new Event("loadeddata")));
+    fake.draw.mockClear();
+    const callback = [...decodedFrames.values()][0];
+    decodedFrames.clear();
+    act(() => callback(200, {} as VideoFrameCallbackMetadata));
+    expect(fake.draw).not.toHaveBeenCalled();
+    expect(decodedFrames.size).toBe(1);
+    tick(216);
+    expect(fake.draw).toHaveBeenCalledTimes(1);
+    view.unmount();
+  });
+
+  it("pauses hidden or covered footage and freezes its mesh until shown again", () => {
+    const clock = new ViewerWaveClock();
+    const wave = createDefaultInteraction({ effect: "wave-deform" });
+    const clip = { ...element, type: "video" as const, src: "/clip.mp4" };
+    const view = render(
+      <ViewerMediaDeform {...base} element={clip} waveClock={clock} waveInteraction={wave} />,
+    );
+    const video = view.container.querySelector("video")!;
+    Object.defineProperty(video, "readyState", { configurable: true, value: 2 });
+    act(() => video.dispatchEvent(new Event("loadeddata")));
+    tick(100);
+    // The footage is playing in a browser; jsdom never starts it.
+    Object.defineProperty(video, "paused", { configurable: true, value: false });
+    const pause = vi.mocked(HTMLMediaElement.prototype.pause);
+    pause.mockClear();
+    view.rerender(
+      <ViewerMediaDeform {...base} element={clip} paused waveClock={clock} waveInteraction={wave} />,
+    );
+    expect(pause).toHaveBeenCalled();
+    expect(video).toHaveAttribute("data-playback", "paused");
+    fake.draw.mockClear();
+    tick(116);
+    tick(132);
+    expect(fake.draw).not.toHaveBeenCalled();
+    const play = vi.mocked(HTMLMediaElement.prototype.play);
+    play.mockClear();
+    view.rerender(
+      <ViewerMediaDeform {...base} element={clip} waveClock={clock} waveInteraction={wave} />,
+    );
+    expect(play).toHaveBeenCalled();
+    tick(148);
+    expect(fake.draw).toHaveBeenCalled();
+    view.unmount();
+  });
 });
